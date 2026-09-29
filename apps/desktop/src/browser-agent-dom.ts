@@ -54,6 +54,7 @@ export async function browserAgentDom(input: { action: string; snapshot_id?: str
   // or issuing frame input from coordinates in a different document.
   const embeddedDocuments: { depth: number; readable: boolean; text: string }[] = [];
   let embeddedChars = 0;
+  let embeddedTextTruncated = false;
   const inspectFrames = (doc: Document, depth: number) => {
     if (depth > 2) return;
     for (const frame of [...doc.querySelectorAll('iframe')].slice(0, 8)) {
@@ -61,7 +62,9 @@ export async function browserAgentDom(input: { action: string; snapshot_id?: str
       try {
         const child = frame.contentDocument;
         if (!child) { embeddedDocuments.push({ depth, readable: false, text: '' }); continue; }
-        const frameText = (child.body?.innerText ?? '').slice(0, Math.max(0, 16000 - embeddedChars));
+        const fullFrameText = child.body?.innerText ?? '';
+        const frameText = fullFrameText.slice(0, Math.max(0, 16000 - embeddedChars));
+        embeddedTextTruncated ||= frameText.length < fullFrameText.length;
         embeddedChars += frameText.length;
         embeddedDocuments.push({ depth, readable: true, text: frameText });
         inspectFrames(child, depth + 1);
@@ -69,7 +72,12 @@ export async function browserAgentDom(input: { action: string; snapshot_id?: str
     }
   };
   inspectFrames(document, 1);
-  const bodyText = () => [document.body?.innerText ?? '', ...embeddedDocuments.filter(d => d.readable).map(d => d.text)].join('\n').slice(0, 24000);
+  let textTotalChars = 0;
+  const bodyText = () => {
+    const full = [document.body?.innerText ?? '', ...embeddedDocuments.filter(d => d.readable).map(d => d.text)].join('\n');
+    textTotalChars = full.length;
+    return full.slice(0, 24000);
+  };
   const resolve = (ref?: string) => {
     const state = context.__fieloraBrowserSnapshot;
     const entry = ref && state?.refs.get(ref);
@@ -92,7 +100,11 @@ export async function browserAgentDom(input: { action: string; snapshot_id?: str
       let actual: string;
       switch (check.property) {
         case 'contains': actual = String(bodyText().includes(check.expected)); break;
-        case 'absent': actual = String(!bodyText().includes(check.expected)); break;
+        case 'absent': {
+          const present = bodyText().includes(check.expected);
+          actual = !present && (textTotalChars > 24000 || embeddedTextTruncated) ? 'UNKNOWN_TRUNCATED_OBSERVATION' : String(!present);
+          break;
+        }
         case 'text': actual = text(el!); break;
         case 'value': actual = value(el!); break;
         case 'visible': actual = String(visible(el!)); break;
@@ -177,14 +189,17 @@ export async function browserAgentDom(input: { action: string; snapshot_id?: str
   const hasVisibleMedia = [...document.querySelectorAll('canvas,img,video,iframe')].some(visible);
   const renderedText = bodyText();
   const errorAt = renderedText.search(/Failed to compile|Module build failed|Uncaught SyntaxError/);
-  return { input_state: inputState, scroll_performed: scrollPerformed, viewport: { width: innerWidth, height: innerHeight }, snapshot_id: input.next_snapshot_id, text: bodyText(), elements, checks,
+  const textTruncated = textTotalChars > renderedText.length || embeddedTextTruncated;
+  return { input_state: inputState, scroll_performed: scrollPerformed, viewport: { width: innerWidth, height: innerHeight }, snapshot_id: input.next_snapshot_id, text: renderedText, elements, checks,
+    text_truncated: textTruncated, text_returned_chars: renderedText.length, text_total_chars: textTotalChars,
+    ...(textTruncated ? { text_guidance: 'This is a bounded rendered-text excerpt, not a complete source file. Do not save it as a full downloaded resource or infer absence from the omitted text. Obtain the remaining content through an admitted source-reading tool.' } : {}),
     ...(errorAt >= 0 ? { rendered_error_excerpt: renderedText.slice(errorAt, errorAt + 1600) } : {}),
     embedded_documents: embeddedDocuments,
     ...(embeddedDocuments.length ? { observation_note: 'Embedded document text is included when same-origin. Element refs cover the top document only. Cross-origin frame contents require a screenshot; blank parent text does not mean blank pixels.' } : {}),
     document_state: document.readyState, content_state: bodyText().trim() || elements.length || hasVisibleMedia ? 'PRESENT' : 'EMPTY',
     has_password_input: hasPasswordInput,
     ...(input.action === 'request_login' ? { user_action_required: 'LOGIN', verification_eligible: false } : {}),
-    success: checks ? checks.every(check => check.passed) : true, partial: document.querySelectorAll('body *').length > 5000 || elements.length >= 400 };
+    success: checks ? checks.every(check => check.passed) : true, partial: textTruncated || document.querySelectorAll('body *').length > 5000 || elements.length >= 400 };
   } catch (error) {
     const code = error instanceof Error && /^BROWSER_[A-Z_]+$/.test(error.message) ? error.message : 'BROWSER_DOM_FAILED';
     const observed: Record<string, unknown> = input.action !== 'inspect' && inputState === 'NOT_DISPATCHED'

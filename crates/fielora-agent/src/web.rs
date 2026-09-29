@@ -25,10 +25,10 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 use std::{
-    collections::HashSet,
+    collections::{HashMap, HashSet},
     net::{IpAddr, SocketAddr},
     str::FromStr,
-    sync::{Arc, Mutex},
+    sync::{Arc, Mutex, OnceLock},
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 use tokio::{net::lookup_host, runtime::Runtime};
@@ -79,7 +79,7 @@ pub enum WebFailure {
 }
 
 impl WebFailure {
-    fn provider_error(self) -> ToolProviderError {
+    pub(crate) fn provider_error(self) -> ToolProviderError {
         match self {
             Self::InvalidInput => ToolProviderError::InvalidArguments,
             Self::Cancelled => ToolProviderError::Cancelled,
@@ -827,7 +827,13 @@ trait WebHttpClient: Send + Sync {
 struct SafePublicHttpClient {
     resolver: Arc<dyn DestinationResolver>,
     sender: Arc<dyn PinnedRequestSender>,
+    max_body_bytes: usize,
+    https_only: bool,
 }
+
+// An optimization only: entries are eligible only when fresh DNS has already
+// returned and validated the same address. This never grants destination access.
+static PUBLIC_ROUTE_PREFERENCE: OnceLock<Mutex<HashMap<String, SocketAddr>>> = OnceLock::new();
 
 impl SafePublicHttpClient {
     fn production() -> Result<Self, WebFailure> {
@@ -835,6 +841,8 @@ impl SafePublicHttpClient {
         Ok(Self {
             resolver: network.clone(),
             sender: network,
+            max_body_bytes: MAX_HTTP_BODY_BYTES,
+            https_only: false,
         })
     }
 
@@ -843,7 +851,12 @@ impl SafePublicHttpClient {
         resolver: Arc<dyn DestinationResolver>,
         sender: Arc<dyn PinnedRequestSender>,
     ) -> Self {
-        Self { resolver, sender }
+        Self {
+            resolver,
+            sender,
+            max_body_bytes: MAX_HTTP_BODY_BYTES,
+            https_only: false,
+        }
     }
 }
 
@@ -860,21 +873,60 @@ impl WebHttpClient for SafePublicHttpClient {
         headers.push((ACCEPT_ENCODING, HeaderValue::from_static("identity")));
         let started = Instant::now();
         for redirects in 0..=MAX_REDIRECTS {
+            if self.https_only && url.scheme() != "https" {
+                return Err(WebFailure::DestinationRejected);
+            }
             ensure_not_cancelled(cancellation)?;
             let remaining = timeout
                 .checked_sub(started.elapsed())
                 .filter(|remaining| !remaining.is_zero())
                 .ok_or(WebFailure::Timeout)?;
-            let addresses = resolve_and_validate(
+            let mut addresses = resolve_and_validate(
                 self.resolver.as_ref(),
                 &url,
                 remaining.min(DNS_TIMEOUT),
                 cancellation,
             )?;
-            let hop = self
-                .sender
-                .send(&url, &addresses, &headers, remaining, cancellation)?;
-            if hop.body.len() > MAX_HTTP_BODY_BYTES {
+            if self.https_only
+                && let Ok(preferences) =
+                    PUBLIC_ROUTE_PREFERENCE.get_or_init(Default::default).lock()
+                && let Some(preferred) = preferences.get(url.host_str().unwrap_or_default())
+            {
+                addresses.sort_by_key(|address| address != preferred);
+            }
+            // A stalled first address must not consume the whole connection
+            // attempt while other already-validated public addresses work.
+            // Never re-resolve inside the sender or relax destination policy.
+            let mut sent = Err(WebFailure::Network);
+            for address in addresses.iter().take(8) {
+                ensure_not_cancelled(cancellation)?;
+                let remaining = timeout
+                    .checked_sub(started.elapsed())
+                    .filter(|v| !v.is_zero())
+                    .ok_or(WebFailure::Timeout)?;
+                sent = self.sender.send(
+                    &url,
+                    std::slice::from_ref(address),
+                    &headers,
+                    remaining,
+                    cancellation,
+                );
+                if self.https_only
+                    && sent.is_ok()
+                    && let Ok(mut preferences) =
+                        PUBLIC_ROUTE_PREFERENCE.get_or_init(Default::default).lock()
+                {
+                    if preferences.len() >= 32 {
+                        preferences.clear();
+                    }
+                    preferences.insert(url.host_str().unwrap_or_default().to_owned(), *address);
+                }
+                if !matches!(sent, Err(WebFailure::Timeout | WebFailure::Network)) {
+                    break;
+                }
+            }
+            let hop = sent?;
+            if hop.body.len() > self.max_body_bytes {
                 return Err(WebFailure::OversizedResponse);
             }
             if let Some(encoding) = &hop.content_encoding
@@ -941,6 +993,8 @@ trait PinnedRequestSender: Send + Sync {
 
 struct ReqwestNetwork {
     runtime: Mutex<Runtime>,
+    max_body_bytes: usize,
+    connect_timeout: Duration,
 }
 
 impl ReqwestNetwork {
@@ -951,6 +1005,8 @@ impl ReqwestNetwork {
             .map_err(|_| WebFailure::Unavailable)?;
         Ok(Self {
             runtime: Mutex::new(runtime),
+            max_body_bytes: MAX_HTTP_BODY_BYTES,
+            connect_timeout: FETCH_CONNECT_TIMEOUT,
         })
     }
 }
@@ -990,7 +1046,7 @@ impl PinnedRequestSender for ReqwestNetwork {
         let client = reqwest::Client::builder()
             .no_proxy()
             .redirect(Policy::none())
-            .connect_timeout(FETCH_CONNECT_TIMEOUT.min(timeout))
+            .connect_timeout(self.connect_timeout.min(timeout))
             .timeout(timeout)
             .resolve_to_addrs(host, addresses)
             .user_agent(concat!("Fielora/", env!("CARGO_PKG_VERSION"), " web-fetch"))
@@ -1009,7 +1065,7 @@ impl PinnedRequestSender for ReqwestNetwork {
                     .get(CONTENT_LENGTH)
                     .and_then(|value| value.to_str().ok())
                     .and_then(|value| value.parse::<usize>().ok())
-                    .is_some_and(|length| length > MAX_HTTP_BODY_BYTES)
+                    .is_some_and(|length| length > self.max_body_bytes)
                 {
                     return Err(WebFailure::OversizedResponse);
                 }
@@ -1020,8 +1076,8 @@ impl PinnedRequestSender for ReqwestNetwork {
                 let mut body = Vec::new();
                 let mut stream = response.bytes_stream();
                 while let Some(chunk) = stream.next().await {
-                    let chunk = chunk.map_err(|_| WebFailure::OutcomeUnknown)?;
-                    append_http_chunk(&mut body, &chunk)?;
+                    let chunk = chunk.map_err(classify_reqwest_send_error)?;
+                    append_http_chunk_limited(&mut body, &chunk, self.max_body_bytes)?;
                 }
                 Ok(HttpHopResponse {
                     status,
@@ -1039,12 +1095,88 @@ impl PinnedRequestSender for ReqwestNetwork {
     }
 }
 
+#[cfg(test)]
 fn append_http_chunk(body: &mut Vec<u8>, chunk: &[u8]) -> Result<(), WebFailure> {
-    if body.len().saturating_add(chunk.len()) > MAX_HTTP_BODY_BYTES {
+    append_http_chunk_limited(body, chunk, MAX_HTTP_BODY_BYTES)
+}
+
+fn append_http_chunk_limited(
+    body: &mut Vec<u8>,
+    chunk: &[u8],
+    limit: usize,
+) -> Result<(), WebFailure> {
+    if body.len().saturating_add(chunk.len()) > limit {
         return Err(WebFailure::OversizedResponse);
     }
     body.extend_from_slice(chunk);
     Ok(())
+}
+
+/// Complete bytes for public resource acquisition, never rendered/truncated
+/// text. Uses the same pinned-address/redirect boundary as Web fetch.
+pub(crate) fn public_bytes(
+    url: &str,
+    max_bytes: usize,
+    cancellation: &CommandCancellation,
+) -> Result<(String, Vec<u8>), WebFailure> {
+    public_bytes_accept(
+        url,
+        max_bytes,
+        "application/vnd.github+json,application/zip,application/octet-stream",
+        cancellation,
+    )
+}
+
+pub(crate) fn public_bytes_accept(
+    url: &str,
+    max_bytes: usize,
+    accept: &'static str,
+    cancellation: &CommandCancellation,
+) -> Result<(String, Vec<u8>), WebFailure> {
+    if max_bytes == 0 || max_bytes > 32 * 1024 * 1024 {
+        return Err(WebFailure::InvalidInput);
+    }
+    public_bytes_bounded(url, max_bytes, accept, cancellation)
+}
+
+pub(crate) fn portable_tool_bytes(
+    url: &str,
+    cancellation: &CommandCancellation,
+) -> Result<(String, Vec<u8>), WebFailure> {
+    public_bytes_bounded(
+        url,
+        128 * 1024 * 1024,
+        "application/octet-stream,application/zip",
+        cancellation,
+    )
+}
+
+fn public_bytes_bounded(
+    url: &str,
+    max_bytes: usize,
+    accept: &'static str,
+    cancellation: &CommandCancellation,
+) -> Result<(String, Vec<u8>), WebFailure> {
+    let mut network = ReqwestNetwork::new()?;
+    network.max_body_bytes = max_bytes;
+    network.connect_timeout = Duration::from_secs(15);
+    let network = Arc::new(network);
+    let client = SafePublicHttpClient {
+        resolver: network.clone(),
+        sender: network,
+        max_body_bytes: max_bytes,
+        https_only: true,
+    };
+    let url = parse_public_url(url)?;
+    let response = client.get(
+        url,
+        vec![(ACCEPT, HeaderValue::from_static(accept))],
+        false,
+        Duration::from_secs(if max_bytes > 4 * 1024 * 1024 { 180 } else { 60 }),
+        cancellation,
+    )?;
+    classify_http_status(response.status, false)?;
+    Ok((response.final_url.to_string(), response.body))
 }
 
 async fn wait_for_cancel(cancellation: &CommandCancellation) {
@@ -1935,6 +2067,75 @@ mod tests {
 
     fn public_address() -> SocketAddr {
         "1.1.1.1:443".parse().unwrap()
+    }
+
+    #[test]
+    fn connection_failover_uses_only_already_validated_addresses() {
+        let second: SocketAddr = "8.8.8.8:443".parse().unwrap();
+        let resolver = Arc::new(FixtureResolver::new(vec![Ok(vec![
+            public_address(),
+            second,
+        ])]));
+        let sender = Arc::new(FixtureSender::new(vec![
+            Err(WebFailure::Timeout),
+            Ok(ok_hop("application/octet-stream", b"complete".to_vec())),
+        ]));
+        let client = SafePublicHttpClient::injected(resolver.clone(), sender.clone());
+        let response = client
+            .get(
+                Url::parse("https://public.example/file").unwrap(),
+                vec![],
+                false,
+                Duration::from_secs(5),
+                &CommandCancellation::default(),
+            )
+            .unwrap();
+        assert_eq!(response.body, b"complete");
+        assert_eq!(resolver.calls.load(Ordering::SeqCst), 1);
+        assert_eq!(sender.seen.lock().unwrap()[0].1, vec![public_address()]);
+        assert_eq!(sender.seen.lock().unwrap()[1].1, vec![second]);
+    }
+
+    #[test]
+    fn skill_binary_transport_rejects_https_downgrade_and_enforces_its_own_limit() {
+        let resolver = Arc::new(FixtureResolver::new(vec![Ok(vec![public_address()])]));
+        let sender = Arc::new(FixtureSender::new(vec![Ok(redirect_hop(
+            "http://public.example/file.zip",
+        ))]));
+        let mut client = SafePublicHttpClient::injected(resolver, sender.clone());
+        client.https_only = true;
+        assert_eq!(
+            client
+                .get(
+                    Url::parse("https://public.example/file.zip").unwrap(),
+                    vec![],
+                    false,
+                    Duration::from_secs(5),
+                    &CommandCancellation::default()
+                )
+                .unwrap_err(),
+            WebFailure::DestinationRejected
+        );
+        assert_eq!(sender.seen.lock().unwrap().len(), 1);
+        let resolver = Arc::new(FixtureResolver::new(vec![Ok(vec![public_address()])]));
+        let sender = Arc::new(FixtureSender::new(vec![Ok(ok_hop(
+            "application/zip",
+            vec![0; 17],
+        ))]));
+        let mut client = SafePublicHttpClient::injected(resolver, sender);
+        client.max_body_bytes = 16;
+        assert_eq!(
+            client
+                .get(
+                    Url::parse("https://public.example/file.zip").unwrap(),
+                    vec![],
+                    false,
+                    Duration::from_secs(5),
+                    &CommandCancellation::default()
+                )
+                .unwrap_err(),
+            WebFailure::OversizedResponse
+        );
     }
 
     fn ok_hop(content_type: &str, body: impl Into<Vec<u8>>) -> HttpHopResponse {

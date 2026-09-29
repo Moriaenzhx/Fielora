@@ -89,7 +89,7 @@ try {
   const conversation=conversations.find(item=>![ids.first.id,ids.second.id].includes(item.id));
   assert.ok(conversation);
   const [paused]=await cdp.eval(`window.fielora.agent.list({conversation_id:${JSON.stringify(conversation.id)}})`);
-  assert.equal(paused.status,'PAUSED');assert.equal(paused.error_code,'AGENT_TOKEN_BUDGET_EXHAUSTED');
+  assert.equal(paused.status,'PAUSED');assert.equal(paused.error_code,'AGENT_TIME_BUDGET_EXHAUSTED');
   assert.equal(await draftText(),'');assert.equal(await images(),0);
   let events=await cdp.eval(`window.fielora.agent.events({run_id:${JSON.stringify(paused.id)},after_sequence:null,limit:500})`);
   const stored=events.find(e=>e.payload.kind==='RUN_INPUT_ATTACHMENTS_V1');
@@ -117,7 +117,7 @@ try {
   await click('[data-testid=send-message]');
   await wait("document.querySelector('[data-testid=agent-pause-notice]')");
   const [uiPaused]=await cdp.eval(`window.fielora.agent.list({conversation_id:${JSON.stringify(ids.first.id)}})`);
-  assert.equal(uiPaused.error_code,'AGENT_TOKEN_BUDGET_EXHAUSTED');
+  assert.equal(uiPaused.error_code,'AGENT_TIME_BUDGET_EXHAUSTED');
   // Build a pre-input-persistence history only in this disposable test database.
   // Production immutable-event behavior is restored before continuing the run.
   const databases=[];
@@ -149,7 +149,7 @@ try {
   await wait("document.querySelector('[data-testid=agent-pause-notice]')");
   const [followUp]=await cdp.eval(`window.fielora.agent.list({conversation_id:${JSON.stringify(ids.first.id)}})`);
   assert.notEqual(followUp.id,uiPaused.id);
-  assert.equal(followUp.error_code,'AGENT_TOKEN_BUDGET_EXHAUSTED');
+  assert.equal(followUp.error_code,'AGENT_TIME_BUDGET_EXHAUSTED');
   const followUpEvents=await cdp.eval(`window.fielora.agent.events({run_id:${JSON.stringify(followUp.id)},after_sequence:null,limit:500})`);
   assert.equal(followUpEvents.find(e=>e.kind==='MODEL_COMPLETED').payload.prompt.image_count,2);
   assert.ok(!followUpEvents.some(e=>e.payload.kind==='REFERENCED_INPUTS_RESTORED'),'renderer restored the legacy gallery before Core fallback');
@@ -217,7 +217,7 @@ try {
   await click('[data-testid=agent-retry]');
   await wait(`window.fielora.agent.list({conversation_id:${JSON.stringify(ids.first.id)}}).then(r=>r[0].id!==${JSON.stringify(failedReference.run.id)}&&r[0].status==='PAUSED')`);
   const [retried]=await cdp.eval(`window.fielora.agent.list({conversation_id:${JSON.stringify(ids.first.id)}})`);
-  assert.equal(retried.error_code,'AGENT_TOKEN_BUDGET_EXHAUSTED');
+  assert.equal(retried.error_code,'AGENT_TIME_BUDGET_EXHAUSTED');
   const retryEvents=await cdp.eval(`window.fielora.agent.events({run_id:${JSON.stringify(retried.id)},after_sequence:null,limit:500})`);
   assert.equal(retryEvents.find(e=>e.kind==='MODEL_COMPLETED').payload.prompt.image_count,2);
   assert.ok(!retryEvents.some(e=>e.payload.kind==='REFERENCED_INPUTS_RESTORED'),'UI retry restored legacy gallery');
@@ -248,7 +248,7 @@ try {
   assert.deepEqual(restoredCalls.filter(e=>e.kind==='MODEL_COMPLETED').map(e=>e.payload.prompt.image_count),[2,2]);
 
   // A normal text-only paused task still cannot acquire unrelated images on resume.
-  const noImages=await cdp.eval(`window.fielora.agent.start({field_id:${JSON.stringify(ids.project.field_id)},conversation_id:${JSON.stringify(ids.second.id)},provider_config_id:${JSON.stringify(ids.provider.id)},model_id:${JSON.stringify(ids.provider.default_model)},task:'FIELORA_AGENT_FIXTURE_RESOURCE 分析当前说明',permission:'FULL_CONTROL',max_steps:null,attachments:[]})`);
+  const noImages=await cdp.eval(`window.fielora.agent.start({field_id:${JSON.stringify(ids.project.field_id)},conversation_id:${JSON.stringify(ids.second.id)},provider_config_id:${JSON.stringify(ids.provider.id)},model_id:${JSON.stringify(ids.provider.default_model)},task:'FIELORA_AGENT_FIXTURE_RESOURCE 分析当前说明',permission:'FULL_CONTROL',max_steps:1,attachments:[]})`);
   await wait(`window.fielora.agent.get({run_id:${JSON.stringify(noImages.id)}}).then(r=>r.status==='PAUSED')`);
   const mismatch=await cdp.eval(`(async()=>{
     const gallery=JSON.parse(localStorage.getItem('fielora:conversation-message-attachments:'+${JSON.stringify(originalMessageId)}));
@@ -264,7 +264,7 @@ try {
     const i=gallery[0],stored=await window.fielora.workspace.readAttachment({content_ref:i.content_ref});
     const task='FIELORA_AGENT_FIXTURE_RESOURCE 分析另一个问题';
     const message=await window.fielora.conversation.createMessage({conversation_id:${JSON.stringify(ids.first.id)},role:'USER',content:task,status:'COMPLETED',provider_config_id:null,model_id:null,invocation_id:null,references:[]});
-    return window.fielora.agent.start({field_id:${JSON.stringify(ids.project.field_id)},conversation_id:message.conversation_id,user_message_id:message.id,provider_config_id:${JSON.stringify(ids.provider.id)},model_id:${JSON.stringify(ids.provider.default_model)},task,permission:'FULL_CONTROL',max_steps:null,attachments:[{id:i.id,filename:i.name,mime_type:i.mime_type,size:i.size,width:i.width,height:i.height,source:i.source,data_url:stored.data_url}]});
+    return window.fielora.agent.start({field_id:${JSON.stringify(ids.project.field_id)},conversation_id:message.conversation_id,user_message_id:message.id,provider_config_id:${JSON.stringify(ids.provider.id)},model_id:${JSON.stringify(ids.provider.default_model)},task,permission:'FULL_CONTROL',max_steps:1,attachments:[{id:i.id,filename:i.name,mime_type:i.mime_type,size:i.size,width:i.width,height:i.height,source:i.source,data_url:stored.data_url}]});
   })()`);
   await wait(`window.fielora.agent.get({run_id:${JSON.stringify(laterSource.id)}}).then(r=>r.status==='PAUSED')`);
   await cdp.eval(`window.fielora.agent.cancel({run_id:${JSON.stringify(laterSource.id)}})`);

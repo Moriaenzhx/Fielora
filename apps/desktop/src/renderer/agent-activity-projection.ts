@@ -38,6 +38,7 @@ export interface ConversationActivityGroupItem {
   title: string;
   entries: ConversationActivityEntry[];
   notes?: ConversationActivityNarrativeItem[];
+  contextNotes?: ConversationContextActivityItem[];
 }
 
 export interface ConversationActivityNarrativeItem {
@@ -69,7 +70,77 @@ export interface ConversationActivityApprovalItem {
   decision: 'ALLOW_ONCE' | 'DENY' | null;
 }
 
-export type ConversationActivityItem = ConversationActivityGroupItem | ConversationActivityNarrativeItem | ConversationActivityPhaseItem | ConversationActivityApprovalItem;
+export interface ConversationContextActivityItem {
+  id: string;
+  kind: 'CONTEXT';
+  sequence: number;
+  occurredAt: number;
+  completedAt: number | null;
+  beforeBytes: number | null;
+  afterBytes: number | null;
+  interrupted?: boolean;
+}
+
+export type ConversationActivityItem = ConversationActivityGroupItem | ConversationActivityNarrativeItem | ConversationActivityPhaseItem | ConversationActivityApprovalItem | ConversationContextActivityItem;
+
+/** Conservative presentation rule: retain findings, blockers and decisions.
+ * Only boilerplate next-action narration is folded, never deleted from history.
+ */
+export function isRoutineNarrative(text: string): boolean {
+  const plain = text.trim();
+  if (/[?？]|是否|能否|请|需要.*(?:提供|回答|输入|选择)/.test(plain)) return false;
+  if (/发现|确认|原因|失败|错误|阻塞|需要你|请你|权限|风险|验证通过|不支持|已完成|改用|改为|策略|found|failed|error|blocked|verified/i.test(plain)) return false;
+  // Presence + preparation is not a new result. Keep actual failures/questions
+  // above visible, and preserve this text in the group's disclosure.
+  if (/^我(?:注意到|看到|已读取)[\s\S]*(?:已有|已经存在|已存在|现有|文件)[\s\S]*(?:让我|首先|现在我需要|然后使用)/.test(plain)) return true;
+  return /^(?:让我|现在让我|首先让我|我需要先|现在需要|我将(?:先|使用|读取|检查|运行)|正在(?:核对|读取|检查)(?:第|当前|文件|项目)|接下来(?:我|将)|Let me\b|I(?:'ll| will) (?:read|check|run|inspect)\b)/i.test(plain);
+}
+
+/** Adjacent operations absorb routine notes and finished maintenance records.
+ * Meaningful commentary, approvals and lifecycle boundaries remain in place.
+ */
+export function compactOperationTimeline(items: readonly ConversationActivityItem[]): ConversationActivityItem[] {
+  const result: ConversationActivityItem[] = [];
+  let operations: ConversationActivityItem[] = [];
+  let notes: ConversationActivityNarrativeItem[] = [];
+  let contexts: ConversationContextActivityItem[] = [];
+  const seen = new Set<string>();
+  const flush = () => {
+    const groups = compactExecutionTimeline(operations);
+    const last = [...groups].reverse().find((item): item is ConversationActivityGroupItem => item.kind === 'GROUP');
+    if (last) {
+      last.notes = [...(last.notes ?? []), ...notes].sort((a,b)=>a.sequence-b.sequence);
+      last.contextNotes = [...(last.contextNotes ?? []), ...contexts].sort((a,b)=>a.sequence-b.sequence);
+      result.push(...groups);
+    } else {
+      // A persisted preparation note may arrive one event before its tool.
+      // Keep it in detailed history until an operation can own its disclosure;
+      // never flash a paragraph and immediately move it into a closed group.
+      result.push(...groups, ...contexts);
+    }
+    operations = []; notes = []; contexts = [];
+  };
+  for (const item of items) {
+    if (item.kind === 'GROUP') {
+      operations.push({ ...item, notes: [], contextNotes: [] });
+      notes.push(...(item.notes ?? []));
+      contexts.push(...(item.contextNotes ?? []));
+    } else if (item.kind === 'NARRATIVE') {
+      const identity = item.text.trim().replace(/\s+/g,' ');
+      const routine = isRoutineNarrative(item.text) || seen.has(identity);
+      seen.add(identity);
+      if (routine) notes.push(item);
+      else { flush(); result.push(item); }
+    } else if (item.kind === 'CONTEXT' && !item.interrupted) {
+      contexts.push(item);
+    } else {
+      flush();
+      result.push(item);
+    }
+  }
+  flush();
+  return result;
+}
 
 /** A small current preview; the full ordered projection remains the history. */
 export function currentActivityPreview(items: readonly ConversationActivityItem[], liveNarrative: string): ConversationActivityItem[] {
@@ -99,6 +170,44 @@ export function compactActivityHistory(items: readonly ConversationActivityItem[
   for (const item of items) {
     if (item.kind === 'NARRATIVE' || (item.kind === 'GROUP' && item.entries.every(entry => ['INSPECT', 'SEARCH', 'DIRECTORY'].includes(entry.activityKind)))) pending.push(item);
     else { flush(); result.push(item); }
+  }
+  flush();
+  return result;
+}
+
+/** Presentation only: retain original events/receipts for the detailed view.
+ * Combine neighbouring work of the same kind; never cross approvals or pauses.
+ */
+export function compactExecutionTimeline(items: readonly ConversationActivityItem[]): ConversationActivityItem[] {
+  const result: ConversationActivityItem[] = [];
+  let pending: ConversationActivityGroupItem | null = null;
+  let notes: ConversationActivityNarrativeItem[] = [];
+  const category = (entry: ConversationActivityEntry): ConversationActivityGroupKind => {
+    if (entry.kind === 'TOOL') {
+      if (entry.tool.name.startsWith('skills.') || ['list_skills', 'load_skill', 'verify_skill'].includes(entry.tool.name)) return 'NETWORK';
+      if (entry.tool.name === 'run_command') return 'COMMAND';
+    }
+    return ['SEARCH', 'DIRECTORY'].includes(entry.activityKind) ? 'INSPECT' : entry.activityKind;
+  };
+  const titles: Record<ConversationActivityGroupKind, string> = { INSPECT: '文件与信息检查', SEARCH: '搜索', DIRECTORY: '目录', CHANGE: '文件修改', VERIFY: '结果验证', COMMAND: '命令与测试', VERSION: '版本管理', NETWORK: '搜索、下载与扩展', OTHER: '任务控制', MIXED: '执行记录' };
+  const flush = () => { if (pending) result.push(pending); result.push(...notes); pending = null; notes = []; };
+  for (const item of items) {
+    if (item.kind === 'NARRATIVE' && pending) { notes.push(item); continue; }
+    if (item.kind !== 'GROUP') { flush(); result.push(item); continue; }
+    for (const entry of item.entries) {
+      // Successful internal bookkeeping has no user action; failures stay visible.
+      if (entry.kind === 'TOOL' && !['FAILED', 'UNKNOWN', 'DENIED', 'CANCELLED'].includes(entry.status) && ['record_request_intent', 'finish_task', 'work_plan'].includes(entry.tool.name)) continue;
+      const kind = category(entry);
+      if (pending && pending.groupKind === kind) {
+        pending.entries.push(entry);
+        (pending.notes ??= []).push(...notes);
+        notes = [];
+      } else {
+        flush();
+        pending = { ...item, id: `compact-${entry.id}`, sequence: entry.sequence, occurredAt: entry.occurredAt, groupKind: kind, title: titles[kind], entries: [entry], notes: [] };
+      }
+      pending.completedAt = pending.entries.every(e => e.completedAt !== null) ? Math.max(...pending.entries.map(e => e.completedAt!)) : null;
+    }
   }
   flush();
   return result;
@@ -329,6 +438,25 @@ export function buildConversationActivityProjection(
   };
 
   for (const event of ordered) {
+    const checkpoint = payloadOf(event);
+    if (['RUN_PAUSED', 'RUN_FAILED', 'RUN_CANCELLED', 'RUN_COMPLETED', 'RECOVERY_RECONCILED'].includes(event.kind)) {
+      for (const item of items) if (item.kind === 'CONTEXT' && item.completedAt === null) item.interrupted = true;
+    }
+    if (event.kind === 'CHECKPOINT_CREATED' && ['GENERAL_CONTEXT_REDUCTION_STARTED', 'GENERAL_CONTEXT_REDUCED'].includes(String(checkpoint?.kind))) {
+      currentGroup = null;
+      const complete = checkpoint?.kind === 'GENERAL_CONTEXT_REDUCED';
+      const pending = [...items].reverse().find((item): item is ConversationContextActivityItem => item.kind === 'CONTEXT' && item.completedAt === null && !item.interrupted);
+      const bytes = (value: unknown) => typeof value === 'number' && Number.isFinite(value) && value >= 0 ? value : null;
+      if (complete && pending) {
+        pending.completedAt = event.created_at;
+        pending.beforeBytes = bytes(checkpoint?.before_bytes);
+        pending.afterBytes = bytes(checkpoint?.after_bytes);
+      } else {
+        items.push({ id: `context-${event.sequence}`, kind: 'CONTEXT', sequence: event.sequence, occurredAt: event.created_at,
+          completedAt: complete ? event.created_at : null, beforeBytes: bytes(checkpoint?.before_bytes), afterBytes: bytes(checkpoint?.after_bytes) });
+      }
+      continue;
+    }
     const narrative = narrativeFor(event);
     if (narrative) {
       currentGroup = null;

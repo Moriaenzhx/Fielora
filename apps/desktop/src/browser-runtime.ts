@@ -53,9 +53,23 @@ export class BrowserRuntime {
     catch (error) {
       const code = error instanceof Error && /^BROWSER_[A-Z_]+$/.test(error.message) ? error.message : 'BROWSER_OPERATION_FAILED';
       const unknown = execution.inputState === 'DISPATCHING';
+      const page = this.pages.get(this.agentPages.get(runId)?.pageId ?? '');
+      const state = page ? this.agentReadiness(page) : { page_present: false };
+      const navigationFailure = code === 'BROWSER_NAVIGATION_FAILED';
       return { success: false, error_code: code, input_state: execution.inputState, outcome_unknown: unknown,
+        readiness: state, ...(page ? { page_id: page.state.id, requested_url: args.url ?? page.state.url,
+          committed_url: page.committedUrl || null, navigation_generation: page.navigationGeneration } : {}),
+        ...(navigationFailure ? { network_error: page?.mainFrameError ?? 'NAVIGATION_UNCOMMITTED', page_loaded: false, content_state: 'UNAVAILABLE' } : {}),
         observation_required: execution.inputState === 'DISPATCHED',
-        guidance: execution.inputState === 'NOT_DISPATCHED'
+        guidance: code === 'BROWSER_SURFACE_NOT_READY'
+          ? 'The native browser surface is hidden or has no usable bounds; this does not establish a network failure. Reveal this run\'s browser panel, then inspect before input or screenshot verification. A read-only inspect can still observe a committed document.'
+          : navigationFailure
+            ? 'No successful target document is available. Use the recorded URL and network_error to diagnose this navigation; this does not prove every source or route is unavailable. For a local URL check its server; for a remote URL inspect that address/network response. Do not infer login or ask for a source already present in the task.'
+          : code === 'BROWSER_DOCUMENT_LOADING'
+            ? 'The document did not finish loading within the bounded wait. Inspect this same page for current status before opening it again; this does not establish that the website is unreachable.'
+          : code === 'BROWSER_PAGE_NOT_ACTIVE' || code === 'BROWSER_PAGE_UNAVAILABLE'
+            ? 'This run\'s page is closed or no longer active. Reopen the recorded target for this run; do not use another run\'s page or infer network failure.'
+          : execution.inputState === 'NOT_DISPATCHED'
           ? 'No requested input was dispatched. Inspect the page for fresh refs and current navigation before acting.'
           : 'Do not repeat the input. Inspect the current page to determine its result; input delivery is not task verification.' };
     }
@@ -102,36 +116,50 @@ export class BrowserRuntime {
         if (this.requestedVisible && bounds && bounds.width > 0 && bounds.height > 0 && Date.now() - stableSince >= 160) break;
         await new Promise(resolve => setTimeout(resolve, 40));
       }
-      await this.loadTarget(page, url.href, 'USER');
+      // Navigation is a bounded, cancellable observation. A slow response must
+      // not prevent the Host from returning a diagnostic before its deadline.
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      let onAbort: () => void = () => {};
+      try {
+        await Promise.race([
+          this.loadTarget(page, url.href, 'USER'),
+          new Promise<never>((_, reject) => {
+            onAbort = () => reject(new Error('BROWSER_CANCELLED'));
+            signal.addEventListener('abort', onAbort, { once: true });
+            if (signal.aborted) onAbort();
+            timer = setTimeout(() => reject(new Error('BROWSER_DOCUMENT_LOADING')), 12_000);
+          }),
+        ]);
+      } finally { clearTimeout(timer); signal.removeEventListener('abort', onAbort); }
       this.layout('agent-open');
-      page.view?.webContents.focus();
+      if (this.agentSurfaceReady(page)) page.view?.webContents.focus();
     }
     if (!page?.view || page.view.webContents.isDestroyed() || this.activePageId !== page.state.id) throw new Error('BROWSER_PAGE_NOT_ACTIVE');
     const current = page;
     const contents = page.view.webContents;
     if (args.action === 'reload') { this.agentSnapshots.delete(runId); this.reloadPage(page); }
     const started = Date.now();
-    while (current.state.is_loading || !this.requestedVisible || this.visiblePageId !== current.state.id) {
+    const needsSurface = !['open', 'inspect', 'reload'].includes(args.action);
+    while (current.state.is_loading || (needsSurface && !this.agentSurfaceReady(current))) {
       live();
-      if (Date.now() - started > 12_000 || !this.isLivePage(current) || this.activePageId !== current.state.id) throw new Error('BROWSER_PAGE_NOT_READY');
+      if (!this.isLivePage(current) || contents.isDestroyed()) throw new Error('BROWSER_PAGE_UNAVAILABLE');
+      if (this.activePageId !== current.state.id) throw new Error('BROWSER_PAGE_NOT_ACTIVE');
+      if (current.mainFrameError) throw new Error('BROWSER_NAVIGATION_FAILED');
+      if (Date.now() - started > 12_000) throw new Error(current.state.is_loading ? 'BROWSER_DOCUMENT_LOADING' : 'BROWSER_SURFACE_NOT_READY');
       await new Promise(resolve => setTimeout(resolve, 40));
     }
     // loadURL may resolve before did-stop-loading. Apply a preconfigured
     // viewport only now, when Chromium has a committed live RenderWidget.
     if (['open', 'reload', 'resize'].includes(args.action)) {
       this.layout('agent-ready-viewport');
-      contents.focus();
+      if (this.agentSurfaceReady(current)) contents.focus();
     }
     live();
     let generation = current.navigationGeneration;
     let url = contents.getURL();
     if (current.mainFrameError || !current.committedUrl || generation === 0) {
       this.agentSnapshots.delete(runId);
-      return { success: false, error_code: 'BROWSER_NAVIGATION_FAILED', network_error: current.mainFrameError ?? 'NAVIGATION_UNCOMMITTED',
-        requested_url: args.url ?? current.state.url, committed_url: current.committedUrl || null,
-        url: current.state.url, page_id: current.state.id, navigation_generation: generation,
-        page_loaded: false, content_state: 'UNAVAILABLE',
-        guidance: 'No successful target document was loaded. Check server output and the configured host/port/protocol, then retry the correct address. This is not evidence of a login requirement. Do not substitute source reads for the missing page check.' };
+      throw new Error('BROWSER_NAVIGATION_FAILED');
     }
     if (!/^https?:\/\//.test(url)) throw new Error('BROWSER_URL_REJECTED');
     const assertCurrent = () => {
@@ -170,7 +198,7 @@ export class BrowserRuntime {
       for (;;) {
         live();
         generation = current.navigationGeneration; url = contents.getURL();
-        if (current.mainFrameError || !/^https?:\/\//.test(url)) throw new Error('BROWSER_PAGE_NOT_READY');
+        if (current.mainFrameError || !/^https?:\/\//.test(url)) throw new Error('BROWSER_NAVIGATION_FAILED');
         try { result = await inspect('inspect'); }
         catch (error) {
           if (!(error instanceof Error) || error.message !== 'BROWSER_STALE_PAGE' || Date.now() - observing >= 4000) throw error;
@@ -228,7 +256,27 @@ export class BrowserRuntime {
         if (attachedHere && !contents.isDestroyed() && contents.debugger.isAttached()) contents.debugger.detach();
       }
     }
-    return { ...result, page_loaded: true, page_id: current.state.id, navigation_generation: generation, url, title: current.state.title };
+    const surfaceReady = this.agentSurfaceReady(current);
+    return { ...result, page_loaded: true, page_id: current.state.id, navigation_generation: generation, url, title: current.state.title,
+      readiness: this.agentReadiness(current), interaction_ready: surfaceReady,
+      ...(!surfaceReady ? { verification_eligible: false,
+        observation_note: [result.observation_note, 'The committed document was observed while its native surface was hidden or had no usable bounds. This is not screenshot or interaction evidence. Reveal this run\'s browser panel before input and obtain a fresh inspect.'].filter(Boolean).join(' ') } : {}) };
+  }
+
+  private agentSurfaceReady(page: RuntimePage): boolean {
+    const bounds = page.view?.getBounds();
+    return this.requestedVisible && this.visiblePageId === page.state.id
+      && Boolean(bounds && bounds.width > 0 && bounds.height > 0);
+  }
+
+  private agentReadiness(page: RuntimePage): Record<string, unknown> {
+    const live = this.isLivePage(page) && !!page.view && !page.view.webContents.isDestroyed();
+    const bounds = live ? page.view!.getBounds() : undefined;
+    return { page_present: live, active: this.activePageId === page.state.id,
+      document_committed: !!page.committedUrl && page.navigationGeneration > 0,
+      document_loading: page.state.is_loading, navigation_failed: !!page.mainFrameError,
+      surface_requested: this.requestedVisible, surface_ready: live && this.agentSurfaceReady(page),
+      ...(bounds ? { viewport_bounds: { width: bounds.width, height: bounds.height } } : {}) };
   }
   private readonly pages = new Map<string, RuntimePage>();
   private pageOrder: string[] = [];
@@ -515,8 +563,8 @@ export class BrowserRuntime {
     try {
       await contents.loadURL(target);
     } catch (reason) {
-      if (this.isLivePage(page)) page.mainFrameError = networkFailureCode(reason);
-      if (this.isLivePage(page) && !page.state.error) {
+      if (this.isLivePage(page) && page.directNavigation === authorization) page.mainFrameError = networkFailureCode(reason);
+      if (this.isLivePage(page) && page.directNavigation === authorization && !page.state.error) {
         page.pendingNavigation = undefined;
         page.state = {
           ...page.state,

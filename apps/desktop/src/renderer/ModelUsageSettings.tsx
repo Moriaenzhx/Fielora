@@ -6,7 +6,7 @@ import { costSummary, estimateCost, MODEL_RATES_KEY, modelKey, parseRate, readMo
 
 const PAGE_SIZE = 20;
 
-export function ModelUsageSettings({ providers, selection }: { providers: ProviderConfigView[]; selection: SelectedUsageModel | null }) {
+export function ModelUsageSettings({ providers, selection, embedded = false }: { providers: ProviderConfigView[]; selection: SelectedUsageModel | null; embedded?: boolean }) {
   const { t } = useUiLocale();
   const [range, setRange] = useState('30');
   const [offset, setOffset] = useState(0);
@@ -87,8 +87,8 @@ export function ModelUsageSettings({ providers, selection }: { providers: Provid
     return value === null || !rate ? t('未设单价', 'No rate') : `${money(value, rate.currency)}${usage.unreported_calls ? ' *' : ''}`;
   };
 
-  return <div className="settings-section model-usage-settings" data-testid="settings-usage">
-    <header><p>{t('模型', 'Models')}</p><h1>{t('模型计费统计', 'Model usage & cost')}</h1><p>{t('按实际调用模型累计，切换模型后自动分别统计。', 'Usage follows the model used for each call, including after switching models.')}</p></header>
+  return <div className={`model-usage-settings${embedded ? '' : ' settings-section'}`} data-testid="settings-usage">
+    <header>{!embedded && <h1>{t('模型计费统计', 'Model usage & cost')}</h1>}<p>{t('按实际调用模型累计，切换模型后自动分别统计。', 'Usage follows the model used for each call, including after switching models.')}</p></header>
     <div className="usage-toolbar"><SelectMenu value={range} onChange={value => { setRange(value); setOffset(0); }} ariaLabel={t('统计时间', 'Date range')} testId="usage-range" options={[{ value: '7', label: t('最近 7 天', 'Last 7 days') }, { value: '30', label: t('最近 30 天', 'Last 30 days') }, { value: 'ALL', label: t('全部时间', 'All time') }]}/><small>{updatedAt ? `${t('更新于', 'Updated')} ${new Date(updatedAt).toLocaleTimeString()}` : t('读取中…', 'Loading…')}</small></div>
     {error && <p className="error" role="alert">{t('统计暂时不可用，已显示的数据可能过期。', 'Usage is unavailable; displayed data may be stale.')} <Button variant="secondary" onClick={() => setRefresh(v => v + 1)}>{t('重试', 'Retry')}</Button></p>}
     <section className="usage-live" aria-label={t('当前模型', 'Current model')} data-testid="usage-live">

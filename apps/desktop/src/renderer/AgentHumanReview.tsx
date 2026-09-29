@@ -1,5 +1,8 @@
-import { useEffect, useMemo, useState } from 'react';
-import { reviewDisplayFor, semanticReviewLabel, type AgentReviewChange, type AgentReviewFile, type AgentReviewSummary } from './agent-review';
+import { useEffect, useMemo, useRef, useState } from 'react';
+import { reviewDisplayFor, type AgentReviewFile, type AgentReviewSummary } from './agent-review';
+import { reviewDiffRows } from './review-diff';
+import { Button, IconButton } from './UiPrimitives';
+import { AppIcon, FileTypeIcon } from './ui';
 
 interface AgentHumanReviewProps {
   review: AgentReviewSummary;
@@ -11,70 +14,23 @@ interface AgentHumanReviewProps {
   selectedPathHint?: string;
 }
 
-function taskLabel(task: string): string {
-  const firstLine = task.split(/\r?\n/, 1)[0]?.trim() ?? '';
-  return firstLine.length > 72 ? `${firstLine.slice(0, 72)}…` : firstLine || '本次 Agent 任务';
+function DiffCounts({ additions, deletions }: { additions: number; deletions: number }) {
+  return <span className="human-review-count"><span className="diff-additions">+{additions}</span><span className="diff-deletions">−{deletions}</span></span>;
 }
 
-function changeVerb(file: AgentReviewFile): string {
-  return ({ CREATE: '新增', MODIFY: '修改', DELETE: '删除', RENAME: '重命名' } as const)[file.changeType];
-}
-
-function changeHeading(file: AgentReviewFile): string {
-  return ({ CREATE: '新增文件', MODIFY: '代码变更', DELETE: '删除文件', RENAME: '文件重命名' } as const)[file.changeType];
-}
-
-function CodeSurface({ value, tone }: { value: string; tone?: 'before' | 'after' | 'create' | 'delete' }) {
-  return <pre className={`human-code-surface${tone ? ` is-${tone}` : ''}`}><code>{value}</code></pre>;
-}
-
-function compactModify(change: AgentReviewChange): boolean {
-  if (change.before === null || change.before.length + change.after.length > 520) return false;
-  return change.before.split(/\r?\n/).length <= 3 && change.after.split(/\r?\n/).length <= 3;
-}
-
-function changeBindingLabel(change: AgentReviewChange): string | null {
-  if (change.before === null) return null;
-  const before = change.before.match(/\b(?:const|let|var)\s+([A-Za-z_$][\w$]*)\b/u)?.[1];
-  const after = change.after.match(/\b(?:const|let|var)\s+([A-Za-z_$][\w$]*)\b/u)?.[1];
-  return before && before === after ? before : null;
-}
-
-function InlineModifyChange({ change, label }: { change: AgentReviewChange; label: string | null }) {
-  return <div className="human-inline-change" data-human-diff-layout="inline">
-    {label && <p className="human-diff-semantic-label">{label}</p>}
-    <pre className="human-inline-diff" aria-label="紧凑代码变更"><code>
-      {change.before!.split(/\r?\n/).map((line, index) => <span className="is-remove" key={`remove-${index}`}><i aria-hidden="true">−</i>{line}</span>)}
-      {change.after.split(/\r?\n/).map((line, index) => <span className="is-add" key={`add-${index}`}><i aria-hidden="true">+</i>{line}</span>)}
-    </code></pre>
-  </div>;
-}
-
-function ModifyChange({ change, semantic }: { change: AgentReviewChange; semantic: boolean }) {
-  const label = semantic ? semanticReviewLabel(change) : changeBindingLabel(change);
-  if (compactModify(change)) return <InlineModifyChange change={change} label={label}/>;
-  return <div className="human-diff-change">
-    {label && <p className="human-diff-semantic-label">{label}</p>}
-    <div className="human-diff-state-label">修改前</div>
-    <CodeSurface value={change.before ?? ''} tone="before"/>
-    <span className="human-diff-arrow" aria-hidden="true"/>
-    <div className="human-diff-state-label">修改后</div>
-    <CodeSurface value={change.after} tone="after"/>
-  </div>;
-}
-
-function VisualReview({ file, display }: { file: AgentReviewFile; display: ReturnType<typeof reviewDisplayFor> }) {
-  if (file.changeType === 'CREATE') return <div className="human-diff human-diff-create" data-testid="agent-review-human-diff" data-human-diff-kind="create">
-    <CodeSurface value={file.changes[0]?.after ?? ''} tone="create"/>
-  </div>;
-  if (file.changeType === 'DELETE') return <div className="human-diff human-diff-delete" data-testid="agent-review-human-diff" data-human-diff-kind="delete">
-    <CodeSurface value={file.changes[0]?.before ?? ''} tone="delete"/>
-  </div>;
-  if (file.changeType === 'RENAME') return <div className="human-diff human-diff-rename" data-testid="agent-review-human-diff" data-human-diff-kind="rename">
-    <code>{file.previousPath}</code><span className="human-rename-arrow" aria-hidden="true"/><code>{file.path}</code>
-  </div>;
-  return <div className="human-diff" data-testid="agent-review-human-diff" data-human-diff-kind={display.toLowerCase()}>
-    {file.changes.map((change, index) => <ModifyChange change={change} semantic={display === 'SEMANTIC'} key={`${file.path}-${index}`}/>)}
+function UnifiedDiff({ file }: { file: AgentReviewFile }) {
+  const rows = useMemo(() => reviewDiffRows(file), [file]);
+  if (file.changeType === 'RENAME') return <p className="human-review-notice"><code>{file.previousPath}</code> → <code>{file.path}</code></p>;
+  if (!rows.length) return <p className="human-review-notice">没有可显示的文本差异。</p>;
+  return <div className="human-unified-diff" data-testid="agent-review-human-diff" aria-label="代码差异，左侧为原行号，右侧为新行号">
+    {rows.map((row, index) => <div className={`human-diff-row is-${row.kind}`} key={index}>
+      {row.kind === 'hunk' || row.kind === 'meta' ? <span className="human-diff-note">{row.text}</span> : <>
+        <span className="human-diff-line-number" aria-hidden="true">{row.oldLine}</span>
+        <span className="human-diff-line-number" aria-hidden="true">{row.newLine}</span>
+        <span className="human-diff-sign" aria-hidden="true">{row.kind === 'add' ? '+' : row.kind === 'remove' ? '−' : ' '}</span>
+        <code>{row.text || ' '}</code>
+      </>}
+    </div>)}
   </div>;
 }
 
@@ -83,52 +39,65 @@ export function AgentHumanReview({ review, task, runId, onOpenFile, onMarkReview
   const [reviewedRevisions, setReviewedRevisions] = useState<string[]>([]);
   const [undoFinished, setUndoFinished] = useState<string[]>([]);
   const [actionBusy, setActionBusy] = useState(false);
-  const initialFile = review.files[0] ?? null;
-  const [mode, setMode] = useState<'VISUAL' | 'RAW'>(() => initialFile && reviewDisplayFor(initialFile) !== 'RAW' ? 'VISUAL' : 'RAW');
+  const [actionError, setActionError] = useState('');
+  const [filesOpen, setFilesOpen] = useState(false);
+  const [mode, setMode] = useState<'VISUAL' | 'RAW'>('VISUAL');
+  const scrollRef = useRef<HTMLDivElement>(null);
   useEffect(() => {
     if (!review.files.some((file) => file.path === selectedPath)) setSelectedPath(review.files[0]?.path ?? '');
   }, [review.files, selectedPath]);
   useEffect(() => {
-    if (!selectedPathHint || !review.files.some((file) => file.path === selectedPathHint)) return;
-    const next = review.files.find((file) => file.path === selectedPathHint)!;
-    setSelectedPath(selectedPathHint);
-    setMode(reviewDisplayFor(next) === 'RAW' ? 'RAW' : 'VISUAL');
+    if (selectedPathHint && review.files.some((file) => file.path === selectedPathHint)) setSelectedPath(selectedPathHint);
   }, [review.files, selectedPathHint]);
-  const selected = useMemo<AgentReviewFile | null>(() => review.files.find((file) => file.path === selectedPath) ?? review.files[0] ?? null, [review.files, selectedPath]);
+  useEffect(() => { scrollRef.current?.scrollTo(0, 0); setActionError(''); }, [selectedPath, runId]);
+  const selected = useMemo(() => review.files.find((file) => file.path === selectedPath) ?? review.files[0] ?? null, [review.files, selectedPath]);
   const display = selected ? reviewDisplayFor(selected) : 'RAW';
+  const index = selected ? review.files.indexOf(selected) : 0;
+  const selectFile = (file: AgentReviewFile) => { setSelectedPath(file.path); setFilesOpen(false); };
+  const perform = async (file: AgentReviewFile, action: 'review' | 'undo') => {
+    setActionBusy(true); setActionError('');
+    try {
+      if (action === 'review' && onMarkReviewed) { await onMarkReviewed(file); setReviewedRevisions((items) => [...items, file.revisionId!]); }
+      if (action === 'undo' && onUndo) { await onUndo(file); setUndoFinished((items) => [...items, file.revisionId!]); }
+    } catch { setActionError(action === 'undo' ? '未能撤销修改，请重新检查文件状态后重试。' : '未能保存审阅状态，请重试。'); }
+    finally { setActionBusy(false); }
+  };
 
-  return <section className="agent-review agent-human-review" data-testid="agent-review" data-review-mode={mode} data-agent-run-id={runId} data-file-count={review.files.length} data-additions={review.additions} data-deletions={review.deletions} aria-label={taskLabel(task)}>
+  return <section className="agent-review agent-human-review" data-testid="agent-review" data-review-mode={mode} data-agent-run-id={runId} data-file-count={review.files.length} data-additions={review.additions} data-deletions={review.deletions} aria-label={task.split(/\r?\n/)[0] || '本次任务变更'}>
     <header className="human-review-heading">
-      <h2>变更</h2>
-      <p className="human-review-count"><strong>{review.files.length} 文件</strong><span className="diff-additions">+{review.additions}</span><span className="diff-deletions">−{review.deletions}</span></p>
+      <span>{review.state === 'PROPOSED' ? '待应用变更' : '本次任务'}</span>
+      <DiffCounts additions={review.additions} deletions={review.deletions}/>
+      <Button variant="ghost" className="human-review-file-toggle" disabled={review.files.length < 2} aria-expanded={filesOpen} onClick={() => setFilesOpen(!filesOpen)} data-testid="agent-review-files-toggle">{review.files.length} 个文件{review.files.length > 1 && <AppIcon name="chevronDown" size="sm"/>}</Button>
     </header>
-
-    {selected && <p className="human-review-summary" title={taskLabel(task)}>{changeVerb(selected)} <code>{selected.path.split('/').at(-1)}</code></p>}
-
-    {review.files.length > 1 && <div className="human-review-files" aria-label="已修改文件">
-      {review.files.map((file) => <button type="button" className={file.path === selected?.path ? 'active' : ''} onClick={() => { setSelectedPath(file.path); setMode(reviewDisplayFor(file) === 'RAW' ? 'RAW' : 'VISUAL'); }} key={file.path} data-testid="agent-review-file" data-change-type={file.changeType}>
-        <span>{file.path}</span><small><b className="diff-additions">+{file.additions}</b><b className="diff-deletions">−{file.deletions}</b></small>
-      </button>)}
+    {filesOpen && <div className="human-review-files" aria-label="已修改文件">
+      {review.files.map((file) => <Button variant="ghost" className={file.path === selected?.path ? 'active' : ''} aria-pressed={file.path === selected?.path} onClick={() => selectFile(file)} key={file.path} data-testid="agent-review-file" data-change-type={file.changeType}>
+        <FileTypeIcon path={file.path}/><span className="human-review-path" title={file.path}>{file.path}</span><DiffCounts additions={file.additions} deletions={file.deletions}/>
+      </Button>)}
     </div>}
-
-    {selected && <div className={`human-review-detail${review.files.length === 1 ? ' is-single-file' : ''}`} data-change-type={selected.changeType} data-testid="agent-review-file" data-change-type-summary={selected.changeType}>
-      {selected.changeType !== 'CREATE' && <h3>{changeHeading(selected)}</h3>}
-      {selected.applicability === 'CHANGED_SINCE' && <p className="human-review-stale" data-testid="agent-review-stale">当前文件已在这次修改之后继续变化；下方仍是当时的原始 Diff。</p>}
-      {mode === 'VISUAL' && display !== 'RAW'
-        ? <VisualReview file={selected} display={display}/>
-        : <pre className="human-review-raw" data-testid="agent-review-diff">{selected.diff}</pre>}
-      <footer>
-        <div className="human-review-mode" role="tablist" aria-label="Diff 显示方式">
-          {display !== 'RAW' && <button type="button" role="tab" aria-selected={mode === 'VISUAL'} onClick={() => setMode('VISUAL')} data-testid="agent-review-human">可视化</button>}
-          <button type="button" role="tab" aria-selected={mode === 'RAW'} onClick={() => setMode('RAW')} data-testid="agent-review-raw">原始 Diff</button>
+    {selected ? <>
+      <div className="human-review-file-heading" data-testid="agent-review-file" data-change-type={selected.changeType}>
+        <FileTypeIcon path={selected.path}/><span className="human-review-path" title={selected.path}>{selected.path}</span>
+        <DiffCounts additions={selected.additions} deletions={selected.deletions}/>
+        {review.files.length > 1 && <nav aria-label="切换差异文件"><span>{index + 1}/{review.files.length}</span><IconButton size="sm" label="上一个文件" icon={<AppIcon name="back" size="sm"/>} disabled={index === 0} onClick={() => selectFile(review.files[index - 1]!)}/><IconButton size="sm" label="下一个文件" icon={<AppIcon name="forward" size="sm"/>} disabled={index === review.files.length - 1} onClick={() => selectFile(review.files[index + 1]!)}/></nav>}
+      </div>
+      {selected.applicability === 'CHANGED_SINCE' && <p className="human-review-notice" data-testid="agent-review-stale">当前文件已有后续修改，下方显示本次任务保存的差异。</p>}
+      <div className="human-review-scroll" ref={scrollRef} tabIndex={0} aria-label="文件差异">
+        {mode === 'VISUAL' && display !== 'RAW' ? <UnifiedDiff file={selected}/> : <pre className="human-review-raw" data-testid="agent-review-diff">{selected.diff}</pre>}
+      </div>
+      <footer className="human-review-footer">
+        {actionError && <p className="human-review-action-error" role="alert">{actionError}</p>}
+        <div className="human-review-actions">
+          <div className="human-review-mode" role="group" aria-label="Diff 显示方式">
+            {display !== 'RAW' && <Button variant="ghost" aria-pressed={mode === 'VISUAL'} onClick={() => setMode('VISUAL')} data-testid="agent-review-human">差异</Button>}
+            <Button variant="ghost" aria-pressed={mode === 'RAW' || display === 'RAW'} onClick={() => setMode('RAW')} data-testid="agent-review-raw">原始</Button>
+          </div>
+          <Button variant="ghost" onClick={() => onOpenFile(selected.path)} data-testid="agent-review-open-file"><AppIcon name="openAction" size="sm"/>打开文件</Button>
+          {selected.artifactId && selected.revisionId && onMarkReviewed && <Button disabled={actionBusy || selected.reviewState === 'REVIEWED' || reviewedRevisions.includes(selected.revisionId)} onClick={() => { void perform(selected, 'review'); }} data-testid="agent-review-mark-reviewed"><AppIcon name="check" size="sm"/>{selected.reviewState === 'REVIEWED' || reviewedRevisions.includes(selected.revisionId) ? '已审阅' : '标记已审阅'}</Button>}
+          {selected.artifactId && selected.revisionId && onUndo && selected.undoAvailability === 'AVAILABLE' && !undoFinished.includes(selected.revisionId) && <Button variant="ghost" disabled={actionBusy} onClick={() => { void perform(selected, 'undo'); }} data-testid="agent-review-undo">撤销修改</Button>}
         </div>
-        <div>
-          {selected.artifactId && selected.revisionId && onMarkReviewed && selected.reviewState !== 'REVIEWED' && !reviewedRevisions.includes(selected.revisionId) && <button type="button" disabled={actionBusy} onClick={() => { setActionBusy(true); void onMarkReviewed(selected).then(() => setReviewedRevisions((items) => [...items, selected.revisionId!])).catch(() => undefined).finally(() => setActionBusy(false)); }} data-testid="agent-review-mark-reviewed">标记已审阅</button>}
-          {selected.artifactId && selected.revisionId && onUndo && selected.undoAvailability === 'AVAILABLE' && !undoFinished.includes(selected.revisionId) && <button type="button" disabled={actionBusy} onClick={() => { setActionBusy(true); void onUndo(selected).then(() => setUndoFinished((items) => [...items, selected.revisionId!])).catch(() => undefined).finally(() => setActionBusy(false)); }} data-testid="agent-review-undo">撤销这次修改</button>}
-          {selected.undoAvailability === 'BLOCKED_CHANGED_SINCE' && <span data-testid="agent-review-undo-blocked">当前文件已变化，无法安全撤销</span>}
-          <button type="button" className="human-review-open-file" onClick={() => onOpenFile(selected.path)}>打开文件</button>
-        </div>
+        {selected.undoAvailability === 'BLOCKED_CHANGED_SINCE' && <p className="human-review-notice" data-testid="agent-review-undo-blocked">当前文件已变化，无法安全撤销</p>}
+        {selected.revisionId && undoFinished.includes(selected.revisionId) && <p className="human-review-notice" role="status">已撤销这次修改</p>}
       </footer>
-    </div>}
+    </> : <p className="human-review-notice">暂无文件变更。</p>}
   </section>;
 }

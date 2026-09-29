@@ -28,6 +28,10 @@ async function launch() {
   await cdp.eval("window.fieloraTest.resizeWindow({width:1478,height:850})");
 }
 async function reload() {
+  await wait("window.fielora.core.getHealth().then(h=>h.state==='READY')");
+  // The sidebar intentionally excludes unsent drafts. Seed a durable user
+  // message before exercising navigation to a newly created fixture conversation.
+  if (ids?.conversation) await cdp.eval(`(async()=>{const conversation_id=${JSON.stringify(ids.conversation.id)};const messages=await window.fielora.conversation.listMessages({conversation_id});if(!messages.some(m=>m.role==='USER'))await window.fielora.conversation.createMessage({conversation_id,role:'USER',content:'准备隔离浏览器验收，下一条请求定义验收任务。',status:'COMPLETED',provider_config_id:null,model_id:null,invocation_id:null,references:[]});})()`);
   await cdp.eval('window.__recoveryReload=true'); await cdp.send('Page.reload');
   await wait('typeof window.__recoveryReload === "undefined" && window.fieloraTest');
 }

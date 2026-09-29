@@ -6,6 +6,8 @@ import {
   colorContrast,
   defaultAppearancePreferences,
   defaultAppPreferences,
+  defaultAgentResourceBudget,
+  normalizeAgentResourceBudget,
   normalizeAppPreferences,
   readAppPreferences,
   resolveAppearance,
@@ -17,6 +19,18 @@ import {
   type AppPreferences,
 } from './app-preferences.ts';
 
+test('task budgets migrate with legacy preferences and round-trip independently', () => {
+  const storage = memoryStorage({ 'fielora.ui.preferences.v2': JSON.stringify({ version: 2, languagePreference: 'EN' }) });
+  const before = readAppPreferences(storage);
+  assert.deepEqual(before.agentResourceBudget, defaultAgentResourceBudget);
+  const budget = { max_execution_ms: 14_400_000, max_input_tokens: 10_000_000, max_output_tokens: 262_144 };
+  writeAppPreferences(storage, { ...before, agentResourceBudget: budget });
+  assert.deepEqual(readAppPreferences(storage).agentResourceBudget, { ...budget, max_input_tokens: 0, max_output_tokens: 0 });
+  assert.equal(readAppPreferences(storage).languagePreference, 'EN');
+  assert.deepEqual(normalizeAgentResourceBudget({ max_execution_ms: -1, max_input_tokens: '5000000', max_output_tokens: Infinity }), defaultAgentResourceBudget);
+  assert.deepEqual(normalizeAgentResourceBudget({ max_execution_ms: 86_400_001, max_input_tokens: 50_000_001, max_output_tokens: 1_000_001 }), defaultAgentResourceBudget);
+});
+
 function memoryStorage(initial: Record<string, string> = {}) {
   const entries = new Map(Object.entries(initial));
   return {
@@ -27,8 +41,20 @@ function memoryStorage(initial: Record<string, string> = {}) {
 }
 
 function freshPreferences(): AppPreferences {
-  return { version: 2, startupDestination: 'PROJECTS', languagePreference: 'SYSTEM', appearance: { ...defaultAppearancePreferences, advancedColorOverrides: {} } };
+  return { version: 2, agentResourceBudget: { ...defaultAgentResourceBudget }, agentDisplayMode: 'COMPACT', startupDestination: 'PROJECTS', languagePreference: 'SYSTEM', appearance: { ...defaultAppearancePreferences, advancedColorOverrides: {} } };
 }
+
+test('execution display defaults safely and persists independently of appearance', () => {
+  const storage = memoryStorage({ 'fielora.ui.preferences.v2': JSON.stringify({ version: 2, languagePreference: 'EN' }) });
+  const legacy = readAppPreferences(storage);
+  assert.equal(legacy.agentDisplayMode, 'COMPACT');
+  writeAppPreferences(storage, { ...legacy, agentDisplayMode: 'DETAILED' });
+  const restored = readAppPreferences(storage);
+  assert.equal(restored.agentDisplayMode, 'DETAILED');
+  assert.equal(restored.languagePreference, 'EN');
+  assert.deepEqual(restored.appearance, legacy.appearance);
+  assert.equal(normalizeAppPreferences({ agentDisplayMode: 'UNKNOWN' }).agentDisplayMode, 'COMPACT');
+});
 
 test('appearance preferences use fresh safe defaults and tolerate corrupt storage', () => {
   assert.deepEqual(readAppPreferences(memoryStorage()), freshPreferences());
@@ -52,6 +78,8 @@ test('v2 appearance preferences round-trip through the canonical storage key', (
   const storage = memoryStorage();
   const preferences: AppPreferences = {
     version: 2,
+    agentResourceBudget: { ...defaultAgentResourceBudget },
+    agentDisplayMode: 'COMPACT',
     startupDestination: 'NOW',
     languagePreference: 'EN',
     appearance: {
@@ -220,6 +248,8 @@ test('three-center colors persist independently and invalid legacy additions fal
 test('resetting appearance can preserve non-appearance preferences', () => {
   const configured: AppPreferences = {
     version: 2,
+    agentResourceBudget: { ...defaultAgentResourceBudget },
+    agentDisplayMode: 'DETAILED',
     startupDestination: 'BROWSE',
     languagePreference: 'ZH_CN',
     appearance: { ...defaultAppearancePreferences, themePreference: 'DARK', density: 'COMPACT' },

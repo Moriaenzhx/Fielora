@@ -1,5 +1,6 @@
 //! Bounded Harness work tracking; tool facts never promote model claims to truth.
-use fielora_contracts::{AgentEventKind, AgentToolCallView, AgentToolEffect, AgentToolStatus};
+use fielora_contracts::AgentToolEffect;
+use fielora_contracts::{AgentEventKind, AgentToolCallView, AgentToolStatus};
 use fielora_model::AgentModelMessage;
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
@@ -38,36 +39,56 @@ impl WorkProgress {
             }
             observed = true;
             let receipt = tool.receipt.as_ref();
-            let signature =
-                if tool.name == "browser" && receipt.is_some_and(|r| r["page_loaded"] == true) {
-                    // Observing/reloading the same rendered state is not new work.
-                    // Input freshness IDs remain mandatory for execution, but do
-                    // not belong in the progress identity.
-                    json!([tool.name, receipt.map(stable_observation)])
-                } else if tool.name == "search_text"
-                    && receipt.is_some_and(|r| r["matched_locations_sha256"].is_string())
-                {
-                    json!([
-                        tool.name,
-                        receipt.unwrap()["matched_locations_sha256"],
-                        receipt.unwrap()["files"]
-                    ])
-                } else if tool.name == "run_command"
-                    && matches!(
-                        tool.error_code.as_deref(),
-                        Some("AGENT_TOOL_IS_NOT_PROGRAM" | "AGENT_PROGRAM_NOT_FOUND")
-                    )
-                {
-                    // Different queries cannot make a nonexistent executable available.
-                    json!([tool.name, tool.arguments["program"], tool.error_code])
-                } else {
-                    json!([
-                        tool.name,
-                        tool.arguments,
-                        receipt.map(stable_observation),
-                        tool.error_code
-                    ])
-                };
+            let failed = tool.status == AgentToolStatus::Failed
+                || receipt.is_some_and(|r| r["success"] == false);
+            let signature = if failed {
+                // A changed proposal is not changed evidence. Count a new
+                // failure category/diagnostic once, not every invalid payload.
+                json!([
+                    tool.name,
+                    tool.error_code,
+                    receipt.map(|r| json!([
+                        r["exit_code"],
+                        r["stdout_sha256"],
+                        r["stderr_sha256"],
+                        r["diagnostics"],
+                        r["sha256"]
+                    ])),
+                    if tool.error_code.as_deref() == Some("AGENT_PROGRAM_NOT_FOUND") {
+                        tool.arguments.get("program")
+                    } else {
+                        None
+                    }
+                ])
+            } else if tool.name == "browser" && receipt.is_some_and(|r| r["page_loaded"] == true) {
+                // Observing/reloading the same rendered state is not new work.
+                // Input freshness IDs remain mandatory for execution, but do
+                // not belong in the progress identity.
+                json!([tool.name, receipt.map(stable_observation)])
+            } else if tool.name == "search_text"
+                && receipt.is_some_and(|r| r["matched_locations_sha256"].is_string())
+            {
+                json!([
+                    tool.name,
+                    receipt.unwrap()["matched_locations_sha256"],
+                    receipt.unwrap()["files"]
+                ])
+            } else if tool.name == "run_command"
+                && matches!(
+                    tool.error_code.as_deref(),
+                    Some("AGENT_TOOL_IS_NOT_PROGRAM" | "AGENT_PROGRAM_NOT_FOUND")
+                )
+            {
+                // Different queries cannot make a nonexistent executable available.
+                json!([tool.name, tool.arguments["program"], tool.error_code])
+            } else {
+                json!([
+                    tool.name,
+                    tool.arguments,
+                    receipt.map(stable_observation),
+                    tool.error_code
+                ])
+            };
             let mut novel = self.seen.insert(format!(
                 "{:x}",
                 Sha256::digest(signature.to_string().as_bytes())
@@ -196,6 +217,8 @@ impl WorkProgress {
             "work_plan":crate::agent_work_plan::projection(tools),
             "remaining_work":if wrote && !verified { "VERIFY_CURRENT_WORKSPACE" } else { "ESTABLISH_USER_GOAL_RESULT" },
             "model_assessment_unverified":self.model_note.chars().take(2400).collect::<String>(),
+            "current_run_effects":current_run_effects(tools),
+            "recovery_attempts":crate::agent_recovery::projection(tools),
             "historical_browser_operations":crate::agent_browser::continuity_facts(tools),
         })
     }
@@ -208,6 +231,16 @@ impl WorkProgress {
     pub fn diagnostic_context(&self, tools: &[AgentToolCallView], task: &str) -> Option<String> {
         if self.stalled_turns < 3 && !self.needs_search_replan() {
             return None;
+        }
+        let (skills, _) = crate::agent_skill_verification::changed_skills(tools);
+        if !skills.is_empty() {
+            let checks = tools.iter().rev().filter(|t| t.name == "verify_skill" || t.name == "finish_task").take(4)
+                .map(|t| json!({"tool_call_id":t.id,"name":t.name,"receipt":t.receipt.as_ref().map(compact_receipt),"error_code":t.error_code})).collect::<Vec<_>>();
+            return Some(format!(
+                "{DIAGNOSTIC_CONTEXT_MARKER}{}",
+                json!({"kind":"SKILL_INSTALLATION_RECOVERY","skills":skills,"current_run_effects":current_run_effects(tools),"latest_checks":checks,
+                "guidance":"Inspect the listed missing conditions; obtain complete resources from the observed source, verify_skill, and run a targeted setup check when executable resources exist. Repeated file reads, historical success, test fixture matches or relabeling the request cannot establish installation. Do not fabricate missing resources or bypass network/process policy."})
+            ));
         }
         let mut reads = std::collections::BTreeMap::<String, (Value, usize)>::new();
         let mut searches = std::collections::BTreeMap::<String, (Value, usize)>::new();
@@ -320,20 +353,21 @@ pub(crate) fn goal_progress(
         "RECOVERY_REQUIRED"
     } else if verified {
         "READY_TO_FINALIZE"
-    } else if tools
-        .iter()
-        .rev()
-        .find(|tool| {
-            tool.name == "browser_verify"
-                || tool
-                    .receipt
-                    .as_ref()
-                    .is_some_and(|r| r["verification_eligible"] == true)
-        })
-        .is_some_and(|tool| {
-            tool.status != AgentToolStatus::Completed
-                || tool.receipt.as_ref().is_some_and(|r| r["success"] == false)
-        })
+    } else if (wrote || requires_action || requires_verification)
+        && tools
+            .iter()
+            .rev()
+            .find(|tool| {
+                tool.name == "browser_verify"
+                    || tool
+                        .receipt
+                        .as_ref()
+                        .is_some_and(|r| r["verification_eligible"] == true)
+            })
+            .is_some_and(|tool| {
+                tool.status != AgentToolStatus::Completed
+                    || tool.receipt.as_ref().is_some_and(|r| r["success"] == false)
+            })
     {
         "REPAIRING"
     } else if wrote {
@@ -434,6 +468,7 @@ fn compact_receipt(receipt: &Value) -> Value {
         "exit_code",
         "stdout_sha256",
         "stderr_sha256",
+        "diagnostic_summary",
         "artifact_id",
         "artifact_revision_id",
         "matches",
@@ -458,10 +493,36 @@ fn compact_receipt(receipt: &Value) -> Value {
         "document_state",
         "has_password_input",
         "observation_state",
+        "observation_note",
+        "interaction_ready",
+        "partial",
+        "text_truncated",
+        "text_returned_chars",
+        "text_total_chars",
+        "text_guidance",
         "user_action_required",
         "historical_only",
         "verification_eligible",
         "history",
+        "bundle_sha256",
+        "diagnostics",
+        "runtime_check_required",
+        "next_action",
+        "workspace_revision",
+        "name",
+        "source_kind",
+        "scope",
+        "trust",
+        "version",
+        "location_reference",
+        "content_digest",
+        "admitted_sha256",
+        "context_complete",
+        "runtime_candidates",
+        "project_root",
+        "offset",
+        "next_offset",
+        "discovered_count",
     ] {
         if let Some(value) = receipt.get(key) {
             result.insert(key.into(), value.clone());
@@ -494,15 +555,32 @@ pub(crate) fn recovery_instruction(code: &str) -> Option<&'static str> {
         | "AGENT_PROGRAM_START_FAILED" => Some(
             "No process started. Inspect the precise launch failure and available Windows executables. Do not retry a missing program with changed arguments, treat this as a remote URL response, or invent sources. Ask for required information with request_user_input if needed.",
         ),
-        "AGENT_COMMAND_FAILED" | "AGENT_VERIFICATION_REQUIRED" => Some(
+        "AGENT_VERIFICATION_REQUIRED" => Some(
+            "Completion was rejected: inspect the receipt's remaining checks. If no check ran, execute a targeted run_command check or verify_skill for a Skill installation; file reads, hashes, Git status and changed intent are not verification. Preserve current_run_effects as current facts, not historical actions. If a check failed, repair its specific diagnostics before rerunning.",
+        ),
+        "AGENT_COMMAND_FAILED" => Some(
             "Inspect the failed check and repair its cause. A command invocation is not a passing verification; verify the current workspace again.",
         ),
         _ => None,
     }
 }
 
+/// Pin the latest actual effect for each path independently of the recent-read
+/// window. Stored alongside existing checkpoints; no separate state owner.
+fn current_run_effects(tools: &[AgentToolCallView]) -> Value {
+    let mut seen = HashSet::new();
+    let facts = tools.iter().rev().filter(|t| matches!(t.effect, AgentToolEffect::WorkspaceWrite | AgentToolEffect::Destructive | AgentToolEffect::Network))
+        .filter(|t| seen.insert(json!([t.name,t.arguments.get("path"),t.arguments.get("paths")]).to_string()))
+        .map(|t| json!({"tool_call_id":t.id,"run_id":t.run_id,"name":t.name,"status":t.status,
+            "path":t.arguments.get("path"),"paths":t.arguments.get("paths"),"receipt":t.receipt.as_ref().map(compact_receipt)})).collect::<Vec<_>>();
+    json!({"authority":"CURRENT_RUN_DURABLE_TOOL_RECEIPTS","total_effects":facts.len(),"truncated":facts.len()>64,
+        "effects":facts.into_iter().take(64).collect::<Vec<_>>(),
+        "guidance":"These effects belong to THIS Run. Historical COMPLETED labels and matching repository test text do not establish current task success or turn a real request into a fixture."})
+}
+
 /// A process/network receipt can satisfy a requested action without a file edit.
 /// Merely observing files cannot satisfy an implementation request.
+#[cfg(test)]
 pub(crate) fn has_completed_action(tools: &[AgentToolCallView]) -> bool {
     tools.iter().any(|tool| {
         tool.status == AgentToolStatus::Completed
@@ -523,6 +601,7 @@ pub(crate) const REPLAN_INSTRUCTION: &str = "Recent tool actions repeat already-
 /// Rebuilt from the existing event ledger, including after app restart.
 #[derive(Default, Debug)]
 pub(crate) struct RunResources {
+    limits: fielora_contracts::AgentResourceBudget,
     pub cursor: u64,
     execution_ms: u64,
     input_tokens: u64,
@@ -531,6 +610,16 @@ pub(crate) struct RunResources {
 
 impl RunResources {
     pub fn observe(&mut self, kind: AgentEventKind, payload: &Value) {
+        let explicit_resume = kind == AgentEventKind::RunResumed
+            && payload["resource_budget_reset"]["source"] == "EXPLICIT_USER_RESUME";
+        if (kind == AgentEventKind::RunCreated || explicit_resume)
+            && let Ok(limits) = serde_json::from_value::<fielora_contracts::AgentResourceBudget>(
+                payload["resource_budget"].clone(),
+            )
+            && limits.is_valid()
+        {
+            self.limits = limits;
+        }
         if kind == AgentEventKind::RunResumed
             && payload["resource_budget_reset"]["source"] == "EXPLICIT_USER_RESUME"
         {
@@ -577,10 +666,8 @@ impl RunResources {
     }
 
     pub fn exhaustion(&self) -> Option<&'static str> {
-        if self.execution_ms >= 3_600_000 {
+        if self.execution_ms >= self.limits.max_execution_ms {
             Some("AGENT_TIME_BUDGET_EXHAUSTED")
-        } else if self.input_tokens >= 2_000_000 || self.output_tokens >= 65_536 {
-            Some("AGENT_TOKEN_BUDGET_EXHAUSTED")
         } else {
             None
         }
@@ -599,6 +686,8 @@ pub(crate) fn checkpoint_for_model(mut checkpoint: Value) -> Value {
             .is_some_and(|turns| turns >= 3);
     if let Some(fields) = checkpoint.as_object_mut() {
         fields.remove("work_plan");
+        // The current ledger is injected separately once after compaction.
+        fields.remove("recovery_attempts");
         if repeating {
             fields.remove("model_assessment_unverified");
         }
@@ -737,6 +826,7 @@ pub(crate) fn coalesce_observation_exchanges(messages: &mut Vec<AgentModelMessag
 
 /// Reduce only complete older exchanges. Images and the initial task/context are
 /// pinned; the current exchange is indivisible so provider call IDs stay valid.
+#[cfg(test)]
 pub(crate) fn compact_transcript(
     messages: &mut Vec<AgentModelMessage>,
     checkpoint: Value,
@@ -744,15 +834,47 @@ pub(crate) fn compact_transcript(
     compact_transcript_to(messages, checkpoint, 64 * 1024, 40 * 1024)
 }
 
+#[cfg(test)]
 pub(crate) fn compact_transcript_to(
     messages: &mut Vec<AgentModelMessage>,
     checkpoint: Value,
     threshold: usize,
     target: usize,
 ) -> Option<(usize, usize)> {
+    compact_transcript_observed(messages, checkpoint, threshold, target, |_| {})
+}
+
+pub(crate) fn compact_transcript_observed(
+    messages: &mut Vec<AgentModelMessage>,
+    checkpoint: Value,
+    threshold: usize,
+    target: usize,
+    on_started: impl FnOnce(usize),
+) -> Option<(usize, usize)> {
     let mut checkpoint = checkpoint_for_model(checkpoint);
     let before = messages.iter().map(message_bytes).sum::<usize>();
     if before <= threshold && messages.len() <= 112 {
+        return None;
+    }
+    // A large pinned original request may exceed the nominal target. Require
+    // actual new context growth before reducing again, rather than every turn.
+    let last_floor = messages
+        .iter()
+        .find_map(|m| match m {
+            AgentModelMessage::User(s) if s.starts_with(COMPACTED_CONTEXT) => {
+                serde_json::Deserializer::from_str(&s[COMPACTED_CONTEXT.len()..])
+                    .into_iter::<Value>()
+                    .next()
+                    .and_then(Result::ok)
+                    .and_then(|v| v["retained_context_bytes"].as_u64())
+            }
+            _ => None,
+        })
+        .unwrap_or(0) as usize;
+    if last_floor > target
+        && before < last_floor.saturating_add(threshold.saturating_sub(target).max(4096))
+        && messages.len() <= 112
+    {
         return None;
     }
     let exchanges = messages.iter().enumerate().filter_map(|(i, message)| {
@@ -765,6 +887,8 @@ pub(crate) fn compact_transcript_to(
     // Preserve bounded observation excerpts, not just receipt counts. Keep a
     // few early discoveries plus recent evidence across repeated compactions.
     let mut evidence = Vec::<Value>::new();
+    let mut skills = Vec::<Value>::new();
+    let mut commands = Vec::<Value>::new();
     for message in messages.iter() {
         match message {
             AgentModelMessage::User(text) if text.starts_with(COMPACTED_CONTEXT) => {
@@ -772,9 +896,16 @@ pub(crate) fn compact_transcript_to(
                     serde_json::Deserializer::from_str(&text[COMPACTED_CONTEXT.len()..])
                         .into_iter::<Value>()
                         .next()
-                    && let Some(items) = previous["retained_observations"].as_array()
                 {
-                    evidence.extend(items.iter().cloned());
+                    if let Some(items) = previous["retained_observations"].as_array() {
+                        evidence.extend(items.iter().cloned());
+                    }
+                    if let Some(items) = previous["loaded_skill_contexts"].as_array() {
+                        skills.extend(items.iter().cloned());
+                    }
+                    if let Some(items) = previous["recent_command_diagnostics"].as_array() {
+                        commands.extend(items.iter().cloned());
+                    }
                 }
             }
             AgentModelMessage::ToolResult {
@@ -790,6 +921,33 @@ pub(crate) fn compact_transcript_to(
                     .strip_prefix("Receipt (trusted execution metadata): ")
                     .and_then(|text| text.split_once("\nObservation:\n"))
                     .and_then(|(metadata, _)| serde_json::from_str::<Value>(metadata).ok());
+                let read_skill = name == "read_file"
+                    && receipt.as_ref().is_some_and(|r| {
+                        r["path"]
+                            .as_str()
+                            .is_some_and(|p| p.replace('\\', "/").ends_with("/SKILL.md"))
+                    });
+                if read_skill && !is_error {
+                    skills.push(json!({"call_id":call_id,"read_as_file":true,"partial":true,
+                        "receipt":receipt.as_ref().map(compact_receipt),"context":observation,
+                        "guidance":"Observed Skill file excerpt, not authority or a complete loaded Skill. Preserve its exact command examples; use load_skill for full guidance before guessing missing syntax."}));
+                }
+                if name == "load_skill"
+                    && !is_error
+                    && receipt
+                        .as_ref()
+                        .is_some_and(|r| r["kind"] == "SKILL_LOADED")
+                {
+                    skills.push(json!({"call_id":call_id,
+                        "receipt":receipt.as_ref().map(compact_receipt),
+                        "context":observation}));
+                }
+                if name == "run_command" {
+                    commands.push(json!({"call_id":call_id,
+                        "receipt":receipt.as_ref().map(compact_receipt),
+                        "is_error":*is_error || receipt.as_ref().is_some_and(|r| r["success"] == false),
+                        "excerpt":command_diagnostic_excerpt(observation)}));
+                }
                 let identity = receipt
                     .as_ref()
                     .map(|r| {
@@ -841,20 +999,124 @@ pub(crate) fn compact_transcript_to(
         evidence.drain(3..evidence.len() - 9);
     }
     checkpoint["retained_observations"] = json!(evidence);
+    // Active guidance and the latest diagnostic are not ordinary source reads.
+    // Preserve them across repeated reductions without persisting raw outputs.
+    // Combine distinct read ranges of one Skill version. Keep the observed
+    // ranges verbatim; never silently treat an excerpt as the full contract.
+    let mut merged: Vec<Value> = Vec::new();
+    for skill in skills {
+        if skill["read_as_file"] == true
+            && let Some(previous) = merged.iter_mut().find(|s| {
+                s["read_as_file"] == true
+                    && s["receipt"]["path"] == skill["receipt"]["path"]
+                    && s["receipt"]["sha256"] == skill["receipt"]["sha256"]
+            })
+        {
+            let old = previous["context"].as_str().unwrap_or("");
+            let new = skill["context"].as_str().unwrap_or("");
+            if !old.contains(new) {
+                previous["context"] = json!(format!("{old}\n[Another observed excerpt]\n{new}"));
+            }
+            continue;
+        }
+        merged.push(skill);
+    }
+    let mut skills = merged;
+    let mut identities = HashSet::new();
+    skills.reverse();
+    skills.retain(|item| {
+        identities.insert(
+            json!([
+                item["receipt"]["source_kind"],
+                item["receipt"]["location_reference"],
+                item["receipt"]["name"],
+                item["receipt"]["path"]
+            ])
+            .to_string(),
+        )
+    });
+    skills.truncate(2);
+    let mut remaining = 24 * 1024;
+    for skill in &mut skills {
+        let bytes = skill["context"].as_str().map_or(0, str::len);
+        if bytes > remaining {
+            skill["context"] = Value::Null;
+            skill["reload_required"] = json!(true);
+            skill["guidance"] = json!(
+                "Skill instructions exceeded the retained context budget. Reload this exact Skill before using its commands; do not reconstruct its contract from memory."
+            );
+        } else {
+            remaining -= bytes;
+        }
+    }
+    skills.reverse();
+    checkpoint["loaded_skill_contexts"] = json!(skills);
+    let mut calls = HashSet::new();
+    commands.reverse();
+    commands.retain(|item| calls.insert(item["call_id"].to_string()));
+    commands.truncate(2);
+    commands.reverse();
+    checkpoint["recent_command_diagnostics"] = json!(commands);
     let mut prefix = messages[..first].iter().filter(|message| {
         !matches!(message, AgentModelMessage::User(text) if text.starts_with(COMPACTED_CONTEXT))
     }).cloned().collect::<Vec<_>>();
-    // Rehydrated screenshots can appear after an earlier tool exchange. They
-    // remain original task inputs even when those older exchanges are reduced.
+    // User follow-ups, scope constraints and restored images can occur after
+    // tool exchanges. Pin them independently of the exchange selected below.
+    // The caller removes replaceable Harness feedback before compaction.
+    let mut pinned_text = prefix
+        .iter()
+        .filter_map(|m| match m {
+            AgentModelMessage::User(s) => Some(s.clone()),
+            _ => None,
+        })
+        .collect::<HashSet<_>>();
     prefix.extend(
         messages[first..]
             .iter()
-            .filter(|message| matches!(message, AgentModelMessage::UserMultimodal { .. }))
+            .filter(|message| match message {
+                AgentModelMessage::UserMultimodal { .. } => true,
+                AgentModelMessage::User(s) => {
+                    !s.starts_with(COMPACTED_CONTEXT) && pinned_text.insert(s.clone())
+                }
+                _ => false,
+            })
             .cloned(),
     );
-    prefix.push(AgentModelMessage::User(format!("{COMPACTED_CONTEXT}{checkpoint}\nContinue toward the original task. Older observations were reduced; reread affected evidence if needed. A checkpoint or tool success does not establish goal completion.")));
+    // Keep original requests intact. Budget summaries before choosing complete
+    // exchanges; diagnostics and Skill provenance survive ordinary read excerpts.
+    let pinned_bytes = prefix.iter().map(message_bytes).sum::<usize>();
+    let checkpoint_budget = target.saturating_sub(pinned_bytes).saturating_sub(512);
+    while checkpoint.to_string().len() > checkpoint_budget {
+        let observations = checkpoint["retained_observations"].as_array_mut().unwrap();
+        if observations.len() > 4 {
+            observations.remove(0);
+            continue;
+        }
+        let skills = checkpoint["loaded_skill_contexts"].as_array_mut().unwrap();
+        if let Some(skill) = skills.iter_mut().find(|s| s["context"].is_string()) {
+            skill["context"] = Value::Null;
+            skill["reload_required"] = json!(true);
+            skill["guidance"] = json!(
+                "Reload this exact Skill before using it. The context budget retained its identity, not its instructions."
+            );
+            continue;
+        }
+        break;
+    }
+    checkpoint["retained_context_bytes"] = json!(before);
+    checkpoint["target_bytes"] = json!(target);
+    checkpoint["target_met"] = json!(false);
+    let summary_index = prefix.len();
+    let summary = |checkpoint: &Value| {
+        AgentModelMessage::User(format!(
+            "{COMPACTED_CONTEXT}{checkpoint}\nContinue toward the original task. Older observations were reduced; reread affected evidence if needed. A checkpoint or tool success does not establish goal completion."
+        ))
+    };
+    prefix.push(summary(&checkpoint));
     let prefix_bytes = prefix.iter().map(message_bytes).sum::<usize>();
-    let mut keep = exchanges[exchanges.len() - 1];
+    // An oversized completed exchange is represented in the checkpoint. Never
+    // retain half an assistant/tool pair merely to meet a byte target.
+    let mut keep = messages.len();
     for &start in exchanges.iter().skip(1).rev().take(8) {
         if prefix_bytes + messages[start..].iter().map(message_bytes).sum::<usize>() > target {
             break;
@@ -864,21 +1126,330 @@ pub(crate) fn compact_transcript_to(
     prefix.extend(
         messages[keep..]
             .iter()
-            .filter(|message| !matches!(message, AgentModelMessage::UserMultimodal { .. }))
+            .filter(|message| {
+                !matches!(
+                    message,
+                    AgentModelMessage::User(_) | AgentModelMessage::UserMultimodal { .. }
+                )
+            })
             .cloned(),
     );
     let after = prefix.iter().map(message_bytes).sum::<usize>();
     if after >= before {
         return None;
     }
+    checkpoint["retained_context_bytes"] = json!(after);
+    checkpoint["target_bytes"] = json!(target);
+    checkpoint["target_met"] = json!(after <= target);
+    prefix[summary_index] = summary(&checkpoint);
+    let after = prefix.iter().map(message_bytes).sum::<usize>();
+    if after >= before {
+        return None;
+    }
+    on_started(before);
     *messages = prefix;
     Some((before, after))
+}
+
+fn command_diagnostic_excerpt(observation: &str) -> String {
+    // Keep both ends: Node and compiler diagnostics often follow verbose stdout.
+    let chars = observation.chars().collect::<Vec<_>>();
+    if chars.len() <= 4000 {
+        return observation.to_owned();
+    }
+    format!(
+        "{}\n[command diagnostic excerpt truncated]\n{}",
+        chars[..1600].iter().collect::<String>(),
+        chars[chars.len() - 2400..].iter().collect::<String>()
+    )
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn oversized_latest_exchange_cannot_drop_followup_or_scope() {
+        let mut messages = vec![AgentModelMessage::User("Original task".into())];
+        append_compaction_exchange(
+            &mut messages,
+            "first",
+            "read_file",
+            json!({"kind":"FILE_READ","path":"a"}),
+            "early evidence",
+        );
+        messages.push(AgentModelMessage::User(
+            "Follow-up: keep all data and use the project directory only".into(),
+        ));
+        append_compaction_exchange(
+            &mut messages,
+            "large",
+            "read_file",
+            json!({"kind":"FILE_READ","path":"b"}),
+            &"huge output ".repeat(10000),
+        );
+        messages.push(AgentModelMessage::User(
+            "Scope: do not change global PATH".into(),
+        ));
+        compact_transcript_to(&mut messages, json!({}), 64 * 1024, 40 * 1024).unwrap();
+        for expected in [
+            "Original task",
+            "Follow-up: keep all data and use the project directory only",
+            "Scope: do not change global PATH",
+        ] {
+            assert_eq!(
+                messages
+                    .iter()
+                    .filter(|m| matches!(m,AgentModelMessage::User(s) if s==expected))
+                    .count(),
+                1
+            );
+        }
+        assert!(
+            !messages
+                .iter()
+                .any(|m| matches!(m,AgentModelMessage::ToolResult{call_id,..} if call_id=="large"))
+        );
+    }
+
+    #[test]
+    fn failed_artifact_payload_variations_do_not_count_as_progress() {
+        let mut progress = WorkProgress::default();
+        let mut calls = Vec::new();
+        for i in 0..6 {
+            calls.push(serde_json::from_value(json!({"id":format!("a-{i}"),"run_id":"run","name":"artifact.create","effect":"WORKSPACE_WRITE","status":"FAILED","policy_decision":"ALLOW","arguments":{"content":format!("{{\"guess\":{i}}}")},"receipt":null,"error_code":"ARTIFACT_CONTENT_INVALID","created_at":i,"updated_at":i})).unwrap());
+            progress.observe(&calls);
+        }
+        assert_eq!(progress.stalled_turns, 5);
+    }
+
+    #[test]
+    fn compaction_reaches_normal_target_and_does_not_recompress_pinned_floor() {
+        for pinned in [8_000, 70_000] {
+            let mut messages = vec![AgentModelMessage::User("x".repeat(pinned))];
+            for i in 0..20 {
+                append_compaction_exchange(
+                    &mut messages,
+                    &format!("read-{i}"),
+                    "read_file",
+                    json!({"kind":"FILE_READ","path":format!("file-{i}"),"sha256":"s"}),
+                    &"large output".repeat(1600),
+                );
+            }
+            let (_, after) =
+                compact_transcript_to(&mut messages, json!({}), 64 * 1024, 40 * 1024).unwrap();
+            if pinned == 8_000 {
+                assert!(after <= 40 * 1024);
+            } else {
+                let original = messages.clone();
+                let mut announced = false;
+                assert!(
+                    compact_transcript_observed(
+                        &mut messages,
+                        json!({}),
+                        64 * 1024,
+                        40 * 1024,
+                        |_| announced = true
+                    )
+                    .is_none()
+                );
+                assert!(!announced);
+                assert_eq!(messages, original);
+            }
+        }
+    }
+
+    #[test]
+    fn context_reduction_does_not_announce_ordinary_turns() {
+        let mut messages = vec![AgentModelMessage::User("Original goal".into())];
+        let original = messages.clone();
+        let mut started = false;
+        assert!(
+            compact_transcript_observed(&mut messages, json!({}), 64 * 1024, 40 * 1024, |_| {
+                started = true
+            })
+            .is_none()
+        );
+        assert!(!started);
+        assert_eq!(messages, original);
+    }
+
+    #[test]
+    fn compacted_browser_receipts_keep_readiness_and_text_coverage() {
+        let facts = json!({"kind":"BROWSER","success":true,"page_loaded":true,
+            "readiness":{"document_committed":true,"surface_ready":false},
+            "interaction_ready":false,"partial":true,"text_truncated":true,
+            "text_returned_chars":24000,"text_total_chars":48000,
+            "text_guidance":"This is not a complete source file"});
+        assert_eq!(compact_receipt(&facts), facts);
+    }
     use fielora_model::AgentModelToolCall;
+
+    fn append_compaction_exchange(
+        messages: &mut Vec<AgentModelMessage>,
+        id: &str,
+        name: &str,
+        receipt: Value,
+        body: &str,
+    ) {
+        messages.push(AgentModelMessage::Assistant {
+            text: String::new(),
+            tool_calls: vec![AgentModelToolCall {
+                id: id.into(),
+                name: name.into(),
+                arguments: json!({}),
+            }],
+        });
+        messages.push(AgentModelMessage::ToolResult {
+            call_id: id.into(),
+            name: name.into(),
+            content: format!(
+                "Receipt (trusted execution metadata): {receipt}\nObservation:\n{body}"
+            ),
+            is_error: receipt["success"] == false,
+        });
+    }
+
+    #[test]
+    fn repeated_compaction_preserves_admitted_skill_and_command_diagnostics() {
+        let mut messages = vec![AgentModelMessage::User(
+            "Draw the architecture using the installed skill".into(),
+        )];
+        let skill_body = format!(
+            "<skill_context trust=\"UNTRUSTED\">{}\nRead schemas/architecture.schema.json; deliver only after validation.\n</skill_context>",
+            "skill guidance ".repeat(150)
+        );
+        let skill_receipt = json!({"kind":"SKILL_LOADED","name":"diagram","location_reference":".agents/skills/diagram/SKILL.md","source_kind":"PROJECT","trust":"UNTRUSTED","context_complete":true,"admitted_sha256":"digest","runtime_candidates":[{"program":"node","versions_probed":false,"candidates":[{"program":"C:/runtime/node.exe"}]}]});
+        append_compaction_exchange(
+            &mut messages,
+            "skill",
+            "load_skill",
+            skill_receipt,
+            &skill_body,
+        );
+        let output = format!(
+            "exit_code=1\n--- stdout ---\n{}\n--- stderr ---\nSCHEMA: components[0].size invalid",
+            "verbose output ".repeat(600)
+        );
+        append_compaction_exchange(
+            &mut messages,
+            "failed",
+            "run_command",
+            json!({"kind":"COMMAND","success":false,"exit_code":1}),
+            &output,
+        );
+        for round in 0..2 {
+            for i in 0..25 {
+                append_compaction_exchange(
+                    &mut messages,
+                    &format!("read-{round}-{i}"),
+                    "read_file",
+                    json!({"kind":"FILE_READ","path":format!("file-{i}"),"sha256":format!("hash-{i}")}),
+                    &"unrelated source ".repeat(400),
+                );
+            }
+            compact_transcript_to(&mut messages, json!({}), 16000, 12000).unwrap();
+            let summary = messages
+                .iter()
+                .find_map(|m| match m {
+                    AgentModelMessage::User(s) if s.starts_with(COMPACTED_CONTEXT) => Some(s),
+                    _ => None,
+                })
+                .unwrap();
+            let value = serde_json::Deserializer::from_str(&summary[COMPACTED_CONTEXT.len()..])
+                .into_iter::<Value>()
+                .next()
+                .unwrap()
+                .unwrap();
+            assert_eq!(value["loaded_skill_contexts"][0]["context"], skill_body);
+            assert_eq!(
+                value["loaded_skill_contexts"][0]["receipt"]["runtime_candidates"][0]["candidates"]
+                    [0]["program"],
+                "C:/runtime/node.exe"
+            );
+            assert_eq!(
+                value["loaded_skill_contexts"][0]["receipt"]["admitted_sha256"],
+                "digest"
+            );
+            assert_eq!(value["recent_command_diagnostics"][0]["is_error"], true);
+            assert!(
+                value["recent_command_diagnostics"][0]["excerpt"]
+                    .as_str()
+                    .unwrap()
+                    .contains("SCHEMA: components[0].size invalid")
+            );
+            assert_eq!(
+                value["recent_command_diagnostics"]
+                    .as_array()
+                    .unwrap()
+                    .len(),
+                1
+            );
+        }
+    }
+
+    #[test]
+    fn plain_skill_reads_keep_command_examples_across_multiple_reductions() {
+        let mut messages = vec![AgentModelMessage::User(
+            "Use the installed skill, preserve my files".into(),
+        )];
+        for (start, body) in [
+            (1, "Use validate architecture input.json; never --input"),
+            (80, "Use deliver architecture input.json output.html"),
+        ] {
+            append_compaction_exchange(
+                &mut messages,
+                &format!("skill-{start}"),
+                "read_file",
+                json!({"kind":"FILE_READ","path":".agents/skills/demo/SKILL.md","sha256":"same","line_start":start}),
+                body,
+            );
+        }
+        for round in 0..2 {
+            for i in 0..20 {
+                append_compaction_exchange(
+                    &mut messages,
+                    &format!("r-{round}-{i}"),
+                    "read_file",
+                    json!({"kind":"FILE_READ","path":"input.json","sha256":format!("{round}-{i}")}),
+                    &"source ".repeat(500),
+                );
+            }
+            compact_transcript_to(&mut messages, json!({}), 16000, 12000).unwrap();
+            let all = messages
+                .iter()
+                .map(|m| format!("{m:?}"))
+                .collect::<String>();
+            assert!(all.contains("never --input"));
+            assert!(all.contains("deliver architecture input.json output.html"));
+            assert!(all.contains("partial"));
+            assert!(all.contains("Use the installed skill, preserve my files"));
+        }
+    }
+
+    #[test]
+    fn oversized_skill_context_requires_reload_instead_of_silent_truncation() {
+        let mut messages = vec![AgentModelMessage::User("Use the skill".into())];
+        append_compaction_exchange(
+            &mut messages,
+            "big",
+            "load_skill",
+            json!({"kind":"SKILL_LOADED","name":"big","context_complete":true}),
+            &"大".repeat(24000),
+        );
+        append_compaction_exchange(
+            &mut messages,
+            "latest",
+            "read_file",
+            json!({}),
+            "latest evidence",
+        );
+        compact_transcript_to(&mut messages, json!({}), 16000, 12000).unwrap();
+        let text = format!("{messages:?}");
+        assert!(text.contains("reload_required"));
+        assert!(text.contains("Reload this exact Skill"));
+        assert!(text.len() < 16000);
+    }
 
     #[test]
     fn production_browser_loop_replay_recognizes_repeated_observations() {
@@ -1048,6 +1619,49 @@ mod tests {
             "created_at":0,"updated_at":0}),
         )
         .unwrap()
+    }
+
+    #[test]
+    fn current_skill_write_survives_the_recent_fact_window_and_compaction_projection() {
+        let mut write = observation(
+            "write",
+            "create_file",
+            json!({"path":".agents/skills/demo/SKILL.md"}),
+            json!({"kind":"FILE_CREATED","before_sha256":null,"after_sha256":"actual"}),
+        );
+        write.effect = AgentToolEffect::WorkspaceWrite;
+        let mut tools = vec![write];
+        for i in 0..30 {
+            tools.push(observation(
+                &format!("read-{i}"),
+                "stat_path",
+                json!({"path":".agents/skills/demo/SKILL.md"}),
+                json!({"sha256":"actual"}),
+            ));
+        }
+        let mut progress = WorkProgress::restored(&tools);
+        progress.model_note = "The old Run created this file.".into();
+        progress.stalled_turns = 4;
+        let checkpoint = checkpoint_for_model(progress.checkpoint(&tools, 40, true, false));
+        assert!(
+            !checkpoint["recent_tool_facts"]
+                .to_string()
+                .contains("FILE_CREATED")
+        );
+        assert_eq!(
+            checkpoint["current_run_effects"]["effects"][0]["tool_call_id"],
+            "write"
+        );
+        assert_eq!(
+            checkpoint["current_run_effects"]["effects"][0]["run_id"],
+            "trace"
+        );
+        assert!(!checkpoint.to_string().contains("The old Run"));
+        let recovery = progress
+            .diagnostic_context(&tools, "install a skill")
+            .unwrap();
+        assert!(recovery.contains("verify_skill"));
+        assert!(!recovery.contains("translation/filter lookup"));
     }
 
     #[test]
@@ -1359,7 +1973,8 @@ mod tests {
         different_check.arguments = json!({"program":"node","argv":["different-test.cjs"]});
         tools.push(different_check);
         state.observe(&tools);
-        assert_eq!(state.stalled_turns, 0);
+        // Changing a command with no new diagnostic is not verified progress.
+        assert_eq!(state.stalled_turns, 5);
         assert!(!has_completed_action(&tools));
         let mut check = tools.last().unwrap().clone();
         check.receipt = Some(json!({"exit_code":1,"stdout_sha256":"first","duration_ms":1}));
@@ -1391,9 +2006,10 @@ mod tests {
         for (kind, payload) in &events {
             resources.observe(*kind, payload);
         }
-        assert_eq!(resources.exhaustion(), Some("AGENT_TOKEN_BUDGET_EXHAUSTED"));
+        assert_eq!(resources.exhaustion(), None);
         resources.observe(AgentEventKind::RunResumed, &json!({"reason":"USER_RESUME"}));
-        assert!(resources.exhaustion().is_some());
+        assert_eq!(resources.output_tokens, 65_540);
+        assert_eq!(resources.execution_ms, 2000);
         resources.observe(
             AgentEventKind::RunResumed,
             &json!({"resource_budget_reset":{"source":"EXPLICIT_USER_RESUME"}}),
@@ -1418,6 +2034,65 @@ mod tests {
             restored["recent_tool_facts"][0]["receipt"]["success"],
             false
         );
+    }
+
+    #[test]
+    fn only_execution_time_exhausts_even_with_legacy_token_caps() {
+        let mut resources = RunResources::default();
+        resources.observe(AgentEventKind::RunCreated, &json!({"resource_budget":{"max_execution_ms":5_820_000,"max_input_tokens":1000,"max_output_tokens":1024}}));
+        resources.observe(AgentEventKind::ModelCompleted, &json!({"duration_ms":5_819_999,"usage":{"input_tokens":500_000_000,"output_tokens":100_000_000}}));
+        assert_eq!(resources.exhaustion(), None);
+        assert_eq!(resources.input_tokens, 500_000_000);
+        assert_eq!(resources.output_tokens, 100_000_000);
+        resources.observe(AgentEventKind::ToolCompleted, &json!({"duration_ms":1}));
+        assert_eq!(resources.exhaustion(), Some("AGENT_TIME_BUDGET_EXHAUSTED"));
+    }
+
+    #[test]
+    fn resource_limits_replay_and_only_explicit_resume_can_replace_them() {
+        let limits = json!({"max_execution_ms":14_400_000,"max_input_tokens":10_000_000,"max_output_tokens":262_144});
+        let events = [
+            (
+                AgentEventKind::RunCreated,
+                json!({"resource_budget":limits}),
+            ),
+            (
+                AgentEventKind::ModelCompleted,
+                json!({"duration_ms":3_600_001,"usage":{"input_tokens":2_000_001,"output_tokens":65_537}}),
+            ),
+        ];
+        for _ in 0..2 {
+            // Rebuild from the durable event sequence, as after an app restart.
+            let mut resources = RunResources::default();
+            for (kind, event) in &events {
+                resources.observe(*kind, event);
+            }
+            assert_eq!(resources.exhaustion(), None);
+            resources.observe(
+                AgentEventKind::ToolCompleted,
+                &json!({"duration_ms":10_800_000}),
+            );
+            assert_eq!(resources.exhaustion(), Some("AGENT_TIME_BUDGET_EXHAUSTED"));
+            resources.observe(
+                AgentEventKind::RunResumed,
+                &json!({"resource_budget":limits}),
+            );
+            assert!(resources.exhaustion().is_some());
+            resources.observe(AgentEventKind::RunResumed, &json!({"resource_budget_reset":{"source":"EXPLICIT_USER_RESUME"},"resource_budget":{"max_execution_ms":60_000,"max_input_tokens":1000,"max_output_tokens":1024}}));
+            assert_eq!(resources.exhaustion(), None);
+            resources.observe(
+                AgentEventKind::ModelCompleted,
+                &json!({"usage":{"input_tokens":1000,"output_tokens":0}}),
+            );
+            assert_eq!(resources.exhaustion(), None);
+        }
+        let mut old = RunResources::default();
+        old.observe(AgentEventKind::RunCreated, &json!({}));
+        old.observe(
+            AgentEventKind::ModelCompleted,
+            &json!({"usage":{"input_tokens":2_000_000,"output_tokens":0}}),
+        );
+        assert_eq!(old.exhaustion(), None);
     }
 
     #[test]
@@ -1453,11 +2128,16 @@ mod tests {
                 data_url: "data:image/png;base64,original".into(),
             }],
         });
-        let (before, after) = compact_transcript(
+        let mut observed_before = None;
+        let (before, after) = compact_transcript_observed(
             &mut messages,
             json!({"kind":"GENERAL_WORK_STATE_V1","remaining_work":"VERIFY"}),
+            64 * 1024,
+            40 * 1024,
+            |before| observed_before = Some(before),
         )
         .unwrap();
+        assert_eq!(observed_before, Some(before));
         assert!(after < before);
         assert!(
             matches!(&messages[0], AgentModelMessage::User(text) if text.contains("Original goal"))
@@ -1542,6 +2222,38 @@ mod tests {
         }
         assert_eq!(state.stalled_turns, 1);
     }
+    #[test]
+    fn negative_status_check_does_not_create_a_repair_obligation() {
+        let check: AgentToolCallView = serde_json::from_value(json!({
+            "id":"check","run_id":"run","name":"verify_skill","effect":"OBSERVE",
+            "status":"COMPLETED","policy_decision":"ALLOW","arguments":{"name":"archify"},
+            "receipt":{"success":false,"verification_eligible":true},"created_at":0,"updated_at":0
+        }))
+        .unwrap();
+        let tools = [check];
+        let answer = goal_progress(
+            "现在有装好archify这个skill吗",
+            &tools,
+            false,
+            false,
+            false,
+            false,
+        );
+        assert_eq!(answer["status"], "DIAGNOSING");
+        assert_eq!(answer["remaining_requirements"], json!([]));
+        assert_eq!(answer["result_verified"], false);
+        for (wrote, action, verification) in [
+            (true, false, false),
+            (false, true, false),
+            (false, false, true),
+        ] {
+            assert_eq!(
+                goal_progress("当前任务", &tools, wrote, false, action, verification)["status"],
+                "REPAIRING"
+            );
+        }
+    }
+
     #[test]
     fn goal_continuation_is_not_limited_by_number_of_model_conclusions() {
         let mut progress = WorkProgress::default();

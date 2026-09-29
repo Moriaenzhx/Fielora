@@ -629,6 +629,12 @@ impl StorageHandle {
             if provider.view.lifecycle_status != ProviderLifecycle::Active {
                 return Err(DomainError::Validation("PROVIDER_DISABLED".into()));
             }
+            let resource_budget = request.resource_budget.unwrap_or_default();
+            if !resource_budget.is_valid() {
+                return Err(DomainError::Validation(
+                    "AGENT_RESOURCE_BUDGET_INVALID".into(),
+                ));
+            }
             let model_id = request.model_id.unwrap_or(provider.view.default_model);
             let max_steps = request.max_steps.unwrap_or(AGENT_CUMULATIVE_STEP_LIMIT);
             if request
@@ -641,6 +647,7 @@ impl StorageHandle {
             let event_id = AgentEventId::new(Uuid::now_v7().to_string());
             let payload = serde_json::json!({
                 "permission": wire(&request.permission),
+                "resource_budget": resource_budget,
                 "user_message_id": request.user_message_id,
                 "max_steps": max_steps,
                 "task_bytes": request.task.len(),
@@ -715,10 +722,24 @@ impl StorageHandle {
         run_id: AgentRunId,
         now: i64,
     ) -> Result<AgentEventCommit, DomainError> {
+        self.resume_agent_run_with_budget(run_id, None, now)
+    }
+
+    pub fn resume_agent_run_with_budget(
+        &self,
+        run_id: AgentRunId,
+        budget: Option<fielora_contracts::AgentResourceBudget>,
+        now: i64,
+    ) -> Result<AgentEventCommit, DomainError> {
+        if budget.as_ref().is_some_and(|value| !value.is_valid()) {
+            return Err(DomainError::Validation(
+                "AGENT_RESOURCE_BUDGET_INVALID".into(),
+            ));
+        }
         self.append_agent_event_inner(
             run_id,
             AgentEventKind::RunResumed,
-            serde_json::json!({"reason":"USER_RESUME","recompiled_context":true}),
+            serde_json::json!({"reason":"USER_RESUME","recompiled_context":true,"resource_budget":budget}),
             AgentProjectionUpdate {
                 status: Some(AgentRunStatus::Running),
                 ..Default::default()
@@ -8121,6 +8142,7 @@ mod tests {
         let run = handle
             .create_agent_run(
                 StartAgentRunRequest {
+                    resource_budget: None,
                     field_id: project.field_id.clone(),
                     conversation_id: conversation.id.clone(),
                     user_message_id: None,
@@ -8149,6 +8171,91 @@ mod tests {
             )
             .unwrap();
         (project, conversation, handle.get_agent_run(run.id).unwrap())
+    }
+
+    #[test]
+    fn resource_budget_is_validated_and_persisted_in_existing_run_events() {
+        let root = temporary_root();
+        let worker = start(&root, 1);
+        let handle = worker.handle();
+        let (project, conversation, original) = artifact_run_fixture(&handle, &root, 10);
+        let budget = AgentResourceBudget {
+            max_execution_ms: 14_400_000,
+            max_input_tokens: 10_000_000,
+            max_output_tokens: 262_144,
+        };
+        let mut request = StartAgentRunRequest {
+            resource_budget: Some(budget.clone()),
+            field_id: project.field_id,
+            conversation_id: conversation.id,
+            user_message_id: None,
+            provider_config_id: original.provider_config_id,
+            model_id: None,
+            task: "Budget persistence".into(),
+            permission: AgentPermission::ReviewChanges,
+            max_steps: None,
+            attachments: None,
+            active_work_surface: None,
+        };
+        request.resource_budget.as_mut().unwrap().max_execution_ms = 0;
+        assert!(
+            matches!(handle.create_agent_run(request.clone(), 20), Err(DomainError::Validation(code)) if code == "AGENT_RESOURCE_BUDGET_INVALID")
+        );
+        request.resource_budget = Some(budget.clone());
+        let created = handle.create_agent_run(request, 21).unwrap();
+        assert_eq!(created.event.payload["resource_budget"], json!(budget));
+        handle
+            .append_agent_event(
+                created.run.id.clone(),
+                AgentEventKind::RunPaused,
+                json!({}),
+                AgentProjectionUpdate {
+                    status: Some(AgentRunStatus::Paused),
+                    ..Default::default()
+                },
+                22,
+            )
+            .unwrap();
+        let mut invalid = budget.clone();
+        invalid.max_input_tokens = 50_000_001;
+        assert!(
+            matches!(handle.resume_agent_run_with_budget(created.run.id.clone(), Some(invalid), 23), Err(DomainError::Validation(code)) if code == "AGENT_RESOURCE_BUDGET_INVALID")
+        );
+        assert_eq!(
+            handle.get_agent_run(created.run.id.clone()).unwrap().status,
+            AgentRunStatus::Paused
+        );
+        let resumed = handle
+            .resume_agent_run_with_budget(
+                created.run.id.clone(),
+                Some(AgentResourceBudget::default()),
+                24,
+            )
+            .unwrap();
+        assert_eq!(
+            resumed.event.payload["resource_budget"],
+            json!(AgentResourceBudget::default())
+        );
+        assert_eq!(
+            resumed.event.payload["resource_budget_reset"]["source"],
+            "EXPLICIT_USER_RESUME"
+        );
+        drop(handle);
+        drop(worker);
+        let worker = start(&root, 30);
+        let events = worker
+            .handle()
+            .list_agent_events(ListAgentEventsRequest {
+                run_id: created.run.id,
+                after_sequence: None,
+                limit: Some(100),
+            })
+            .unwrap();
+        assert!(events.iter().any(|e| e.kind == AgentEventKind::RunCreated
+            && e.payload["resource_budget"] == json!(budget)));
+        assert!(events.iter().any(|e| e.kind == AgentEventKind::RunResumed && e.payload == resumed.event.payload));
+        drop(worker);
+        fs::remove_dir_all(root).unwrap();
     }
 
     fn artifact_tool(
@@ -10327,6 +10434,7 @@ mod tests {
         let second_run = handle
             .create_agent_run(
                 StartAgentRunRequest {
+                    resource_budget: None,
                     field_id: project.field_id,
                     conversation_id: conversation.id.clone(),
                     user_message_id: None,
@@ -12092,6 +12200,7 @@ mod tests {
             let created = handle
                 .create_agent_run(
                     StartAgentRunRequest {
+                        resource_budget: None,
                         field_id: project.field_id,
                         conversation_id: conversation.id,
                         user_message_id: None,
@@ -12293,6 +12402,7 @@ mod tests {
             let created = handle
                 .create_agent_run(
                     StartAgentRunRequest {
+                        resource_budget: None,
                         field_id: project.field_id.clone(),
                         conversation_id: conversation.id.clone(),
                         user_message_id: None,
@@ -12365,6 +12475,7 @@ mod tests {
             let waiting = handle
                 .create_agent_run(
                     StartAgentRunRequest {
+                        resource_budget: None,
                         field_id: project.field_id.clone(),
                         conversation_id: conversation.id.clone(),
                         user_message_id: None,
@@ -12395,6 +12506,7 @@ mod tests {
             let paused = handle
                 .create_agent_run(
                     StartAgentRunRequest {
+                        resource_budget: None,
                         field_id: project.field_id,
                         conversation_id: conversation.id,
                         user_message_id: None,
@@ -12655,6 +12767,7 @@ mod tests {
             handle
                 .create_agent_run(
                     StartAgentRunRequest {
+                        resource_budget: None,
                         field_id: project_id.clone(),
                         conversation_id: conversation.id,
                         user_message_id: Some(message.id),

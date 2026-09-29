@@ -427,6 +427,26 @@ impl SkillCatalog {
         Ok(self)
     }
 
+    /// Refresh project discovery without granting newly configured plugins or
+    /// changing this Run's admitted plugin snapshots.
+    pub fn refresh_project(&self, project_root: &Path) -> Result<Self, AgentError> {
+        let mut catalog = Self::discover(project_root)?;
+        for entry in self
+            .entries
+            .iter()
+            .filter(|e| e.source_kind == SkillSourceKind::Plugin)
+        {
+            if !catalog.entries.iter().any(|e| e.name == entry.name) {
+                catalog.entries.push(entry.clone());
+            } else {
+                catalog.push_diagnostic("SKILL_NAME_COLLISION", Some(entry.name.clone()));
+            }
+        }
+        catalog.plugin_snapshots = self.plugin_snapshots.clone();
+        catalog.rebuild_digest();
+        Ok(catalog)
+    }
+
     pub fn entries(&self) -> &[SkillCatalogEntry] {
         &self.entries
     }
@@ -1294,6 +1314,30 @@ mod tests {
                 .diagnostics()
                 .iter()
                 .any(|fact| fact.code == "SKILL_RESOURCE_ESCAPE")
+        );
+        for name in ["escaped-skill", "resource-escape"] {
+            assert_eq!(
+                crate::skill_verification::execute(&root, &json!({"name":name})).unwrap_err(),
+                AgentError::WorkspaceEscape
+            );
+            assert!(crate::skill_verification::bundle_digest(&root, name).is_err());
+        }
+        let runtime = crate::ToolRuntime::new(&root, &root.join("test-artifacts")).unwrap();
+        let listing = runtime
+            .execute(
+                "list_files",
+                &json!({"path":".agents"}),
+                false,
+                &crate::CommandCancellation::default(),
+            )
+            .unwrap();
+        assert!(!listing.observation.contains("escaped-skill/SKILL.md"));
+        assert!(listing.observation.contains("resource-escape/SKILL.md"));
+        assert_eq!(listing.receipt["truncated"], true);
+        assert!(
+            listing.receipt["omitted_directories"]
+                .to_string()
+                .contains("escaped-skill")
         );
         fs::remove_dir_all(root).unwrap();
         fs::remove_dir_all(outside).unwrap();

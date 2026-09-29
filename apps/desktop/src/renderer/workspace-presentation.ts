@@ -151,9 +151,10 @@ export function agentTurnDisplayAnchor(messages: readonly ConversationMessageVie
     const payload = event.payload as Record<string, unknown> | null;
     if (!payload || typeof payload !== 'object') continue;
     const question = event.kind === 'RUN_PAUSED' && payload.reason === 'AGENT_USER_INPUT_REQUIRED';
+    const blocker = event.kind === 'RUN_PAUSED' && payload.reason === 'AGENT_TASK_BLOCKED';
     const answer = event.kind === 'CHECKPOINT_CREATED' && payload.kind === 'USER_INPUT_RECEIVED';
-    const id = question ? payload.question_message_id : answer ? payload.user_message_id : null;
-    if (typeof id === 'string' && messages.some(m => m.id === id && m.role === (question ? 'ASSISTANT' : 'USER'))) return id;
+    const id = question ? payload.question_message_id : blocker ? payload.outcome_message_id : answer ? payload.user_message_id : null;
+    if (typeof id === 'string' && messages.some(m => m.id === id && m.role === (question || blocker ? 'ASSISTANT' : 'USER'))) return id;
   }
   return fallback;
 }

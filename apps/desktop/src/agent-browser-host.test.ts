@@ -136,3 +136,19 @@ test('browser dispatch receipts cross the host unchanged and never become verifi
     assert.equal(result.verification_eligible,undefined);
   }
 });
+
+test('inspect requests the owned browser surface and preserves readiness and truncation facts', async () => {
+  const revealed: string[] = [];
+  const receipt = { success: true, page_loaded: true, interaction_ready: false, verification_eligible: false,
+    readiness: { document_committed: true, surface_ready: false }, text_truncated: true, partial: true };
+  let complete!: (value: Record<string, unknown>) => void;
+  const finished = new Promise<Record<string, unknown>>(resolve => { complete = resolve; });
+  const runtime = { executeAgent: async () => receipt } as unknown as BrowserRuntime;
+  const host = new AgentBrowserHost(() => runtime, async (_, params) => {
+    complete((params as { result: Record<string, unknown> }).result);
+  }, (run, conversation) => { revealed.push(run, conversation); });
+  host.handle({ request_id: 'inspect', run_id: 'owned-run', conversation_id: 'owned-conversation', tool_call_id: 'tool', name: 'browser', arguments: { action: 'inspect' } });
+  const result = await finished;
+  assert.deepEqual(revealed, ['owned-run', 'owned-conversation']);
+  for (const [key, value] of Object.entries(receipt)) assert.deepEqual(result[key], value);
+});

@@ -10,10 +10,10 @@ type ProductButtonProps = Omit<ButtonHTMLAttributes<HTMLButtonElement>, 'childre
 };
 
 type TooltipPlacement = 'top' | 'bottom' | 'right';
-type TooltipVariant = 'default' | 'card';
+type TooltipVariant = 'default' | 'card' | 'timestamp';
 
-function useManagedTooltip(label: ReactNode, placement: TooltipPlacement = 'top', variant: TooltipVariant = 'default') {
-  const anchorRef = useRef<HTMLButtonElement>(null);
+function useManagedTooltip<T extends HTMLElement = HTMLButtonElement>(label: ReactNode, placement: TooltipPlacement = 'top', variant: TooltipVariant = 'default') {
+  const anchorRef = useRef<T>(null);
   const tooltipRef = useRef<HTMLSpanElement>(null);
   const delayRef = useRef<number | null>(null);
   const tooltipId = useId();
@@ -42,6 +42,15 @@ function useManagedTooltip(label: ReactNode, placement: TooltipPlacement = 'top'
   };
 
   useEffect(() => () => cancelDelay(), []);
+
+  useEffect(() => {
+    if (!open) return;
+    const dismiss = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') { setOpen(false); setPosition(null); }
+    };
+    window.addEventListener('keydown', dismiss);
+    return () => window.removeEventListener('keydown', dismiss);
+  }, [open]);
 
   useLayoutEffect(() => {
     if (!open) return;
@@ -102,7 +111,7 @@ function useManagedTooltip(label: ReactNode, placement: TooltipPlacement = 'top'
     <span
       ref={tooltipRef}
       id={tooltipId}
-      className={`ui-tooltip${variant === 'card' ? ' ui-tooltip--card' : ''}`}
+      className={`ui-tooltip${variant !== 'default' ? ` ui-tooltip--${variant}` : ''}`}
       role="tooltip"
       style={{ left: position?.left ?? 0, top: position?.top ?? 0, visibility: position ? 'visible' : 'hidden' }}
       data-testid="ui-tooltip"
@@ -111,6 +120,30 @@ function useManagedTooltip(label: ReactNode, placement: TooltipPlacement = 'top'
   ) : null;
 
   return { anchorRef, tooltipId, open, show, hide, tooltip };
+}
+
+/** Use the durable message/event time, never the render time. */
+export function TimestampHover({ timestamp, children }: { timestamp?: number | null; children: ReactNode }) {
+  const valid = typeof timestamp === 'number' && Number.isFinite(timestamp) && !Number.isNaN(new Date(timestamp).getTime());
+  const label = valid ? new Date(timestamp).toLocaleString('zh-CN', { hour12: false }) : '';
+  const tip = useManagedTooltip<HTMLDivElement>(label, 'top', 'timestamp');
+  if (!valid) return <>{children}</>;
+  return <div className="timestamp-hover" ref={tip.anchorRef} data-recorded-at={timestamp} aria-describedby={tip.open ? tip.tooltipId : undefined}
+    onPointerEnter={() => tip.show()} onPointerLeave={tip.hide} onFocus={() => tip.show(0)} onBlur={tip.hide}
+    onKeyDown={event => { if (event.key === 'Escape') tip.hide(); }}>
+    {children}{tip.tooltip}
+  </div>;
+}
+
+/** Keep a disclosure summary as the tooltip anchor, without an extra layout wrapper. */
+export function TimestampSummary({ timestamp, title, children }: { timestamp: number; title?: string; children: ReactNode }) {
+  const label = new Date(timestamp).toLocaleString('zh-CN', { hour12: false });
+  const tip = useManagedTooltip<HTMLElement>(label, 'top', 'timestamp');
+  return <summary ref={tip.anchorRef} title={title} data-recorded-at={timestamp} aria-describedby={tip.open ? tip.tooltipId : undefined}
+    onPointerEnter={() => tip.show()} onPointerLeave={tip.hide} onFocus={() => tip.show(0)} onBlur={tip.hide}
+    onKeyDown={event => { if (event.key === 'Escape') tip.hide(); }}>
+    {children}{tip.tooltip}
+  </summary>;
 }
 
 export function Button({ variant = 'secondary', className = '', children, ...props }: ButtonHTMLAttributes<HTMLButtonElement> & {

@@ -294,6 +294,7 @@ fn main() {
         ActiveArtifactViewMode::decl(&config),
         ActiveArtifactContext::decl(&config),
         StartAgentRunRequest::decl(&config),
+        AgentResourceBudget::decl(&config),
         SetArtifactArchiveStateCommandRequest::decl(&config),
         AgentRunRequest::decl(&config),
         ResumeAgentRunRequest::decl(&config),

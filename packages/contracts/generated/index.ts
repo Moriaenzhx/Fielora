@@ -560,13 +560,15 @@ export type ActiveArtifactViewMode = "CURRENT" | "HISTORICAL";
 
 export type ActiveArtifactContext = { artifact_id: ArtifactId, artifact_type: ArtifactType, viewed_revision_id: ArtifactRevisionId, current_revision_id: ArtifactRevisionId, view_mode: ActiveArtifactViewMode, archived: boolean, selected_slide: number | null, selected_sheet_id: SpreadsheetSheetId | null, };
 
-export type StartAgentRunRequest = { field_id: FieldId, conversation_id: ConversationId, user_message_id: MessageId | null, provider_config_id: ProviderConfigId, model_id: string | null, task: string, permission: AgentPermission, max_steps: number | null, attachments: Array<AgentInputAttachment> | null, active_work_surface?: ActiveArtifactContext, };
+export type StartAgentRunRequest = { resource_budget?: AgentResourceBudget, field_id: FieldId, conversation_id: ConversationId, user_message_id: MessageId | null, provider_config_id: ProviderConfigId, model_id: string | null, task: string, permission: AgentPermission, max_steps: number | null, attachments: Array<AgentInputAttachment> | null, active_work_surface?: ActiveArtifactContext, };
+
+export type AgentResourceBudget = { max_execution_ms: number, max_input_tokens: number, max_output_tokens: number, };
 
 export type SetArtifactArchiveStateCommandRequest = { field_id: FieldId, conversation_id: ConversationId, provider_config_id: ProviderConfigId, model_id: string | null, artifact_id: ArtifactId, archived: boolean, };
 
 export type AgentRunRequest = { run_id: AgentRunId, };
 
-export type ResumeAgentRunRequest = { run_id: AgentRunId, user_message_id?: MessageId, attachments?: Array<AgentInputAttachment>, };
+export type ResumeAgentRunRequest = { resource_budget?: AgentResourceBudget, run_id: AgentRunId, user_message_id?: MessageId, attachments?: Array<AgentInputAttachment>, };
 
 export type ListAgentRunsRequest = { conversation_id: ConversationId, };
 

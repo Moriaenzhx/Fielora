@@ -4,6 +4,8 @@
  * five semantic surfaces and never branch on appearance or material support.
  */
 :root {
+  --fl-color-timestamp-background: #ffffff;
+  --fl-color-timestamp-foreground: #23262b;
   color-scheme: light;
   --fl-ui-font-scale: 1;
   --fl-color-accent: #505761;
@@ -207,6 +209,14 @@
   --fl-color-navigation: #f2f5fa;
   --fl-color-workbench: #f4f6fb;
   --fl-color-surface: #ffffff;
+  --fl-color-file-card-header: #f7f7f8;
+  --fl-color-shell-panel: #e5e6e8;
+  --fl-color-file-card-icon: #e9eaec;
+  --fl-color-file-card-border: #d9dbe1;
+  --fl-color-file-card-text: #2c3848;
+  --fl-color-file-card-muted: #6b737e;
+  --fl-color-file-card-addition: #1a7f37;
+  --fl-color-file-card-deletion: #cf222e;
   --fl-color-surface-raised: rgba(255, 255, 255, 0.98);
   --fl-color-surface-subtle: #f5f7fa;
   --fl-color-surface-hover: #eef1f6;
@@ -342,6 +352,14 @@
   --fl-color-navigation: #171a22;
   --fl-color-workbench: #11131a;
   --fl-color-surface: #181b23;
+  --fl-color-file-card-header: #22252c;
+  --fl-color-shell-panel: #292c32;
+  --fl-color-file-card-icon: #30343c;
+  --fl-color-file-card-border: #3a3e47;
+  --fl-color-file-card-text: #e0e3e9;
+  --fl-color-file-card-muted: #b6bdc8;
+  --fl-color-file-card-addition: #75bf98;
+  --fl-color-file-card-deletion: #e28a99;
   --fl-color-surface-raised: rgba(31, 35, 45, 0.98);
   --fl-color-surface-subtle: #20242d;
   --fl-color-surface-hover: #272c36;

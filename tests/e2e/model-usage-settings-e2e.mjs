@@ -14,7 +14,7 @@ const wait=expression=>waitForExpression(cdp,expression,{timeoutMs:45000,output}
 async function click(selector){await wait(`document.querySelector(${JSON.stringify(selector)})`);await cdp.eval(`document.querySelector(${JSON.stringify(selector)}).scrollIntoView({block:'center'})`);await cdp.eval(`document.querySelector(${JSON.stringify(selector)}).click()`);}
 async function input(selector,value){await cdp.eval(`(()=>{const e=document.querySelector(${JSON.stringify(selector)});Object.getOwnPropertyDescriptor(e instanceof HTMLTextAreaElement?HTMLTextAreaElement.prototype:HTMLInputElement.prototype,'value').set.call(e,${JSON.stringify(value)});e.dispatchEvent(new Event('input',{bubbles:true}));})()`);}
 async function reload(){await cdp.eval('window.__usageReload=true');await cdp.send('Page.reload');await wait('typeof window.__usageReload==="undefined" && window.fieloraTest && !document.querySelector("[data-testid=startup-screen]") && document.querySelector(".conversation-composer")');}
-async function settings(){await cdp.eval("window.dispatchEvent(new CustomEvent('fielora:open-settings'))");await click('[data-testid=settings-category-usage]');await wait('document.querySelector("[data-testid=usage-total]")');}
+async function settings(){await cdp.eval("window.dispatchEvent(new CustomEvent('fielora:open-settings'))");await click('[data-testid=settings-category-models]');await click('[data-testid=settings-model-tab-usage]');await wait('document.querySelector("[data-testid=usage-total]")');}
 const query=()=>cdp.eval('window.fielora.agent.usage({since:null,offset:0,limit:100})');
 async function send(){await input('.conversation-composer textarea','请分析 sample.txt 并解释其中的内容。');await click('[data-testid=send-message]');}
 try {
@@ -32,7 +32,7 @@ try {
     const conversation=await window.fielora.conversation.create({field_id:project.field_id,title:'切换模型归账',provider_config_id:a.id,model_id:a.default_model});return {a,b,project,conversation};
   })()`);
   await reload();
-  await click(`[data-testid="conversation-${ids.conversation.id}"]`);
+  await wait("document.body.innerText.includes('切换模型归账')");
   await send();
   await settings();
   await wait('document.querySelector("[data-testid=usage-live]").textContent.includes("__fielora_agent_fixture_usage_a__")');

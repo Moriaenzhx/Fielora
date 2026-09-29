@@ -1,3 +1,4 @@
+import { readAppPreferences } from './app-preferences';
 import type { ActivityFileLink } from './agent-activity-detail';
 import { Fragment, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type ClipboardEvent, type DragEvent, type MouseEvent as ReactMouseEvent, type ReactNode } from 'react';
 import { createPortal } from 'react-dom';
@@ -28,7 +29,7 @@ import {
 } from './artifact-working-surface';
 import { WorkspaceFileTree } from './WorkspaceFileTree';
 import { SyntaxCodeEditor } from './SyntaxCodeEditor';
-import { IconButton, SelectMenu, TextActionDialog, ToolbarAction, TooltipButton } from './UiPrimitives';
+import { IconButton, SelectMenu, TextActionDialog, ToolbarAction, TooltipButton, TimestampHover } from './UiPrimitives';
 import {
   persistWorkspaceNavigationWidth,
   readWorkspaceNavigationWidth,
@@ -1349,7 +1350,7 @@ export function ProjectWorkspace({ onNow, onBrowse, onFields, onSettings, newCon
           if (run.task.startsWith('[SUBAGENT ') || selectedConversationRef.current !== run.conversation_id) continue;
           if (agentRunIdRef.current && agentRunIdRef.current !== run.id && activeAgentRef.current?.runId !== run.id) continue;
           await loadAgentRun(run);
-          if (run.status === 'PAUSED' && run.error_code === 'AGENT_USER_INPUT_REQUIRED') await refreshMessages(run.conversation_id);
+          if (run.status === 'PAUSED' && ['AGENT_USER_INPUT_REQUIRED', 'AGENT_TASK_BLOCKED'].includes(run.error_code ?? '')) await refreshMessages(run.conversation_id);
           if (['COMPLETED', 'FAILED', 'CANCELLED'].includes(run.status) && !terminalAgentRefreshRef.current.has(run.id)) {
             terminalAgentRefreshRef.current.add(run.id);
             if (activeAgentRef.current?.runId === run.id) activeAgentRef.current = null;
@@ -1624,7 +1625,7 @@ export function ProjectWorkspace({ onNow, onBrowse, onFields, onSettings, newCon
     try {
       const ownership = agentTurnOwnership(messages, agentRun, agentEvents);
       const images = await restoredAgentImages(agentRun.task, agentRun.conversation_id, ownership.userMessageId);
-      const next = await window.fielora.agent.resume({ run_id: agentRun.id, attachments: agentImageInputs(images) });
+      const next = await window.fielora.agent.resume({ resource_budget: readAppPreferences(window.localStorage).agentResourceBudget, run_id: agentRun.id, attachments: agentImageInputs(images) });
       activeAgentRef.current = { runId: next.id, conversationId: next.conversation_id, output: '', step: 0 }; await loadAgentRun(next);
     }
     catch (reason) { setError(reasonMessage(reason)); }
@@ -1665,6 +1666,7 @@ export function ProjectWorkspace({ onNow, onBrowse, onFields, onSettings, newCon
       const ownership = agentTurnOwnership(messages, agentRun, agentEvents);
       const retryImages = await restoredAgentImages(agentRun.task, agentRun.conversation_id, ownership.userMessageId);
       const started = await window.fielora.agent.start({
+        resource_budget: readAppPreferences(window.localStorage).agentResourceBudget,
         field_id: project.field_id,
         conversation_id: conversation.id,
         user_message_id: ownership.userMessageId,
@@ -1866,6 +1868,7 @@ export function ProjectWorkspace({ onNow, onBrowse, onFields, onSettings, newCon
     }
     const selectedHint = item.selectedFilePath ? `\n\nThe currently selected project file is: ${item.selectedFilePath}` : '';
     const started = await window.fielora.agent.start({
+        resource_budget: readAppPreferences(window.localStorage).agentResourceBudget,
       field_id: project.field_id, conversation_id: conversation.id,
       user_message_id: messageId,
       provider_config_id: provider.id, model_id: provider.default_model,
@@ -1898,7 +1901,7 @@ export function ProjectWorkspace({ onNow, onBrowse, onFields, onSettings, newCon
         submission = { runId: run.id, text, messageId: message.id };
         clarificationSubmissionRef.current = submission;
       }
-      const resumed = await window.fielora.agent.resume({ run_id: run.id, user_message_id: submission.messageId });
+      const resumed = await window.fielora.agent.resume({ resource_budget: readAppPreferences(window.localStorage).agentResourceBudget, run_id: run.id, user_message_id: submission.messageId });
       clarificationSubmissionRef.current = null;
       setPrompt(''); setStreamingOutput(''); setStreamingStep(0);
       activeAgentRef.current = { runId: resumed.id, conversationId: resumed.conversation_id, output: '', step: 0 };
@@ -1983,6 +1986,7 @@ export function ProjectWorkspace({ onNow, onBrowse, onFields, onSettings, newCon
       const attachmentContext = readyTextAttachments.map((item) => `\n<attachment name=${JSON.stringify(item.name)} sha256=${JSON.stringify(item.sha256)}>\n${item.content!.slice(0, 32_000)}\n</attachment>`).join('');
       const task = `${userText}${selectedHint}${attachmentContext}`.slice(0, 32_000);
       const started = await window.fielora.agent.start({
+        resource_budget: readAppPreferences(window.localStorage).agentResourceBudget,
         field_id: project.field_id, conversation_id: targetConversationId,
         user_message_id: userMessage.id,
         provider_config_id: provider.id, model_id: provider.default_model,
@@ -2784,7 +2788,7 @@ export function ProjectWorkspace({ onNow, onBrowse, onFields, onSettings, newCon
               const queuedFollowUp = message.role === 'USER' ? queuedFollowUps.find((item) => item.messageId === message.id) ?? null : null;
               if (queuedFollowUp) return null;
               return <Fragment key={message.id}>
-                <article data-message-id={message.id} className={`message ${message.role.toLowerCase()}${persistedImages.length ? ' has-image-attachments' : ''}`} data-testid={`message-${message.role.toLowerCase()}`}>{persistedImages.length > 0 && <ConversationImageGallery attachments={persistedImages} onOpen={openAttachmentInDock} onContextMenu={openImageContextMenu}/>}<div className="message-content"><MarkdownMessage content={message.content} references={message.references} onOpenReference={(reference) => void openResultReference(reference)} onOpenImage={(preview) => setPreviewAttachment(resultImageAttachment(preview))} onCopyError={(reason) => setError(`复制代码失败：${reason}`)}/></div><footer className={`message-actions ${copiedMessageId === message.id ? 'copy-confirmed' : ''}`}><time dateTime={new Date(message.created_at).toISOString()} title={new Date(message.created_at).toLocaleString('zh-CN')}>{messageTimeLabel(message.created_at)}</time>{message.status !== 'COMPLETED' && <span className="message-status">{messageStatusLabel(message.status)}</span>}<button type="button" className={copiedMessageId === message.id ? 'copied' : ''} aria-label={copiedMessageId === message.id ? '消息已复制' : '复制消息'} title={copiedMessageId === message.id ? '已复制' : '复制'} onClick={() => void copyMessage(message)} data-testid="message-copy"><AppIcon name={copiedMessageId === message.id ? 'check' : 'copy'}/>{copiedMessageId === message.id && <span role="status" aria-live="polite">已复制</span>}</button></footer></article>
+                <article data-message-id={message.id} className={`message ${message.role.toLowerCase()}${persistedImages.length ? ' has-image-attachments' : ''}`} data-testid={`message-${message.role.toLowerCase()}`}>{persistedImages.length > 0 && <ConversationImageGallery attachments={persistedImages} onOpen={openAttachmentInDock} onContextMenu={openImageContextMenu}/>}<div className="message-content"><TimestampHover timestamp={message.created_at}><MarkdownMessage content={message.content} references={message.references} onOpenReference={(reference) => void openResultReference(reference)} onOpenImage={(preview) => setPreviewAttachment(resultImageAttachment(preview))} onCopyError={(reason) => setError(`复制代码失败：${reason}`)}/></TimestampHover></div><footer className={`message-actions ${copiedMessageId === message.id ? 'copy-confirmed' : ''}`}><time dateTime={new Date(message.created_at).toISOString()} title={new Date(message.created_at).toLocaleString('zh-CN')}>{messageTimeLabel(message.created_at)}</time>{message.status !== 'COMPLETED' && <span className="message-status">{messageStatusLabel(message.status)}</span>}<button type="button" className={copiedMessageId === message.id ? 'copied' : ''} aria-label={copiedMessageId === message.id ? '消息已复制' : '复制消息'} title={copiedMessageId === message.id ? '已复制' : '复制'} onClick={() => void copyMessage(message)} data-testid="message-copy"><AppIcon name={copiedMessageId === message.id ? 'check' : 'copy'}/>{copiedMessageId === message.id && <span role="status" aria-live="polite">已复制</span>}</button></footer></article>
                 {agentRun && agentDisplayAnchor === message.id && <>
                   {priorAttempts.length > 0 && <details className="agent-prior-attempts" data-testid="agent-prior-attempts"><summary>之前的尝试 · {priorAttempts.length} 次<AppIcon name="chevronDown"/></summary>{priorAttempts.map((attempt) => <HistoricalAgentTurn key={attempt.id} terminalMessage={attempt} requestText={message.content} userMessageId={message.id} copied={copiedMessageId === attempt.id} onCopy={() => void copyMessage(attempt)} onCopyError={(reason) => setError(`复制代码失败：${reason}`)} onReview={openHistoricalAgentReview} onOpenReference={(reference) => void openResultReference(reference)} onOpenImage={(preview) => setPreviewAttachment(resultImageAttachment(preview))} onOpenActivityFile={openActivityFile}/>)}</details>}
                   {currentAgentTurn}

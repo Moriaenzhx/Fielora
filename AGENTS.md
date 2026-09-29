@@ -21,8 +21,15 @@ Fielora 是一个长期产品项目。
 涉及 Agent、Model、Harness、Tools、Aegis、IDR、AG-UI 或 Agent/DXE
 integration 的任务，还必须完整读取
 `docs/architecture/FIELORA_V0.1_AGENT_ARCHITECTURE_SPEC.md`。后续 Agent
-能力只能在该 `Model + Harness + Tools` 基线上扩展，不得建立第二套
+能力只能在该 `Model + Harness + Capability` 基线上扩展，不得建立第二套
 Core/Runtime/State/Permission/Evidence。
+
+2026-09-24 最新补充：主架构为 `Model + Harness + Capability`，Harness 按九层职责组织，
+同时用于诊断；精确分工与 Fielora 现有能力见
+`docs/architecture/AGENT_ENGINEERING_VIEWS_V0.1.md`。Tool 是 Capability 子集，
+Skill/Resource/Plugin 不都可执行。九层不要求九个服务，不恢复三平面或第二套运行系统。
+IDR 已按用户要求退出生产 Agent 链路，不再属于当前能力建设；历史数据、迁移和
+实验代码保留，不能凭旧八域文档或历史 Run 自动重新启用。
 
 历史 Phase、Freeze、Conversation Archive 与 Evidence 只在修改相应旧 Contract、调查回归或追溯决定时按需阅读。不得为了“上下文完整”阻塞普通 UI、Conversation、Project 或 Provider 工作。
 
@@ -170,6 +177,18 @@ Development Workflow Hardening 已从稳定 `main@e757d050b97a3f0dd3b6812bccefc1
 - 写清现象、已确认原因与推测、Model/Harness/Tools 责任、失败尝试、解决办法、验证证据及未验证范围；保留旧判断被推翻的过程。
 - 分别维护原因、机制修复、原始用户任务的状态。确定性模型替身/工程 PASS 不得写成真实模型已解决原任务；没有实际运行的解决办法标为待验证。
 - 重大决定仍同步 Project Reality、Decisions 与受影响 Spec。记录不增加审批或 Freeze 流程，不改变现有执行授权。
+
+### 6.3 Agent 诊断的固定方法
+
+用户于 2026-09-24 确认采用 Archify 失败调查的说明方式。以后 Agent 诊断按
+“实际执行链 → 证据 → 代码机制 → 分层责任 → 验证边界”展开：
+
+- 先回答这次具体在哪一步失败，与上一次是否同因；可取得时核对 Run、构建指纹、实际工具和终态，不仅复述模型自述。
+- 对照用户预期与真实动作；区分动作成功、结果可用、验证通过，明确纠正被回执反证的说法。
+- 分开已确认原因、促成因素和未证明的推测；解释代码怎样导致行为，不用层名或“模型不够聪明”代替因果分析。
+- 标注 Model / Harness / Capability 责任（具体 Tool 是 Capability 子集）；需要对照九层时映射相应职责，不另造一套 Runtime。
+- 交代上一轮修复解决了什么、遗漏了什么；测试替身、真实宿主、真实模型和原用户任务各自报告，未验证不写成已解决。
+- 修复和交付继续使用这套说明，更新对应 AE 条目；不增加审批或全量日志/敏感数据留存。
 
 ## 7. UI 约束
 

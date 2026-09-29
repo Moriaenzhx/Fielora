@@ -31,14 +31,20 @@
 项目真正的当前事实源是 `02_PROJECT_REALITY.md`；已冻结实现边界见 `docs/architecture/TECHNICAL_ARCHITECTURE_V0.1.md`、`CORE_CONTRACTS_V0.1.md`、`SCHEMA_FREEZE_V0.1.md`、`PHASE_01_IMPLEMENTATION_SPEC_V0.1.md`、`PHASE_02_IMPLEMENTATION_SPEC_V0.1.md`、`PHASE_02_CONTRACT_DELTA_V0.1.md` 与 `PHASE_02_MIGRATION_0002_V0.1.md`。
 
 当前 Agent 的正式架构基线为
-`docs/architecture/FIELORA_V0.1_AGENT_ARCHITECTURE_SPEC.md`。后续 Agent
-能力统一按 `Model + Harness + Tools` 扩展；Harness 内部固定为
-`Ingress & Context`、`Work Scope & Goal`、`Continuity`、`Orchestration`、
-`Governance`、`Execution`、`Verification & Evidence` 与
-`IDR (Individualized Disposition Runtime)` 八个功能域。Memory 是跨域语义，
-Agent Profile 是 Fielora-owned versioned product definition；两者都不是新的
-Agent Runtime。历史 `Bounded IDR` 入口路由现称 `Entry Intent Resolver`。
-现有 `FAST_EDIT_ADAPTIVE_V1` 归属 `CODING_V0.1` Harness Profile。
+`docs/architecture/FIELORA_V0.1_AGENT_ARCHITECTURE_SPEC.md`。
+当前主架构为 `Model + Harness + Capability`：Model 提供智能，Harness 按
+Ingress、Context、Model Runtime、Orchestration / Control、Capability Invocation / Execution Control、
+Continuity、Governance、Verification & Recovery、Observability 九层职责组织。
+Capability 包含 Fielora 已实现的工具、Skill、资源访问、适配器、插件包装与执行后端；
+Tool 是其子集。九层同时用于诊断，不要求九个独立服务，也不恢复三平面。
+详见 [主架构、Harness 九层与现有能力](docs/architecture/AGENT_ENGINEERING_VIEWS_V0.1.md)。
+
+逐项建设现状与下一批范围见 [36 项能力对照与补齐清单](docs/architecture/CAPABILITY_INVENTORY_V0.1.md)。代码中存在适配器不等于默认运行已接入，目录查询不等于执行获准或结果已验证。
+
+IDR 保持退出生产链路，历史数据/迁移保留。Memory 是跨域语义，Agent Profile 是
+Fielora-owned versioned product definition；均不构成新的 Runtime。Work Scope & Goal
+纳入 Harness L4，当前范围由 L7 强制，目标验收由 L8 裁决。
+现有 `FAST_EDIT_ADAPTIVE_V1` 仍归属 `CODING_V0.1` Harness Profile。
 
 ## 当前阶段状态
 

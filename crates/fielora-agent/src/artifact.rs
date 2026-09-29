@@ -1225,6 +1225,22 @@ pub fn canonicalize_content(
     artifact_type: DurableArtifactType,
     content: Value,
 ) -> Result<CanonicalArtifactContent, AgentError> {
+    if !content.is_object() {
+        let actual = match &content {
+            Value::String(_) => "string",
+            Value::Array(_) => "array",
+            Value::Null => "null",
+            Value::Bool(_) => "boolean",
+            Value::Number(_) => "number",
+            Value::Object(_) => unreachable!(),
+        };
+        return Err(AgentError::WorkGuidance {
+            code: "ARTIFACT_CONTENT_INVALID",
+            detail: format!(
+                "Field content: expected a JSON object, received {actual}. Pass content as an object directly, not a JSON-encoded string. Changing keys inside a string cannot fix this outer type error. Inspect this tool's input schema; do not substitute a Skill's independent JSON format."
+            ),
+        });
+    }
     let definition = match artifact_type {
         DurableArtifactType::Document => serde_json::from_value(content)
             .map(ArtifactDefinition::Document)

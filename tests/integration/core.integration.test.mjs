@@ -133,19 +133,10 @@ test('General Agent preserves work across budget pause and restart, recovers gua
   assert.match(await readFile(path.join(projectRoot, 'login.js'), 'utf8'), /ready = true/);
 
   const resource = await start('FIELORA_AGENT_FIXTURE_RESOURCE 解释证据', null);
-  const resourcePaused = await settled(resource.id);
-  assert.equal(resourcePaused.status, 'PAUSED');
-  assert.equal(resourcePaused.error_code, 'AGENT_TOKEN_BUDGET_EXHAUSTED');
-  assert.equal(resourcePaused.current_step, 1);
-  spawnSync('taskkill.exe', ['/PID', String(h.child.pid), '/T', '/F'], { windowsHide: true, stdio: 'ignore' }); await h.exit();
-  h = harness(dataDir); await hello(h);
-  const restoredResource = await call('query.agent.get', { run_id: resource.id });
-  assert.equal(restoredResource.status, 'PAUSED');
-  await call('command.agent.resume', { run_id: resource.id });
   const resourceCompleted = await settled(resource.id);
   assert.equal(resourceCompleted.status, 'COMPLETED');
   const resourceEvents = await call('query.agent.events', { run_id: resource.id, limit: 500 });
-  assert.equal(resourceEvents.find(event => event.kind === 'RUN_RESUMED').payload.resource_budget_reset.source, 'EXPLICIT_USER_RESUME');
+  assert.ok(!resourceEvents.some(event => event.kind === 'RUN_PAUSED'), 'High cumulative token usage does not pause the task');
 
   await writeFile(path.join(projectRoot, 'login.js'), 'exports.ready = false;\n');
   const modelRecovery = await start('FIELORA_AGENT_FIXTURE_MODEL_RECOVERY 修复并验证登录流程', null);
@@ -189,7 +180,7 @@ test('General Agent preserves work across budget pause and restart, recovers gua
 
   const unsupported = await start('FIELORA_AGENT_FIXTURE_PROSE_ONLY 修复业务流程并验证', 8);
   const unsupportedResult = await settled(unsupported.id);
-  assert.equal(unsupportedResult.status, 'PAUSED'); assert.equal(unsupportedResult.error_code, 'AGENT_ACTION_REQUIRED');
+  assert.equal(unsupportedResult.status, 'PAUSED'); assert.equal(unsupportedResult.error_code, 'AGENT_VERIFICATION_REQUIRED');
   const replies = await call('query.conversation.message.list', { conversation_id: unsupported.conversation_id });
   assert.ok(!replies.some((message) => message.invocation_id === unsupported.id && message.status === 'COMPLETED'));
 
@@ -447,7 +438,7 @@ test('Complete Agent executes an approved coding loop with durable tools, verifi
   }
   assert.equal(approvalCount,2);
   assert.equal(await readFile(path.join(projectRoot,'fielora-agent-fixture.txt'),'utf8'),'created by the Fielora Agent fixture\n');
-  h.send('agent-tools','query.agent.tool_calls',{run_id:run.id});const tools=(await response('agent-tools')).result;assert.deepEqual(tools.map((tool)=>[tool.name,tool.status]),[['create_file','COMPLETED'],['run_command','COMPLETED']]);assert.equal(tools[1].receipt.success,true);assert.equal(tools[1].receipt.execution_boundary,'CONTROLLED_WORKSPACE_EXECUTION');
+  h.send('agent-tools','query.agent.tool_calls',{run_id:run.id});const tools=(await response('agent-tools')).result;assert.deepEqual(tools.map((tool)=>[tool.name,tool.status]),[['create_file','COMPLETED'],['run_command','COMPLETED'],['finish_task','COMPLETED']]);assert.equal(tools[2].effect,'OBSERVE');assert.equal(tools[2].receipt.task_complete,false);assert.equal(tools[1].receipt.success,true);assert.equal(tools[1].receipt.execution_boundary,'CONTROLLED_WORKSPACE_EXECUTION');
   h.send('agent-all-events','query.agent.events',{run_id:run.id,after_sequence:null,limit:500});const allEvents=(await response('agent-all-events')).result;const kinds=allEvents.map((event)=>event.kind);for(const kind of ['RUN_CREATED','CONTEXT_COMPILED','ASSISTANT_NARRATIVE','APPROVAL_REQUESTED','TOOL_COMPLETED','VERIFICATION_RECORDED','RUN_COMPLETED'])assert.ok(kinds.includes(kind),kind);assert.equal(allEvents.find((event)=>event.kind==='RUN_CREATED').payload.user_message_id,userMessage.id);const runStarted=allEvents.find((event)=>event.kind==='RUN_STARTED');assert.equal(runStarted.payload.harness_profile,'CODING_V0.1');assert.equal(runStarted.payload.harness_strategy,'GOAL_DRIVEN_AGENT_LOOP_V4');const narratives=allEvents.filter((event)=>event.kind==='ASSISTANT_NARRATIVE');assert.equal(narratives[0].payload.text,'I will create the requested fixture file.');assert.ok(narratives[0].sequence<allEvents.find((event)=>event.kind==='TOOL_PROPOSED').sequence);assert.equal(JSON.stringify(narratives).includes('private fixture reasoning'),false);assert.equal(JSON.stringify(narratives).includes('<think>'),false);
   h.send('agent-messages','query.conversation.message.list',{conversation_id:conversation.id});const messages=(await response('agent-messages')).result;assert.deepEqual(messages.map((message)=>message.role),['USER','ASSISTANT']);assert.equal(messages.filter((message)=>message.role==='ASSISTANT'&&message.invocation_id===run.id).length,1);assert.match(messages[1].content,/completed the task/i);assert.equal(messages[1].invocation_id,run.id);assert.equal(narratives.some((event)=>/completed the task/i.test(event.payload.text)),false);
   h.send('delegate-start','command.agent.start',{field_id:project.field_id,conversation_id:conversation.id,provider_config_id:provider.id,model_id:'__fielora_agent_fixture__',task:'FIELORA_AGENT_FIXTURE_DELEGATE',permission:'FULL_CONTROL',max_steps:8});const delegated=(await response('delegate-start')).result;
@@ -465,8 +456,14 @@ test('Complete Agent executes an approved coding loop with durable tools, verifi
   await rm(path.join(projectRoot,'fielora-agent-fixture.txt'));
   h.send('warning-conversation','command.conversation.create',{field_id:project.field_id,title:'Verified warning',provider_config_id:provider.id,model_id:'__fielora_agent_fixture__'});const warningConversation=(await response('warning-conversation')).result;
   const warningTask='FIELORA_AGENT_FIXTURE_CREATE FIELORA_AGENT_FIXTURE_FINALIZATION_FAILURE';h.send('warning-start','command.agent.start',{field_id:project.field_id,conversation_id:warningConversation.id,provider_config_id:provider.id,model_id:'__fielora_agent_fixture__',task:warningTask,permission:'FULL_CONTROL',max_steps:8});const warningRun=(await response('warning-start')).result;let warningFinal=null;
-  for(let attempt=0;attempt<120;attempt+=1){h.send(`warning-get-${attempt}`,'query.agent.get',{run_id:warningRun.id});warningFinal=(await response(`warning-get-${attempt}`)).result;if(['COMPLETED','FAILED','CANCELLED'].includes(warningFinal.status))break;await new Promise((resolve)=>setTimeout(resolve,25));}
-  assert.equal(warningFinal.status,'COMPLETED');assert.equal(warningFinal.error_code,null);h.send('warning-events','query.agent.events',{run_id:warningRun.id,after_sequence:null,limit:500});const warningEvents=(await response('warning-events')).result;const warningCompletion=warningEvents.find((event)=>event.kind==='RUN_COMPLETED');assert.equal(warningCompletion.payload.outcome,'SUCCESS_WITH_WARNING');assert.equal(warningCompletion.payload.goal_satisfied,true);assert.equal(warningCompletion.payload.verification_passed,true);assert.equal(warningCompletion.payload.remaining_required_work,false);h.send('warning-messages','query.conversation.message.list',{conversation_id:warningConversation.id});const warningMessages=(await response('warning-messages')).result;assert.equal(warningMessages.at(-1).status,'COMPLETED');assert.match(warningMessages.at(-1).content,/修改并通过验证/);
+  for(let attempt=0;attempt<120;attempt+=1){h.send(`warning-get-${attempt}`,'query.agent.get',{run_id:warningRun.id});warningFinal=(await response(`warning-get-${attempt}`)).result;if(['COMPLETED','FAILED','CANCELLED','PAUSED'].includes(warningFinal.status))break;await new Promise((resolve)=>setTimeout(resolve,25));}
+  assert.equal(warningFinal.status,'PAUSED');assert.equal(warningFinal.error_code,'PROVIDER_PROTOCOL_ERROR');
+  h.send('warning-events','query.agent.events',{run_id:warningRun.id,after_sequence:null,limit:500});const warningEvents=(await response('warning-events')).result;
+  assert.ok(!warningEvents.some(event=>event.kind==='RUN_COMPLETED'));
+  assert.ok(warningEvents.some(event=>event.kind==='VERIFICATION_RECORDED'),'retain successful verification without claiming the whole task is done');
+  h.send('warning-messages','query.conversation.message.list',{conversation_id:warningConversation.id});const warningMessages=(await response('warning-messages')).result;
+  assert.ok(!warningMessages.some(message=>message.invocation_id===warningRun.id&&message.status==='COMPLETED'));
+  assert.equal(await readFile(path.join(projectRoot,'fielora-agent-fixture.txt'),'utf8'),'created by the Fielora Agent fixture\n');
   h.send('agent-shutdown','system.shutdown');await response('agent-shutdown');await h.exit();
 });
 

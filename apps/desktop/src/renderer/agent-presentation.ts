@@ -1,5 +1,16 @@
 import type { AgentEventView, AgentRunView, AgentToolCallView } from '@fielora/contracts';
 
+/** Thinking requires an unfinished model invocation, never just an empty tool snapshot. */
+export function agentModelIsActive(events: readonly AgentEventView[], tools: readonly AgentToolCallView[]): boolean {
+  if (tools.some(tool => ['PROPOSED', 'RUNNING', 'WAITING_APPROVAL'].includes(tool.status))) return false;
+  let active = false;
+  for (const event of [...events].sort((a, b) => a.sequence - b.sequence)) {
+    if (event.kind === 'MODEL_STARTED') active = true;
+    else if (['MODEL_COMPLETED', 'MODEL_FAILED', 'STEP_STARTED', 'TOOL_PROPOSED', 'TOOL_STARTED', 'TOOL_PROGRESS', 'TOOL_COMPLETED', 'TOOL_FAILED', 'TOOL_DENIED', 'TOOL_CANCELLED', 'TOOL_UNKNOWN', 'APPROVAL_REQUESTED', 'APPROVAL_RESOLVED', 'RECOVERY_STARTED', 'RECOVERY_RECONCILED', 'RUN_PAUSED', 'RUN_RESUMED', 'RUN_COMPLETED', 'RUN_FAILED', 'RUN_CANCELLED'].includes(event.kind)) active = false;
+  }
+  return active;
+}
+
 export type AgentWorkPhaseState = 'completed' | 'active' | 'pending' | 'failed' | 'blocked' | 'skipped';
 
 export interface AgentWorkPhase {
@@ -186,6 +197,13 @@ export function toolTitle(name: string): string {
   if (name === 'work_plan') return '明确修改范围与验收条件';
   if (name === 'browser_plan') return '记录页面验收项';
   if (name === 'browser_verify') return '验证页面行为';
+  if (name === 'verify_skill') return '检查 Skill 安装';
+  if (name === 'skills.search') return '搜索 Skill 来源';
+  if (name === 'skills.prepare') return '下载完整 Skill 包';
+  if (name === 'skills.install') return '安装 Skill 资源';
+  if (name === 'environment.inspect') return '查找本机工具版本';
+  if (name === 'tools.prepare') return '准备便携工具';
+  if (name === 'tools.install') return '安装便携工具';
   const labels: Record<string, string> = {
     list_files: '查看项目文件', read_file: '读取文件', search_text: '搜索代码', stat_path: '检查文件信息', run_command: '运行验证',
     create_file: '创建文件', replace_text: '修改文件', apply_patches: '批量修改文件', write_file: '写入文件', delete_file: '删除文件', move_file: '移动文件',
@@ -611,8 +629,10 @@ export function agentPausePresentation(run: AgentRunView): { reason: string; act
     AGENT_NO_PROGRESS: '连续多轮没有新增工具证据，已暂停。继续时会重新核对现状和下一步。',
     AGENT_REPEATED_ACTIONS: '调整提示后仍在重复相同操作、没有获得新信息，已保存进展并暂停。',
     AGENT_TIME_BUDGET_EXHAUSTED: '累计模型与工具运行时间达到本轮 60 分钟预算，进展已保存。继续将开启新的资源额度。',
-    AGENT_TOKEN_BUDGET_EXHAUSTED: '多次模型调用的累计用量已达到本轮预算，任务尚未完成。累计用量包含重复输入的上下文，不代表单次上下文大小；进展已保存，继续可开启新的资源额度。',
+    AGENT_TOKEN_BUDGET_EXHAUSTED: '此任务曾因旧版 Token 额度暂停。该限制已取消；继续后按当前设置的执行时长运行。',
     AGENT_ACTION_REQUIRED: '尚无回执证明请求的操作已完成，已保留为未完成状态。',
+    AGENT_TASK_OUTCOME_REQUIRED: '模型未提交有效的任务结果，任务尚未完成。进展已保存，可继续处理。',
+    AGENT_TASK_BLOCKED: '任务遇到阻塞，具体原因见上方说明；任务尚未完成。条件改变后可继续工作。',
     AGENT_REFERENCED_IMAGES_UNAVAILABLE: '历史图片未能读取，任务已暂停。点击继续工作会重新尝试恢复本对话中的原图。',
     AGENT_REFERENCE_READ_REQUIRED: '指定的参考源码尚未读取，无法完成对照。进展已保存；继续后将读取参考文件并验证目标修改。',
     AGENT_VERIFICATION_REQUIRED: '尚未通过与需求对应的验证，模型连续未补充检查或修正动作，任务已暂停。进展已保存，可继续完成检查。',

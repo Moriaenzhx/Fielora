@@ -78,7 +78,7 @@ export function StorageDataSettings({ preferences, onPreferencesChange }: { pref
     finally { setBusy(false); }
   }
 
-  if (!info) return <div className="settings-section" data-testid="settings-storage"><header><p>本地优先</p><h1>存储与数据</h1></header><p>{status || '正在读取真实存储位置…'}</p></div>;
+  if (!info) return <div className="settings-section" data-testid="settings-storage"><header><h1>存储与数据</h1></header><p>{status || '正在读取真实存储位置…'}</p></div>;
 
   const rootRows = [
     { label: 'Fielora 数据', description: '保存对话、项目状态和本地设置。', value: info.roots.data_root, open: 'DATA_ROOT' as const, change: () => run(() => window.fielora.storage.migrateDataRoot(), '数据目录迁移完成；原目录已保留。') },
@@ -86,7 +86,7 @@ export function StorageDataSettings({ preferences, onPreferencesChange }: { pref
   ];
 
   return <div className="settings-section" data-testid="settings-storage">
-    <header><p>本地优先</p><h1>存储与数据</h1></header>
+    <header><h1>存储与数据</h1></header>
     <section className="settings-card storage-root-list">{rootRows.map((row) => <StorageLocation key={row.label} title={row.label} description={row.description} path={row.value}>
       <Button variant="secondary" onClick={() => void window.fielora.storage.open(row.open)}>打开文件夹</Button><Button variant="ghost" disabled={busy} onClick={() => void row.change()}>更改位置</Button>
     </StorageLocation>)}

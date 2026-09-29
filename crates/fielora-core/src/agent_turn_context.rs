@@ -19,7 +19,15 @@ pub fn digest(text: &str) -> String {
 }
 
 pub fn remove_projection(messages: &mut Vec<AgentModelMessage>) {
-    messages.retain(|m| !matches!(m,AgentModelMessage::User(s) if s.starts_with(MARKER)));
+    messages.retain(|m| match m {
+        AgentModelMessage::User(s) => {
+            !s.starts_with(MARKER) && !s.starts_with(crate::agent_user_input::REPLY_MARKER)
+        }
+        AgentModelMessage::Assistant { text, tool_calls } => {
+            !tool_calls.is_empty() || !text.starts_with(crate::agent_user_input::QUESTION_MARKER)
+        }
+        _ => true,
+    });
 }
 
 fn excerpt(text: &str, limit: usize) -> Value {
@@ -145,10 +153,31 @@ impl TurnContext {
             "historical_execution_index":self.index,"historical_messages_omitted":self.omitted_messages,
             "historical_outcomes_are_not_current_verification":true,
             "current_request_interpretation":interpretation,
+            "unclassified_request_is_answer_only":false,
+            "completion_protocol":"EXPLICIT_TASK_OUTCOME_V1",
+            "latest_user_reply_source":crate::agent_user_input::latest_reply(&user_input).map(|r| &r["source_user_message_id"]),
             "user_clarifications":user_input,
             "interpretation_is_permission_or_verification":false,
             "current_request_constraint": if access_question { Some("ACCESS_CONFIRMATION: confirm the supplied local path with list_files or read_file. No comparison, implementation, process, delegation or older task continuation. The Harness finishes from the current source-specific receipt.") } else { None }
         }),format_args!("{}\n{}\n{}", GUIDANCE, crate::agent_request_intent::GUIDANCE, crate::agent_user_input::GUIDANCE))));
+        // Rebuild after compaction and restart. The original task stays durable,
+        // while the latest natural-language reply is an actual user turn, not
+        // merely a nested answer expected to fill an assistant-chosen field.
+        if let Some(reply) = crate::agent_user_input::latest_reply(&user_input) {
+            messages.push(AgentModelMessage::Assistant {
+                text: format!(
+                    "{}{}\n{}",
+                    crate::agent_user_input::QUESTION_MARKER,
+                    reply["reason"].as_str().unwrap_or_default(),
+                    reply["question"].as_str().unwrap_or_default()
+                ),
+                tool_calls: vec![],
+            });
+            messages.push(AgentModelMessage::User(format!(
+                "{}{}\n\nLatest user message in this unfinished Run; respond to its meaning before deciding the next action. It may answer, question, or correct the previous approach. The earlier question is not an instruction to keep asking for the same field. Original obligations, actual effects and permission boundaries remain; this reply is not proof of completion.",
+                crate::agent_user_input::REPLY_MARKER, reply["answer"].as_str().unwrap_or_default()
+            )));
+        }
     }
 
     pub fn manifest(&self, current: &AgentRunView) -> Value {
@@ -285,6 +314,7 @@ mod tests {
             storage
                 .create_agent_run(
                     StartAgentRunRequest {
+                        resource_budget: None,
                         field_id: project.field_id.clone(),
                         conversation_id: conversation.id.clone(),
                         user_message_id: source,
@@ -397,6 +427,46 @@ mod tests {
         );
         remove_projection(&mut messages);
         assert_eq!(messages.len(), 1);
+        let reply = json!({"accepted_answers":[{"source_user_message_id":"accepted-reply",
+            "question_tool_call_id":"question","question":"请提供来源。","answer":"这个你不可以联网搜索吗"}]});
+        for _ in 0..3 {
+            context.refresh(&mut messages, &current, None, reply.clone());
+            assert_eq!(messages.len(), 4);
+            assert!(
+                matches!(&messages[2],AgentModelMessage::Assistant {text,tool_calls} if text.starts_with(crate::agent_user_input::QUESTION_MARKER) && tool_calls.is_empty())
+            );
+            assert!(
+                matches!(messages.last(),Some(AgentModelMessage::User(text)) if text.starts_with(crate::agent_user_input::REPLY_MARKER) && text.contains("这个你不可以联网搜索吗"))
+            );
+        }
+        // The ordinary compaction cycle removes generated projections first,
+        // reduces old observations, then reprojects the accepted user reply.
+        remove_projection(&mut messages);
+        for i in 0..4 {
+            messages.push(AgentModelMessage::Assistant {
+                text: String::new(),
+                tool_calls: vec![fielora_model::AgentModelToolCall {
+                    id: format!("call-{i}"),
+                    name: "read_file".into(),
+                    arguments: json!({"path":"file"}),
+                }],
+            });
+            messages.push(AgentModelMessage::ToolResult {
+                call_id: format!("call-{i}"),
+                name: "read_file".into(),
+                content: "old observation ".repeat(1000),
+                is_error: false,
+            });
+        }
+        assert!(
+            crate::agent_work_state::compact_transcript_to(&mut messages, json!({}), 1000, 3000)
+                .is_some()
+        );
+        context.refresh(&mut messages, &current, None, reply);
+        assert!(
+            matches!(messages.last(),Some(AgentModelMessage::User(text)) if text.contains("这个你不可以联网搜索吗"))
+        );
+        assert_eq!(messages.iter().filter(|m| matches!(m,AgentModelMessage::User(s) if s.starts_with(crate::agent_user_input::REPLY_MARKER))).count(),1);
         let manifest = context.manifest(&current);
         assert!(!manifest.to_string().contains("为什么"));
         drop(storage);

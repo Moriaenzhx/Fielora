@@ -2704,6 +2704,9 @@ pub struct ActiveArtifactContext {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
 #[serde(deny_unknown_fields)]
 pub struct StartAgentRunRequest {
+    #[serde(default)]
+    #[ts(optional)]
+    pub resource_budget: Option<AgentResourceBudget>,
     pub field_id: FieldId,
     pub conversation_id: ConversationId,
     pub user_message_id: Option<MessageId>,
@@ -2738,6 +2741,9 @@ pub struct AgentRunRequest {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
 #[serde(deny_unknown_fields)]
 pub struct ResumeAgentRunRequest {
+    #[serde(default)]
+    #[ts(optional)]
+    pub resource_budget: Option<AgentResourceBudget>,
     pub run_id: AgentRunId,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
@@ -2751,6 +2757,38 @@ pub struct ResumeAgentRunRequest {
 #[serde(deny_unknown_fields)]
 pub struct ListAgentRunsRequest {
     pub conversation_id: ConversationId,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
+#[serde(deny_unknown_fields)]
+pub struct AgentResourceBudget {
+    #[ts(type = "number")]
+    pub max_execution_ms: u64,
+    #[ts(type = "number")]
+    // Legacy wire/event fields only; cumulative tokens are measured, never enforced.
+    #[serde(default)]
+    pub max_input_tokens: u64,
+    #[ts(type = "number")]
+    #[serde(default)]
+    pub max_output_tokens: u64,
+}
+
+impl Default for AgentResourceBudget {
+    fn default() -> Self {
+        Self {
+            max_execution_ms: 3_600_000,
+            max_input_tokens: 0,
+            max_output_tokens: 0,
+        }
+    }
+}
+
+impl AgentResourceBudget {
+    pub fn is_valid(&self) -> bool {
+        (60_000..=86_400_000).contains(&self.max_execution_ms)
+            && self.max_input_tokens <= 50_000_000
+            && self.max_output_tokens <= 1_000_000
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]

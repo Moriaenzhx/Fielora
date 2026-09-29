@@ -26,13 +26,13 @@ test('production conversation has one turn-owned agent presentation path', () =>
   assert.match(turn, /data-agent-turn="true"/);
   assert.match(turn, /data-agent-kind=\{requestKind\}/);
   assert.match(turn, /data-testid="agent-answer"/);
-  assert.match(turn, /!answerOnly && !terminal/);
+  assert.match(turn, /!textOnlyAnswer && !terminal/);
   assert.match(turn, /data-agent-run-id=/);
   assert.match(turn, /data-user-message-id=/);
   assert.match(turn, /data-testid="agent-execution-status"/);
   assert.match(turn, /data-testid="agent-terminal-result"/);
   assert.match(turn, /data-testid="agent-execution-detail"/);
-  assert.match(turn, /agent-result-changes-icon"><AppIcon name="changes"\/>/);
+  assert.match(turn, /agent-result-changes-icon"><AppIcon name="reviewChanges"\/>/);
   assert.match(icons, /diff: PlusMinus/);
 });
 
@@ -43,7 +43,7 @@ test('legacy production activity and standalone result paths are absent', () => 
     'agent-activity-toggle', 'agent-operation-line', 'agent-result-actions', 'agent-change-summary',
     'agent-execution-popover', 'agent-execution-dock',
   ]) assert.doesNotMatch(production, new RegExp(legacy));
-  assert.doesNotMatch(turn, /已处理|已完成搜索代码/);
+  assert.doesNotMatch(turn, /已完成搜索代码/);
 });
 
 test('durable events project into one chronological conversation activity stream', () => {
@@ -92,7 +92,7 @@ test('transient model-loop stages do not become permanent completed steps and re
 });
 
 test('current run state is separate from collapsed completed chronology', () => {
-  assert.match(turn, /const \[detailsOpen, setDetailsOpen\] = useState\(false\)/);
+  assert.match(turn, /const \[detailsOpen, setDetailsOpen\] = useState\(displayMode === 'DETAILED'\)/);
   assert.match(turn, /if \(terminal\) setDetailsOpen\(false\)/);
   assert.match(turn, /detailsOpen && <div className="agent-run-details"/);
   assert.match(turn, /data-testid="agent-progress-summary"/);
@@ -104,11 +104,12 @@ test('current run state is separate from collapsed completed chronology', () => 
   assert.doesNotMatch(turn, /\{completedSteps\}\/\{presentation\.totalSteps\} 步|data-step-current|data-step-total/);
 });
 
-test('single create review removes the duplicate file row and small modify uses inline diff', () => {
-  assert.match(review, /review\.files\.length > 1 && <div className="human-review-files"/);
-  assert.match(review, /selected\.changeType !== 'CREATE' && <h3>/);
-  assert.match(review, /data-human-diff-layout="inline"/);
-  assert.match(styles, /\.human-inline-diff/);
+test('review uses a compact file picker and continuous numbered diff with shared controls', () => {
+  assert.match(review, /filesOpen && <div className="human-review-files"/);
+  assert.match(review, /human-diff-line-number/);
+  assert.match(review, /<Button variant="ghost" disabled=\{actionBusy\} onClick=.*data-testid="agent-review-undo"/);
+  assert.doesNotMatch(review, /<button\b|human-diff-state-label|human-code-surface/);
+  assert.match(styles, /\.human-unified-diff/);
 });
 
 test('action execution starts with a factual preparation state and never invents model progress', () => {
@@ -190,9 +191,9 @@ test('activity uses compact native disclosure without status dots or warning bac
   const activityStylesEnd = styles.indexOf('.agent-live-files {', activityStylesStart);
   const activityStyles = styles.slice(activityStylesStart, activityStylesEnd);
   assert.match(activitySource, /<AppIcon name=\{inspectionBatch \? 'folderOpen' : activityIcon\(item\.groupKind\)\}/);
-  assert.match(activitySource, /<details className=\{`conversation-activity-group/);
+  assert.match(activitySource, /<details open=\{detailed \|\| undefined\} className=\{`conversation-activity-group/);
   assert.match(activitySource, /<summary className="conversation-activity-group-summary"/);
-  assert.doesNotMatch(activitySource, /<details[^>]*\sopen(?:[\s=>])/);
+  assert.match(activitySource, /if \(!detailed\) return <CompactActivityGroup/);
   assert.doesNotMatch(activitySource, /conversation-activity-group-summary"[^>]*onClick|conversation-activity-group[^\n]*is-expanded/);
   assert.doesNotMatch(activitySource, /<i aria-hidden|>已完成</);
   assert.doesNotMatch(activityStyles, /conversation-activity-entries > li > i|conversation-activity-group \{[^}]*border-left|surface-warning|color-warning|color-text-success|color-text-danger/s);
@@ -209,10 +210,10 @@ test('activity presentation filters runtime terminology and reveals groups and o
   assert.match(turn, /if \(!knownNames\.has\(tool\.name\)\)/);
   assert.match(turn, /create_file: '创建'.*replace_text: '修改'.*write_file: '写入'/s);
   assert.match(turn, /item\.entries, \.\.\.\(item\.notes/);
-  assert.match(turn, /<details className="conversation-tool-detail">/);
+  assert.match(turn, /<details open=\{detailed \|\| undefined\} className="conversation-tool-detail">/);
   assert.match(turn, /<summary className="conversation-tool-summary"/);
-  assert.match(turn, /activityNarrativePreview\(text\)/);
-  assert.match(turn, /<details className="conversation-narrative-detail">/);
+  assert.match(turn, /<MarkdownMessage content=\{text\} streaming=\{streaming\} activityFiles=\{activityFiles\}\/>/);
+  assert.doesNotMatch(turn, /<details className="conversation-narrative-detail compact-narrative-detail">/);
   assert.match(projection, /if \(event\.kind === 'PHASE_CHANGED'\) \{\s*currentGroup = null;\s*continue;/s);
   assert.match(projection, /if \(receiptToolId && projectedToolIds\.has\(receiptToolId\)\) continue/);
 });
@@ -249,7 +250,7 @@ test('terminal duration leads collapsed chronology and the exact result Markdown
     '```',
   ].join('\n');
   assert.match(turn, /<button type="button" className="agent-terminal-runtime"[^>]*data-testid="agent-execution-detail-toggle"/);
-  assert.match(turn, />耗时 \{result\.duration\}</);
+  assert.match(turn, />已处理 \{result\.duration\}</);
   assert.match(turn, /function CompletedActivityHistory/);
   assert.match(turn, /className="agent-execution-detail is-history"/);
   assert.match(turn, /<CompletedActivityHistory events=\{events\} items=\{activityItems\} tools=\{tools\} activityFiles=\{activityFiles\}\/>/);

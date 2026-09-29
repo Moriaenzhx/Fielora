@@ -10,7 +10,12 @@ pub fn turn(
     request: &AgentModelRequest,
     step: u32,
 ) -> Result<AgentModelTurn, ModelError> {
-    let Some(AgentModelMessage::User(context)) = request.messages.last() else {
+    let Some(context) = request.messages.iter().rev().find_map(|m| match m {
+        AgentModelMessage::User(text) if text.starts_with(crate::agent_turn_context::MARKER) => {
+            Some(text)
+        }
+        _ => None,
+    }) else {
         return Err(ModelError::ProviderProtocolError);
     };
     let data: Value = serde_json::from_str(
@@ -46,6 +51,70 @@ pub fn turn(
                 ("write_file", json!({"path":"escaped.txt","content":"BAD"})),
             ].into_iter().enumerate().map(|(i,(name,arguments))| AgentModelToolCall {id:format!("adversarial-{i}"),name:name.into(),arguments}).collect(),
             usage:Some(ModelUsage {input_tokens:Some(100),output_tokens:Some(30)}),
+        });
+    }
+    if task == "联网反问澄清回归样例" {
+        let latest = crate::agent_user_input::latest_reply(&data["user_clarifications"]);
+        if let Some(reply) = latest
+            && !matches!(request.messages.last(),Some(AgentModelMessage::User(text)) if text.starts_with(crate::agent_user_input::REPLY_MARKER) && text.contains(reply["answer"].as_str().unwrap()))
+        {
+            return Err(ModelError::ProviderProtocolError);
+        }
+        let question = "请提供 Archify 的可信来源（仓库链接或 SKILL.md）。";
+        let calls = match step {
+            1 => vec![("request_user_input", json!({"question":question}))],
+            2 if latest.is_some_and(|r| r["answer"] == "这个你不可以联网搜索吗") => {
+                vec![("capability_status", json!({}))]
+            }
+            3 => vec![
+                ("request_user_input", json!({"question":question})),
+                (
+                    "create_file",
+                    json!({"path":"must-not-exist.txt","content":"BAD"}),
+                ),
+            ],
+            4 => {
+                if !request.messages.iter().any(|m| matches!(m,AgentModelMessage::ToolResult {is_error:true,content,..} if content.contains("AGENT_CLARIFICATION_REPEATED"))) {
+                    return Err(ModelError::ProviderProtocolError);
+                }
+                if !request.messages.iter().any(|m| matches!(m,AgentModelMessage::ToolResult {call_id,is_error:true,content,..} if call_id == "reply-3-1" && content.contains("AGENT_ACTION_DEFERRED"))) {
+                    return Err(ModelError::ProviderProtocolError);
+                }
+                vec![(
+                    "request_user_input",
+                    json!({"question":question,"reason":"我检查了当前工具：没有注册 web.search/web.fetch 搜索服务，无法通过该服务自行查找来源。因此仍需要你提供可信来源；安装尚未完成。"}),
+                )]
+            }
+            5 if latest.is_some_and(|r| r["answer"] == "fixture-approved-source") => vec![(
+                "create_file",
+                json!({"path":"clarified.txt","content":"fixture-approved-source"}),
+            )],
+            6 => vec![(
+                "run_command",
+                json!({"program":"node","argv":["verify-clarification.cjs"]}),
+            )],
+            7 => vec![],
+            _ => return Err(ModelError::ProviderProtocolError),
+        };
+        return Ok(AgentModelTurn {
+            text: if calls.is_empty() {
+                "已完成并验证测试文件；这不是实际 Archify 安装。".into()
+            } else {
+                "检查最新消息与实际能力。".into()
+            },
+            tool_calls: calls
+                .into_iter()
+                .enumerate()
+                .map(|(i, (name, arguments))| AgentModelToolCall {
+                    id: format!("reply-{step}-{i}"),
+                    name: name.into(),
+                    arguments,
+                })
+                .collect(),
+            usage: Some(ModelUsage {
+                input_tokens: Some(100),
+                output_tokens: Some(30),
+            }),
         });
     }
     if task == "安装澄清回归样例" {

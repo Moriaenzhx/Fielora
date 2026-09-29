@@ -3577,3 +3577,111 @@ Core 对无新附件请求在同 Project/Conversation、原消息边界内检查
 ## 159. 能力事实、澄清续作与暂停反馈（2026-09-18）
 
 Archify 生产运行确认：静态能力目录误报 web.search/web.fetch 可用，八次 run_command 均失败；模型把工具名当程序并猜测仓库，最终来源问题被通用完成门槛吞掉。修复实际目录投影、程序启动错误分类及原 Run 提问/回答恢复；不接入未知网络服务、不安装未知 Archify 包。暂停按钮/loading 同步真实 Run 状态，回答通过显式消息关联恢复，不新建任务。工程及真实模型验收分开，见 AE-016。
+
+## 160. 反问输入已送达与澄清反馈修正（2026-09-23）
+
+同一 Archify Run 后续事件确认反问已被接受、恢复并再次调用模型；重建 Context 哈希与实际调用清单一致。模型再次查询得到无注册搜索服务后，仍原样提问；不是入口 URL 校验或 UI 复显。当前修正最新回复的原生对话投影、同题重问的可见解释和调用来源诊断，沿用原 Run/ToolCall/消息账本，不新增搜索服务或权限。工程验证见 artifacts/agent-clarification-feedback/DELIVERY.md，真实模型与原安装任务仍独立待验。
+
+## 161. 首轮假完成与明确结果协议（2026-09-23）
+
+用户最新复测确认新 Run 在 0 工具调用后直接索要来源，却被记为 SUCCESS：未命中动作关键词且没有模型解释被错误当作普通回答。用户授权按高标准修复。General loop 现由原生 finish_task 提议明确 completed/blocked，Harness 校验当前回执、实际副作用、未知结果和新鲜验证；纯文本不再决定完成，等待信息沿用 request_user_input，阻塞保存为 PAUSED。没有新增分类器、状态库、权限或 Migration。搜索 API 与现有浏览器能力分别报告；工程与真实模型验收仍分开，见 artifacts/agent-task-outcomes/DELIVERY.md 和 AE-016。
+
+## 162. 安装资源缺失、验收与恢复修复（2026-09-24）
+
+用户复测已通过浏览器访问 GitHub，并在当前 Run 写入 Archify SKILL.md；44 步中的 8 次结束均因无验证回执被拒。只下载入口、缺失引用资源，父目录列举过滤 Skill 子树、历史成功误用和重复观察清零终止拒绝计数均已确认。用户认可此次诊断方式，要求今后按“执行链、证据、机制、责任、验证边界”解释，已写入 AGENTS 与开发流程。
+
+本轮沿既有执行链增加只读 verify_skill 结构检查、显式目录真实列举、项目 catalog 刷新、bundle 摘要版本绑定、可执行 Skill 的针对性检查要求及当前副作用固定投影。完成拒绝解释缺项，普通观察不再重置终止拒绝计数；混合代码修改不能仅靠 Skill 检查结束。不新增网络下载/解包权限、不自动执行外来资源，无 Migration 或第二 Runtime。机制验证与独立包见 artifacts/agent-skill-recovery/DELIVERY.md；真实模型/原 Archify 完整安装与功能验收仍分开记录。
+
+## 163. 真实续跑中的浏览器就绪误判（2026-09-24）
+
+同一 Archify Run 继续到 60 步：新 verify_skill 已真实报告缺失资源，验证门槛再次拦住改 intent 假完成；两次 browser.open 返回 BROWSER_PAGE_NOT_READY，随后模型误用本地 read_file(URL)，并将含混错误解释为 GitHub 不可达后索要来源。历史错误没有具体就绪字段，不能确认当时是哪一条件。隔离原生复现证明仅隐藏已加载网页面板即可触发同错，独立公开地址探测则成功。
+
+当前修复把已提交文档的只读观察与原生表面输入/截图要求分开；保持页面归属和输入安全，返回导航、加载、表面及页面失效的事实，等待可取消有界。恢复上下文不再把导航失败当成点击遮挡，保留实际来源和具体错误；本地读取 URL 明确返回通道误用。另修复长网页静默截断和基于截断内容的 absent 假通过，续跑补记当前构建身份。不增加完整仓库下载/解包器或生产数据变更。诊断与验收边界见 artifacts/agent-browser-readiness-20260924/DIAGNOSIS.md 和 DELIVERY.md；真实 Qwen/完整 Archify 安装仍未验收。
+
+## 164. 状态查询允许报告否定发现（2026-09-24）
+
+真实新 Run 询问“现在有装好archify这个skill吗”，正确只读检查、记录 answer_only 并提出“未完全安装”，却因 verify_skill.success=false 被 finish_task 的统一成功证据规则连续拒绝。未调用浏览器或写入；当前包身份匹配。旧安装已取消，本次状态回答不应续期安装目标。
+
+现沿既有结果协议区分观察证据与动作成功证据：纯只读状态回答可引用终态否定/失败观察并报告边界，不能让未知结果、写入/执行或浏览器验收义务消失。FAIL 回执不变，当前回答完成不更新历史任务；无修复义务时不再投影 REPAIRING。前轮测试漏掉不完整 Skill 的状态问答，已增加此边界回归。无 Schema、权限或第二状态系统；证据与验收范围见 artifacts/agent-negative-findings-20260924/DIAGNOSIS.md 和 DELIVERY.md。
+
+
+## 165. 完整 Skill 来源获取与受控安装（2026-09-24）
+
+用户授权补齐实际缺失的联网获取能力。新增 skills.search / skills.prepare / skills.install，分别沿既有 Network 与 WorkspaceWrite 决策。公开 GitHub 发现不是通用搜索引擎；固定提交后按完整清单获取指定 Skill 目录，或获取完整公共 HTTPS ZIP；下载与安装不会自动执行外来代码。Core 绑定同 Run 成功准备回执，完整目录暂存检查、当前摘要保护覆盖、旧目录备份与未知结果禁止重放。verify_skill 和针对性运行检查继续控制完成。管理位置仍为项目 .agents/skills/<name>，经现有 Skill catalog 刷新发现。
+
+原因确认是 Tools 完整获取链路缺口，另有旧 Model 答复把浏览器故障推广成无联网能力。Harness 的上下文/权限/连续性/验证/可观察性同步接入真实工具，不能用提示代替下载实现。真实联网测试与桌面模型/网络替身验收分开；最终状态见 artifacts/agent-skill-acquisition-20260924/DELIVERY.md。生产 Archify 目录与用户数据库未由此测试覆盖。
+
+
+## 166. Agent 三视图与 IDR 退出生产（2026-09-24）
+
+历史记录：三平面正式定位已由 §167 撤回；能力实现与 IDR 退出决定保留。
+
+用户接受 Model + Harness + Tools 责任基线、三平面与共享基础设施工程视图、九层诊断视图，并要求先去除未证明实际收益的 IDR。现有生产默认不读 Human Model、不生成个性化投影、不曝光学习工具；旧 schema/迁移/数据与隔离历史机制测试保留，不能从旧 Run 自动重新启用。Agent Profile 与当前用户约束仍保留。
+
+能力查询补充本轮工具定义/来源/绑定、后端状态、调用权限待查和目标未探测等独立事实，精确详情与摘要绑定分页复用现有 catalog。网络不可达、工具未暴露和任务未验证不再混为一个布尔值；目录查询不主动探测或授权。工程与剩余能力表见 docs/architecture/AGENT_ENGINEERING_VIEWS_V0.1.md；本轮验证见 artifacts/agent-engineering-views-20260924/DELIVERY.md，真实模型验收单独记录。
+
+
+## 167. 撤回三平面正式定位，统一主架构（2026-09-24）
+
+历史组织口径：其中 Tools 顶层和九层仅诊断已由 §168 更新；三平面撤回及功能保留继续有效。
+
+用户认为三平面与原基线不贴合，经讨论要求更改。当前只有 Model + Harness + Tools 一个主架构；九层保留为诊断视图，工程模块直接映射主架构。Control 与 Harness 重复、Execution 再次拆分调用控制/工具后端且容易模糊 Model 归属，因此撤回三平面作为正式工程架构的定位，而非再建一套分类。
+
+已实现的能力目录、详情/分页、来源和状态区分、完整 Skill 获取/安装均保留，IDR 继续退出生产。本次只修订架构、上下文与一个模块注释，无运行行为/Schema/权限变更，不重新打包；此前包的功能验收保持历史事实。本次检查为文档清单、引用与差异检查，不冒充新运行测试。
+
+
+## 168. Harness 九层与 Capability 顶层（2026-09-24）
+
+用户最新明确要求 Harness 改为九层能力、Tools 改为 Fielora 拥有的 Capability。现主架构为 Model + Harness + Capability；Harness 九层既为正式逻辑职责，也用于诊断，取代 §167 中“九层仅诊断/七域”的定位。Capability 容纳已有工具定义/发现/执行、Skill、资源访问、适配器与本地插件包装，Tool 为子集；不恢复三平面，不增加第二系统。
+
+L3 负责模型调用控制，智能与 Provider adapter 属于 Model；L5 负责能力调用控制，具体后端属 Capability。Work Scope & Goal 纳入 L4，权限与验收保留于 L7/L8。当前只读子任务由 Harness 编排，不等于已实现 Agent Blueprint 平台。IDR 继续退出；通用 Resource 注册、完整插件市场、任意 OS Computer Use 等仍未实现，不因改名升级状态。此次只更新正式文档及其引用，未变更产品代码/运行行为，检查文档清单、链接和差异，不重新打包。
+
+## 169. 能力逐项对照与第一批候选查找（2026-09-24）
+
+用户要求按清单逐项补能力，现以 [36 项能力清单](../architecture/CAPABILITY_INVENTORY_V0.1.md) 维护代码事实、缺口、归属与次序。Scheduler 已有真实本地服务；Web Search/Fetch adapter 虽存在，默认产品构造未注册，不能报当前对话可用。MCP stdio、受限子任务、本地声明式 Plugin 与 OS Computer Use/Chrome 会话/SSH/Blueprint 等缺失项明确区分。
+
+第一批沿 capability_status 增加名称/描述词面、provider/source/effect 筛选；查询与目录双摘要保护分页。复用已准入 ToolSpec，不建第二 Registry 或 Resolver Runtime，不把筛选当权限/可靠性排名/语义选工具。旧空参数、精确查找和无过滤分页兼容。无 schema、凭据和生产数据变更，IDR 继续退出。机制和桌面验证见 [本批交付](../../artifacts/capability-candidates-20260924/DELIVERY.md)；后续优先补 Web 产品接入，真实模型和原 Archify 任务仍单列验收。
+
+## 170. 执行展示偏好与真实压缩状态（2026-09-24）
+
+用户要求精简逐条灰色操作、可展开命令、详细模式、压缩提示与淡灰圆角悬浮时间。沿既有本地 UI preferences 增加 COMPACT/DETAILED，默认精简；同一 AgentTurn 渲染当前和历史记录。共享 Tooltip 使用真实消息/事件时间；不生成展示专用模型叙述。Harness L6 的压缩阈值与内容保持，L9 补开始事件并投影既有完成回执，常规与重试路径均覆盖，无新 schema/运行状态系统。快速操作不人为延时，字节数不冒充 token。
+
+代码、自动测试与独立包见 [交付记录](../../artifacts/agent-display-20260924/DELIVERY.md)。旧命令输出原文未保存仍明确标识；本次不解决模型目录重复输入或工具选择遗漏，也不修改生产 Archify。截图和桌面替身验证不等于用户最终体验确认或真实模型任务通过。
+
+## 171. Archify 实际安装与精简分类修正（2026-09-25）
+
+生产 Run 01a0d680-0d29-7dd3-be3c-09fca4d61041 的源发现成功、子目录总预算超时及整仓 ZIP 两次请求超时已核对。下载器现提供固定树内的有界分发 ZIP 候选与 immutable blob raw 获取；超时返回进度和同版本续传身份。该机制不认证发布者、不改变权限或自动执行脚本。
+
+原 Fielora 项目 .agents/skills/archify 已通过维护调用现有安装器替换为官方 2.17.0-dev.1 完整分发包（79 文件），12 项入口引用及 doctor 均通过；原目录保留在 .agents/.skill-transactions 的备份中。此结果是当前项目真实安装，不是临时项目测试；没有改写旧暂停 Run，也未验证真实 Qwen 自动恢复。精简 UI 按连续工作类型归类，保留展开明细及失败、审批、暂停边界，成功内部控制步骤仅详细视图显示。证据与独立包见 artifacts/skill-recovery-20260925/DELIVERY.md。
+## 172. Skill 使用中的命令重试与压缩连续性（2026-09-25）
+
+Archify 生成失败已对齐生产 Run：56 次模型调用、9 次压缩、6 次命令失败及一次错误去重，最终预算暂停；与 §171 下载问题不同。按 Model + Harness + Capability 原基线修复 L5 参数去重/错误标记和 L2/L6 Skill 与命令诊断保留。Process 新提案沿现有 Policy/Approval，未知操作保持暂停，不新增权限或持久原始命令输出。实际图已通过已安装 Archify 生成并作桌面尺寸/明暗主题检查；真实 Qwen 自主完成仍未验收。详细证据见 AE-020 与 artifacts/archify-generation-20260925/DELIVERY.md。
+
+
+## 173. 可配置长任务预算与模型设置合并（2026-09-25）
+
+用户同意开放数小时任务额度，并要求模型服务和计费统计合并为一个菜单。现“模型配置”含模型服务、用量统计、任务预算三个 Tab；设备偏好即时保存，交互任务开始和主动继续时传入 Core，沿 RunCreated/RunResumed 记录并恢复。默认 1h/2M 输入/65,536 输出不变，最高可配 8h/50M/1M；累计执行时间独立于单次超时，旧事件兼容，不新增 Schema。
+
+失败恢复在既有工作状态中投影最多 12 条尝试和结果比较，同一执行段内三次相同已知命令失败后要求改变输入或策略。继续任务可重新尝试外部修复后的条件；未知副作用、权限、结果验证不绕过。该机制不保证模型能选对方案，也不将扩大预算写成 Archify 真实模型验收。验证与独立包见 artifacts/long-task-budget-20260925/DELIVERY.md。
+
+
+## 174. 环境发现与按影响审批的工具安装（2026-09-25）
+
+针对 Archify 恢复仍失败，增加 environment.inspect（PATH 全候选与有界运行时目录发现）、tools.prepare（官方 Node/ripgrep 或未认证 HTTPS 便携 ZIP）、tools.install（同 Run 准备回执绑定的隔离发布）。用户确认：可信来源、实际下载不超过 20 MiB、仅项目隔离目录、不改系统/PATH、不运行安装脚本可免安装确认；其他需人工确认，包括 FullControl。既有网络审批和 ReadOnly 约束保留；不承诺自动安装任意格式。目录为 .fielora/tools/<name>/<SHA-256>，版本检查及实际任务验证仍独立执行。
+
+修正 Artifact content 外层字符串诊断、失败变参虚假进展与压缩目标/重复触发。实际普通 PATH 下发现 Node 12/14/20/22/24，使用兼容绝对路径通过 Archify doctor 与既有规格的 deliver；真实官方 ripgrep 便携包隔离下载/安装/version 通过。以上是维护执行证据，不是真实 Qwen 自治验收。完整验证与独立桌面包以 artifacts/tool-acquisition-20260925/DELIVERY.md 为准。
+
+
+## 2026-09-26 — 时间额度与 Node 再次误诊
+
+新生产 Run 01a0d919-6068-7dc3-b50b-3a658c4f0cbd 实际已发现 Node 20/22/24，并成功运行绝对 Node20 --version；失败包含绝对项目 cwd 被误拒、重复把 executable 放进 argv，以及回到默认 Node14。不能继续称没有其他版本；部分后续现代 Node 命令实际启动但退出非零，持久回执仅哈希，不能追溯具体 stderr。时间额度改为唯一累计资源约束，默认1小时、1–1440分钟自定义；Token计量保留、旧caps不再暂停。工具修复项目内绝对 cwd，并从既有回执保留成功版本探测。证据与验证边界记入 AE-020；生产原任务未自动重跑。
+
+
+## 2026-09-26 — 执行恢复与精简呈现候选
+
+根据真实Archify 308轮失败诊断，已实现普通Skill读取保留、结构化命令诊断精简和按入口比较重试；编辑/读文件不清除该失败停滞，4次反馈/8次暂停，主动继续另起尝试段。精简UI收起重复准备说明、完成压缩和代码全文，保留发现/审批/交付。沿既有Model + Harness + Capability，不改Schema/权限或完成验收。工程及桌面证据见artifacts/convergence-compact-20260926/DELIVERY.md；原生产模型任务未自动续跑，不能将机制通过当作其验收。
+
+
+## 2026-09-29 — Archify 真实复发修复候选
+
+上一轮新版真实Run仍失败：默认Node14、错误cwd/输入路径、误判schema、目录大回执与重复说明。当前新增Skill加载时的相关运行时候选发现，诊断分层与保守恢复投影、目录分页和模型输入去重、准备说明折叠。沿现有权限/状态/ToolRuntime，无迁移、全局环境切换或安装。原输入的本地工具对照及工程检查通过；真实qwen原任务未续跑，架构图仍未完成。交付和桌面检查边界见artifacts/recurrence-repair-20260929/DELIVERY.md。

@@ -168,7 +168,8 @@ test('shared icon controls use the managed desktop tooltip instead of native tit
   const source = read('UiPrimitives.tsx');
   const controls = read('styles/controls.css');
   assert.match(source, /createPortal/);
-  assert.match(source, /className=\{`ui-tooltip\$\{variant === 'card'/);
+  assert.match(source, /className=\{`ui-tooltip\$\{variant !== 'default'/);
+  assert.match(source, /export function TimestampHover/);
   assert.match(source, /data-testid="ui-tooltip"/);
   assert.match(source, /\[data-testid="desktop-chrome"\]/);
   assert.match(source, /const safeTop = Math\.max\(viewportInset, chromeBottom \+ viewportInset\)/);

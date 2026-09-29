@@ -72,6 +72,7 @@ async fn access_scope_blocks_approved_and_observe_dispatch_bypasses_and_finishes
     let run = storage
         .create_agent_run(
             StartAgentRunRequest {
+                resource_budget: None,
                 field_id: project.field_id.clone(),
                 conversation_id: conversation.id,
                 user_message_id: Some(message.id),

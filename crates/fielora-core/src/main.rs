@@ -1,8 +1,11 @@
 mod agent_browser;
 mod agent_image_history;
+mod agent_recovery;
 mod agent_request_intent;
 mod agent_request_scope;
 mod agent_runtime;
+mod agent_skill_verification;
+mod agent_task_outcome;
 mod agent_turn_context;
 mod agent_user_input;
 mod agent_visual_context;

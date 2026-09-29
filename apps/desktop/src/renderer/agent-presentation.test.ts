@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import type { AgentEventView, AgentRunView, AgentToolCallView } from '@fielora/contracts';
-import { agentPausePresentation, agentCompletionTimeLabel, agentOpeningNarrative, agentRequestKind, agentTerminalBody, agentTerminalTitle, approvalActionLabel, buildAgentPresentation, buildAgentResultViewModel, stripTerminalHeading } from './agent-presentation.ts';
+import { agentModelIsActive, agentPausePresentation, agentCompletionTimeLabel, agentOpeningNarrative, agentRequestKind, agentTerminalBody, agentTerminalTitle, approvalActionLabel, buildAgentPresentation, buildAgentResultViewModel, stripTerminalHeading } from './agent-presentation.ts';
 
 function run(status: AgentRunView['status'], errorCode: string | null = null): AgentRunView {
   return {
@@ -255,4 +255,19 @@ test('paused time does not accrue as execution time, including after continuatio
   assert.equal(buildAgentPresentation(paused, events, [], 6000).elapsed, buildAgentPresentation(paused, events, [], 66000).elapsed);
   events.push({ id: 'resume', run_id: paused.id, sequence: 2, schema_version: 1, kind: 'RUN_RESUMED', payload: {}, created_at: 66000 });
   assert.equal(buildAgentPresentation({ ...paused, status: 'RUNNING' }, events, [], 67000).elapsed, buildAgentPresentation(run('RUNNING'), [], [], 7000).elapsed);
+});
+
+
+test('thinking tracks actual model intervals and never fills tool or failure gaps', () => {
+  const event = (sequence: number, kind: AgentEventView['kind']): AgentEventView => ({ id: `event-${sequence}`, run_id:'run-1', sequence, schema_version:1, kind, payload:{}, created_at:sequence*1000 });
+  const start=event(1,'MODEL_STARTED'), end=event(2,'MODEL_COMPLETED');
+  assert.equal(agentModelIsActive([], []), false);
+  assert.equal(agentModelIsActive([event(1,'STEP_STARTED')], []), false);
+  assert.equal(agentModelIsActive([start,event(2,'MODEL_TEXT_DELTA')], []), true);
+  assert.equal(agentModelIsActive([end,start], []), false, 'sequence, not arrival order');
+  for (const kind of ['TOOL_PROPOSED','TOOL_STARTED','TOOL_PROGRESS','TOOL_COMPLETED','TOOL_FAILED','MODEL_FAILED','APPROVAL_REQUESTED','RUN_PAUSED','RUN_RESUMED','RECOVERY_STARTED'] as const) {
+    assert.equal(agentModelIsActive([start,event(3,kind)], []), false, kind);
+  }
+  for (const status of ['PROPOSED','RUNNING','WAITING_APPROVAL'] as const) assert.equal(agentModelIsActive([start],[tool({status})]),false);
+  assert.equal(agentModelIsActive([start,end,event(3,'TOOL_FAILED'),event(4,'MODEL_STARTED')], [tool({status:'FAILED'})]),true,'fresh model invocation after a tool failure can think again');
 });

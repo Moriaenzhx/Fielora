@@ -5,6 +5,7 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import {
   cleanupElectronProcess,
+  captureScreenshot,
   connectToFieloraApp,
   launchElectron,
   waitForChildExit,
@@ -32,7 +33,7 @@ async function pollValue(expression, predicate, timeoutMs = 45_000) {
 }
 
 async function openApp() {
-  const launched = await launchElectron({ root, dataRoot, output });
+  const launched = await launchElectron({ root, dataRoot, output, executablePath: process.env.FIELORA_PACKAGED_EXE });
   child = launched.child;
   cdp = await connectToFieloraApp({ ...launched, enablePage: true });
   await waitForExpression(cdp, `document.querySelector('[data-testid="project-workspace"]') && window.fieloraTest`, { timeoutMs: 60_000, output });
@@ -50,8 +51,11 @@ async function quitApp() {
 }
 
 async function reloadConversation(conversationId) {
-  await cdp.eval('location.reload()');
+  await cdp.eval('window.__reviewReload=true');
+  await cdp.send('Page.reload');
+  await waitForExpression(cdp, `typeof window.__reviewReload==='undefined' && window.fieloraTest && window.fielora.core.getHealth().then(h=>h.state==='READY')`, { timeoutMs: 60_000, output });
   await waitForExpression(cdp, `document.querySelector('[data-testid="conversation-${conversationId}"]')`, { timeoutMs: 60_000, output });
+  await cdp.eval(`document.querySelector('[data-testid="conversation-${conversationId}"]').click()`);
 }
 
 async function openRunReview(runId) {
@@ -74,16 +78,14 @@ try {
     const project=await window.fieloraTest.createProject({title:'Durable File Artifact Project',goal:null,root_path:${JSON.stringify(projectRoot)}});
     const conversation=await window.fielora.conversation.create({field_id:project.field_id,title:'Durable file review',provider_config_id:provider.id,model_id:'__fielora_agent_fixture__'});
     localStorage.setItem('fielora:conversation-permission:'+conversation.id,'FULL_CONTROL');
-    return {fieldId:project.field_id,conversationId:conversation.id};
+    const task='FIELORA_AGENT_FIXTURE_FAST_EDIT 删除列表中的 stage 字段配置';
+    const message=await window.fielora.conversation.createMessage({conversation_id:conversation.id,role:'USER',content:task,status:'COMPLETED',provider_config_id:null,model_id:null,invocation_id:null,references:[]});
+    const run=await window.fielora.agent.start({field_id:project.field_id,conversation_id:conversation.id,user_message_id:message.id,provider_config_id:provider.id,model_id:provider.default_model,task,permission:'FULL_CONTROL',max_steps:20,attachments:[]});
+    return {fieldId:project.field_id,conversationId:conversation.id,runId:run.id};
   })()`);
   await reloadConversation(setup.conversationId);
 
-  const priorRun = await cdp.eval(`window.fielora.agent.list({conversation_id:${JSON.stringify(setup.conversationId)}}).then((runs)=>runs[0]?.id??null)`);
-  await cdp.eval(`(()=>{const input=document.querySelector('[data-testid="conversation-composer"] textarea');const set=Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype,'value').set;set.call(input,'FIELORA_AGENT_FIXTURE_FAST_EDIT 删除列表中的 stage 字段配置');input.dispatchEvent(new Event('input',{bubbles:true}));document.querySelector('[data-testid="send-message"]').click();})()`);
-  const runId = await pollValue(
-    `window.fielora.agent.list({conversation_id:${JSON.stringify(setup.conversationId)}}).then((runs)=>runs[0]?.id??null)`,
-    (value) => Boolean(value && value !== priorRun),
-  );
+  const runId = setup.runId;
   let terminal = await pollValue(
     `window.fielora.agent.get({run_id:${JSON.stringify(runId)}}).then((run)=>run.status)`,
     (value) => ['COMPLETED', 'FAILED', 'CANCELLED', 'WAITING_APPROVAL'].includes(value),
@@ -119,6 +121,16 @@ try {
   assert.equal((await cdp.eval(`window.fielora.artifact.list({cursor:null,limit:100,include_archived:true})`)).artifacts.length, 0);
 
   await openRunReview(runId);
+  await waitForExpression(cdp, `document.querySelector('.human-diff-row.is-remove')`, { timeoutMs: 30_000, output });
+  await cdp.send('Emulation.setDeviceMetricsOverride', { width: 1478, height: 859, deviceScaleFactor: 1, mobile: false });
+  assert.equal(await cdp.eval(`document.querySelector('.human-diff-row.is-remove .human-diff-line-number').textContent`), '3');
+  assert.equal(await cdp.eval(`document.querySelector('.human-diff-row.is-remove code').textContent`), '  stage: true,');
+  assert.equal(await cdp.eval(`['agent-review-mark-reviewed','agent-review-undo'].every(id=>document.querySelector('[data-testid="'+id+'"]').classList.contains('ui-button'))`), true);
+  if (process.env.FIELORA_E2E_EVIDENCE_DIR) await captureScreenshot(cdp, path.join(process.env.FIELORA_E2E_EVIDENCE_DIR, 'review-light.png'));
+  await cdp.send('Emulation.setDeviceMetricsOverride', { width: 900, height: 700, deviceScaleFactor: 1, mobile: false });
+  assert.equal(await cdp.eval(`(()=>{const e=document.querySelector('[data-testid="agent-review"]');return e.scrollWidth<=e.clientWidth+1})()`), true);
+  if (process.env.FIELORA_E2E_EVIDENCE_DIR) await captureScreenshot(cdp, path.join(process.env.FIELORA_E2E_EVIDENCE_DIR, 'review-narrow.png'));
+  await cdp.send('Emulation.setDeviceMetricsOverride', { width: 1478, height: 859, deviceScaleFactor: 1, mobile: false });
   await cdp.eval(`document.querySelector('[data-testid="agent-review-raw"]')?.click()`);
   await waitForExpression(cdp, `document.querySelector('[data-testid="agent-review-diff"]')`, { timeoutMs: 30_000, output });
   assert.match(await cdp.eval(`document.querySelector('[data-testid="agent-review-diff"]').innerText`), /-  stage: true,/u);
@@ -171,5 +183,6 @@ try {
 } finally {
   if (cdp) cdp.close();
   await cleanupElectronProcess(child);
+  assert.ok(path.resolve(dataRoot).startsWith(path.resolve(tmpdir()) + path.sep));
   await rm(dataRoot, { recursive: true, force: true });
 }

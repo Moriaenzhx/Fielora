@@ -62,7 +62,7 @@ try {
   const follow=await send('你知道图片里面的需求是什么吗');
   const latest=await send('我最近发给你的这张');
   for(const result of [follow,latest]) {
-    assert.equal(result.run.status,'COMPLETED'); assert.equal(result.tools.length,0);
+    assert.equal(result.run.status,'COMPLETED'); assert.deepEqual(result.tools.map(t=>t.name),['finish_task']);assert.equal(result.tools[0].effect,'OBSERVE');
     assert.deepEqual(result.prompt.image_manifest,report.prompt.image_manifest,'exact same image bytes reach the model, not just a filename or count');
     const source=result.events.find(e=>e.payload.kind==='REFERENCED_INPUTS_RESTORED').payload;
     assert.equal(source.origin_run_id,report.run.id);

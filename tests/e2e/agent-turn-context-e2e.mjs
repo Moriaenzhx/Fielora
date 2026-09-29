@@ -71,7 +71,7 @@ try {
   await writeFile(path.join(evidence,'explanation.json'),JSON.stringify(explanation,null,2));
   assert.equal(explanation.run.status,'COMPLETED');
   assert.equal(explanation.run.current_step,2);
-  assert.equal(explanation.tools.length,1);
+  assert.deepEqual(explanation.tools.map(t=>t.name),['read_run_history','finish_task']);
   assert.equal(explanation.tools[0].name,'read_run_history');
   assert.equal(explanation.tools[0].receipt.history.run.run_id,failed.run.id);
   assert.equal(explanation.tools[0].receipt.history.completed_workspace_writes,0);
@@ -81,7 +81,7 @@ try {
   assert.equal(completion.verification_passed,false);
   assert.equal(completion.completion_scope,'CURRENT_REQUEST');
   assert.equal(completion.historical_goals_updated,false);
-  assert.ok(explanation.events.some(e=>e.payload.kind==='TURN_COMPLETION_EVALUATED'&&e.payload.reason===null));
+  assert.equal(completion.protocol,'EXPLICIT_TASK_OUTCOME_V1');
   const prompts = explanation.events.filter(e=>e.kind==='MODEL_COMPLETED').map(e=>e.payload.prompt);
   assert.equal(prompts.length,2);
   for (const prompt of prompts) {
@@ -96,7 +96,7 @@ try {
   await show(conversation);
   await wait("document.body.innerText.includes('待替换文本没有匹配')");
   await captureScreenshot(cdp,path.join(evidence,'cause-answer.png'));
-  // Exact production regression: the first plain answer hits the legacy hint,
+  // Historical fixture encodes its first terminal attempt using the new protocol,
   // then the same provider loop supplies a current-request interpretation.
   // Pause after that receipt and restart Core to prove it is durably scoped.
   const attachments=await cdp.eval(`(()=>{const c=document.createElement('canvas');c.width=400;c.height=180;const x=c.getContext('2d');x.fillStyle='white';x.fillRect(0,0,400,180);x.fillStyle='black';x.fillText('KPI columns',10,40);x.strokeStyle='red';x.beginPath();x.moveTo(10,40);x.lineTo(200,40);x.stroke();const data_url=c.toDataURL('image/png');return [{id:'marked-report',filename:'report.png',mime_type:'image/png',size:atob(data_url.split(',')[1]).length,width:400,height:180,source:'clipboard',data_url}];})()`);
@@ -105,20 +105,23 @@ try {
   const checkpointed=await settled(await start(conversation,exact,attachments,2));
   assert.equal(checkpointed.run.status,'PAUSED');
   assert.equal(checkpointed.run.error_code,'AGENT_BUDGET_EXHAUSTED');
-  assert.equal(checkpointed.tools.length,1);
-  assert.equal(checkpointed.tools[0].name,'record_request_intent');
-  assert.equal(checkpointed.tools[0].receipt.intent,'answer_only');
+  assert.equal(checkpointed.tools.length,2);
+  assert.equal(checkpointed.tools[0].name,'finish_task');
+  assert.equal(checkpointed.tools[0].status,'FAILED');
+  assert.equal(checkpointed.tools[1].name,'record_request_intent');
+  assert.equal(checkpointed.tools[1].receipt.intent,'answer_only');
   await restartApp();
   await cdp.eval(`window.fielora.agent.resume({run_id:${JSON.stringify(checkpointed.run.id)}})`);
   const answered=await settled(checkpointed.run);
   assert.equal(answered.run.status,'COMPLETED');
-  assert.equal(answered.tools.length,1,'resume must not record/replay the tool twice');
-  const evals=answered.events.filter(e=>e.payload.kind==='TURN_COMPLETION_EVALUATED');
-  assert.equal(evals[0].payload.reason,'AGENT_ACTION_REQUIRED');
-  assert.equal(evals.at(-1).payload.action_request_hint,true);
-  assert.equal(evals.at(-1).payload.request_interpretation,'answer_only');
-  assert.equal(evals.at(-1).payload.reason,null);
-  assert.equal(evals.at(-1).payload.requires_workspace_change,false);
+  assert.equal(answered.tools.filter(t=>t.name==='record_request_intent').length,1,'resume must not replay interpretation');
+  const terminalProposals=answered.tools.filter(t=>t.name==='finish_task');
+  assert.equal(terminalProposals.length,2);
+  assert.equal(terminalProposals[0].status,'FAILED');
+  assert.equal(terminalProposals[1].status,'COMPLETED');
+  assert.equal(terminalProposals[1].receipt.proposal.intent,'answer_only');
+  assert.equal(terminalProposals[1].receipt.verification_passed,false);
+  assert.equal(answered.events.find(e=>e.kind==='RUN_COMPLETED').payload.protocol,'EXPLICIT_TASK_OUTCOME_V1');
   assert.ok(answered.events.filter(e=>e.kind==='MODEL_COMPLETED').every(e=>e.payload.prompt.image_count===1));
   assert.equal(answered.events.find(e=>e.kind==='RUN_COMPLETED').payload.completion_basis,'ANSWER');
   assert.equal(await readFile(path.join(projectRoot,'settings.js'),'utf8'),before);
@@ -126,15 +129,17 @@ try {
   for(const task of ['为什么之前删除了它？','你说修改好了，依据是什么？','Explain why the previous delete failed']) {
     const result=await settled(await start(conversation,task));
     assert.equal(result.run.status,'COMPLETED');
-    assert.equal(result.tools.length,1);
-    assert.equal(result.tools[0].receipt.intent,'answer_only');
+    assert.equal(result.tools.filter(t=>t.name==='record_request_intent').length,1);
+    assert.equal(result.tools.find(t=>t.name==='record_request_intent').receipt.intent,'answer_only');
+    assert.equal(result.tools.at(-1).name,'finish_task');
+    assert.equal(result.tools.at(-1).status,'COMPLETED');
     assert.equal(result.events.find(e=>e.kind==='RUN_COMPLETED').payload.verification_passed,false);
     assert.ok(result.events.filter(e=>e.kind==='MODEL_COMPLETED').every(e=>e.payload.prompt.image_count===1));
   }
   const mixed=await settled(await start(conversation,'解释原因并删除错误配置'));
   assert.equal(mixed.run.status,'PAUSED');
-  assert.equal(mixed.run.error_code,'AGENT_ACTION_REQUIRED');
-  assert.equal(mixed.tools[0].receipt.intent,'workspace_change');
+  assert.equal(mixed.run.error_code,'AGENT_VERIFICATION_REQUIRED');
+  assert.equal(mixed.tools.find(t=>t.name==='record_request_intent').receipt.intent,'workspace_change');
   assert.ok(!mixed.events.some(e=>e.kind==='RUN_COMPLETED'));
   await cdp.eval(`window.fielora.agent.cancel({run_id:${JSON.stringify(mixed.run.id)}})`);
   const unverified=await settled(await start(conversation,'FIELORA_INTENT_UNVERIFIED 修改后只解释'));

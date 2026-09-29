@@ -71,7 +71,7 @@ try {
   const run=(await cdp.eval(`window.fielora.agent.list({conversation_id:${JSON.stringify(ids.conversation.id)}})`))[0];
   assert.equal(run.status,'COMPLETED');
   const tools=await cdp.eval(`window.fielora.agent.toolCalls({run_id:${JSON.stringify(run.id)}})`);
-  assert.equal(tools.length,5);assert.ok(tools.every(t=>t.effect!=='WORKSPACE_WRITE'));
+  assert.equal(tools.length,6);assert.equal(tools.at(-1).name,'finish_task');assert.ok(tools.every(t=>t.effect!=='WORKSPACE_WRITE'));
   assert.ok(tools.some(t=>t.name==='run_command'&&t.receipt?.verification_eligible&&t.receipt?.workspace_revision));
   await wait("document.querySelector('.agent-terminal-body .markdown-status-marker svg')");
   assert.equal(await cdp.eval("document.querySelector('.agent-terminal-body h2').textContent.includes('✅')"),false);

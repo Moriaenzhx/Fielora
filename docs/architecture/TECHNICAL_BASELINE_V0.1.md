@@ -191,15 +191,22 @@ Rapid Desktop Foundation 已在 additive Migration 0005/schema 5 中实现首个
 
 ## 18. Agent 架构兼容基线
 
-自 2026-08-24 起，Agent 相关模块与术语以
-`FIELORA_V0.1_AGENT_ARCHITECTURE_SPEC.md` 为 canonical baseline：
-`Agent = Model + Harness + Tools`。Agent Runtime 属于
-`Harness.Execution`；Electron `BrowserRuntime`、`WorkspaceRuntime` 与
-Rust `ToolRuntime` 是 capability/tool backends，不构成第四层。现有
-Provider、Project、Conversation、schema 6、permission 与 Browser security
-合同不因此改变。2026-08-28 起 Harness 八域固定为 Ingress & Context、
-Work Scope & Goal、Continuity、Orchestration、Governance、Execution、
-Verification & Evidence 与 IDR（Individualized Disposition Runtime）；
-`Adaptation` 不再是一级域。Memory 是 cross-cutting Domain，Agent Profile 是
-Fielora-owned versioned product definition；均不构成新 Runtime。历史 Bounded
-IDR 的当前名称为 Entry Intent Resolver。
+当前 canonical baseline 为 FIELORA_V0.1_AGENT_ARCHITECTURE_SPEC.md，按用户
+2026-09-24 最新决定采用 Model + Harness + Capability。旧 Tools 顶层拓宽为
+Fielora 的能力资产与实现，现有 ToolExecutor/ToolProvider 接口不变；不存在第四个 Agent 层。
+
+Harness 按 Ingress、Context、Model Runtime、Orchestration / Control、
+Capability Invocation / Execution Control、Continuity、Governance、
+Verification & Recovery、Observability 九层职责组织，并沿用作诊断框架。
+模型智能和 Provider wire adapter 属于 Model；L3 负责调用控制。具体工具后端
+属于 Capability；L5 负责绑定、调度和调用生命周期，L7 决策并由后端落实不变量。
+
+工程映射、现有能力与尚未实现的范围见 AGENT_ENGINEERING_VIEWS_V0.1.md。
+九层不是九个服务或顺序执行流水线，不恢复 Control/Capability/Execution 三平面。
+Work Scope & Goal 纳入 L4，相关权限与验收仍分别归 L7/L8。
+
+## 19. IDR 当前状态
+
+IDR 已退出生产运行链路，保留历史代码/数据/迁移与实验测试。
+旧八域和七域为历史组织口径，当前使用 Harness 九层。Agent Profile、当前用户约束和
+对话历史不依赖 IDR；Memory 为跨域语义。此次架构文档调整不新增权限、状态、迁移或运行时。

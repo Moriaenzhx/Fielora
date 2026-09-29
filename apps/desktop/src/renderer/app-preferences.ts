@@ -1,4 +1,20 @@
+import type { AgentResourceBudget } from '@fielora/contracts';
+
+export const defaultAgentResourceBudget: AgentResourceBudget = {
+  max_execution_ms: 3_600_000, max_input_tokens: 0, max_output_tokens: 0,
+};
+
+export function normalizeAgentResourceBudget(value: unknown): AgentResourceBudget {
+  const input = record(value) ?? {};
+  const limit = (key: keyof AgentResourceBudget, min: number, max: number) => {
+    const number = input[key];
+    return typeof number === 'number' && Number.isSafeInteger(number) && number >= min && number <= max ? number : defaultAgentResourceBudget[key];
+  };
+  return { max_execution_ms: limit('max_execution_ms', 60_000, 86_400_000), max_input_tokens: 0, max_output_tokens: 0 };
+}
+
 export type StartupDestination = 'PROJECTS' | 'NOW' | 'BROWSE';
+export type AgentDisplayMode = 'COMPACT' | 'DETAILED';
 export type UiLanguagePreference = 'SYSTEM' | 'ZH_CN' | 'EN';
 export type UiLocale = 'zh-CN' | 'en';
 export type AppearanceMode = 'SYSTEM' | 'LIGHT' | 'DARK';
@@ -55,6 +71,8 @@ export interface AppearancePreferences {
 
 export interface AppPreferences {
   version: 2;
+  agentDisplayMode: AgentDisplayMode;
+  agentResourceBudget: AgentResourceBudget;
   startupDestination: StartupDestination;
   languagePreference: UiLanguagePreference;
   appearance: AppearancePreferences;
@@ -87,7 +105,7 @@ export const defaultAppearancePreferences: AppearancePreferences = {
 };
 
 export const defaultAppPreferences: AppPreferences = {
-  version: 2, startupDestination: 'PROJECTS', languagePreference: 'SYSTEM', appearance: defaultAppearancePreferences,
+  version: 2, agentDisplayMode: 'COMPACT', agentResourceBudget: { ...defaultAgentResourceBudget }, startupDestination: 'PROJECTS', languagePreference: 'SYSTEM', appearance: defaultAppearancePreferences,
 };
 
 function record(value: unknown): Record<string, unknown> | null {
@@ -163,7 +181,7 @@ function normalizeAppearance(value: unknown, legacy?: Record<string, unknown>): 
 }
 
 function freshDefaults(): AppPreferences {
-  return { version: 2, startupDestination: 'PROJECTS', languagePreference: 'SYSTEM', appearance: { ...defaultAppearancePreferences, advancedColorOverrides: {} } };
+  return { version: 2, agentDisplayMode: 'COMPACT', agentResourceBudget: { ...defaultAgentResourceBudget }, startupDestination: 'PROJECTS', languagePreference: 'SYSTEM', appearance: { ...defaultAppearancePreferences, advancedColorOverrides: {} } };
 }
 
 export function readAppPreferences(storage: Pick<PreferenceStorage, 'getItem'>): AppPreferences {
@@ -179,6 +197,8 @@ export function normalizeAppPreferences(value: unknown): AppPreferences {
   if (!parsed) return freshDefaults();
   return {
     version: 2,
+    agentDisplayMode: oneOf(parsed.agentDisplayMode, ['COMPACT', 'DETAILED'], 'COMPACT'),
+    agentResourceBudget: normalizeAgentResourceBudget(parsed.agentResourceBudget),
     startupDestination: oneOf(parsed.startupDestination, ['PROJECTS', 'NOW', 'BROWSE'], defaultAppPreferences.startupDestination),
     languagePreference: oneOf(parsed.languagePreference, ['SYSTEM', 'ZH_CN', 'EN'], defaultAppPreferences.languagePreference),
     appearance: normalizeAppearance(parsed.appearance, parsed),

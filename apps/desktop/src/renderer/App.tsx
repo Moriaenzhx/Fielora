@@ -12,6 +12,7 @@ import { LibraryScreen } from './LibraryScreen';
 import { ScheduledTasksScreen } from './ScheduledTasksScreen';
 import { SelectMenu, TextActionDialog } from './UiPrimitives';
 import { applyAppPreferences, readAppPreferences, resolveAppearance, resolveTitlebarCaption, writeAppPreferences, type AppPreferences } from './app-preferences';
+import { AgentDisplayContext } from './agent-display';
 import type { AppView } from './view-state';
 import { notifyUiLanguagePreferenceChanged } from './ui-locale';
 import {
@@ -259,7 +260,7 @@ export function App() {
     return <main className="startup" data-testid="startup-screen"><img className="brand-logo" src={fieloraLogo} alt="Fielora" /><h1>{failed ? 'Fielora Core 暂时不可用' : '正在启动 Fielora…'}</h1><p>{failed ? (error || '核心服务未能启动。你可以重试，或打开日志目录查看详情。') : '正在恢复你的 Field Reality。'}</p>{failed && <div className="actions"><button onClick={() => void window.fielora.core.retry()} data-testid="retry-core">重试</button><button className="secondary" onClick={() => void window.fielora.core.openLogs()}>打开日志目录</button><button className="quiet" onClick={() => void window.fielora.core.quit()}>退出</button></div>}</main>;
   }
 
-  if (screen === 'projects') return <ProjectWorkspace onModelSelectionChange={setModelSelection} onNow={goNow} onBrowse={goBrowse} onFields={goFields} onSettings={goProjectSettings} newConversationRequest={newConversationRequest} addProjectRequest={addProjectRequest} workspaceRequest={workspaceRequest} />;
+  if (screen === 'projects') return <AgentDisplayContext.Provider value={preferences.agentDisplayMode}><ProjectWorkspace onModelSelectionChange={setModelSelection} onNow={goNow} onBrowse={goBrowse} onFields={goFields} onSettings={goProjectSettings} newConversationRequest={newConversationRequest} addProjectRequest={addProjectRequest} workspaceRequest={workspaceRequest} /></AgentDisplayContext.Provider>;
 
   if (screen === 'library') return <LibraryScreen onProjects={goProjects} onNow={goNow} onBrowse={goBrowse} onFields={goFields} onNewConversation={goNewConversation} onSettings={goSettings} />;
 

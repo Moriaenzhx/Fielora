@@ -121,3 +121,11 @@ test('clarification display follows the question then the accepted answer withou
   events.push({ kind: 'CHECKPOINT_CREATED', payload: { kind: 'USER_INPUT_RECEIVED', user_message_id: 'answer' } } as AgentEventView);
   assert.equal(agentTurnDisplayAnchor(messages, events, 'user'), 'answer');
 });
+
+test('an evidenced blocker stays visible before the paused task and is not its terminal answer', () => {
+  const messages = [{ id: 'user', role: 'USER', created_at: 10 }, { id: 'blocker', role: 'ASSISTANT', created_at: 25, invocation_id: null }] as unknown as ConversationMessageView[];
+  const run = { id: 'run', created_at: 20, status: 'PAUSED' } as AgentRunView;
+  const events = [{ kind: 'RUN_PAUSED', payload: { reason: 'AGENT_TASK_BLOCKED', outcome_message_id: 'blocker' } }] as AgentEventView[];
+  assert.equal(agentTurnDisplayAnchor(messages, events, 'user'), 'blocker');
+  assert.deepEqual(agentTurnOwnership(messages, run, events), { userMessageId: 'user', assistantMessageId: null });
+});

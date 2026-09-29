@@ -77,8 +77,13 @@ function durableReviewFragment(path: string, before: string, after: string): { d
   const added = afterLines.slice(prefix, afterLines.length - suffix);
   const lines = [before ? `--- a/${path}` : '--- /dev/null', after ? `+++ b/${path}` : '+++ /dev/null'];
   if (removed.length > 0 || added.length > 0) {
-    lines.push(`@@ -${prefix + 1},${removed.length} +${prefix + 1},${added.length} @@`);
+    const leading = beforeLines.slice(Math.max(0, prefix - 3), prefix);
+    const trailing = beforeLines.slice(beforeLines.length - suffix, beforeLines.length - suffix + Math.min(3, suffix));
+    const start = prefix - leading.length + 1;
+    lines.push(`@@ -${start},${leading.length + removed.length + trailing.length} +${start},${leading.length + added.length + trailing.length} @@`);
+    lines.push(...leading.map((line) => ` ${line}`));
     lines.push(...removed.map((line) => `-${line}`), ...added.map((line) => `+${line}`));
+    lines.push(...trailing.map((line) => ` ${line}`));
   }
   return {
     diff: lines.join('\n'), additions: added.length, deletions: removed.length,

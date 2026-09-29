@@ -110,7 +110,7 @@ export class AgentBrowserHost {
     if (verify && (!plan?.cases.some(c => c.id === args.case_id) || !Array.isArray(args.checks)
       || args.checks.length < 1 || args.checks.length > 32 || !args.checks.every(c => c && properties.includes(c.property)
         && typeof c.expected === 'string' && c.expected.length <= 2000 && (!['contains', 'absent'].includes(c.property) || c.expected.length > 0)))) throw new Error('BROWSER_INVALID_CHECK');
-    if (action === 'open' || action === 'request_login') this.reveal(input.run_id, input.conversation_id);
+    if (['open', 'inspect', 'screenshot', 'request_login'].includes(action) || verify) this.reveal(input.run_id, input.conversation_id);
     const runtime = this.runtime();
     const result = await runtime.executeAgent(input.run_id, { action, url: args.url as string | undefined, width: args.width as number | undefined, height: args.height as number | undefined,
       snapshot_id: args.snapshot_id as string | undefined, next_snapshot_id: '', ref: args.ref as string | undefined,

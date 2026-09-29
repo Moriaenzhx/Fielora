@@ -176,7 +176,7 @@ a.equal(r.dictionary[12045],'Excel导出');a.equal(r.dictionary[12048],'知识�
   await cdp.eval('window.fieloraTest.killCore()');
   await wait(`window.fielora.core.getHealth().then(h=>h.state==='READY'&&h.pid!==${previousPid})`);
   const inherited = await settled(await start(inputConversation, 'FIELORA_AGENT_FIXTURE_INPUT_RETENTION 分析上面的图片'));
-  assert.equal(inherited.run.status, 'PAUSED'); assert.equal(inherited.run.error_code, 'AGENT_TOKEN_BUDGET_EXHAUSTED');
+  assert.equal(inherited.run.status, 'PAUSED'); assert.equal(inherited.run.error_code, 'AGENT_TIME_BUDGET_EXHAUSTED');
   assert.equal(inherited.events.find(e => e.payload.kind === 'REFERENCED_INPUTS_RESTORED').payload.source_run_id, original.run.id);
   assert.equal(inherited.events.find(e => e.kind === 'MODEL_COMPLETED').payload.prompt.image_count, 2);
   await cdp.eval(`window.fielora.agent.cancel({run_id:${JSON.stringify(inherited.run.id)}})`);

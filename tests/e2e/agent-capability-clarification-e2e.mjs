@@ -99,6 +99,52 @@ try {
   assert.equal((await cdp.eval(`window.fielora.agent.list({conversation_id:${JSON.stringify(conversation.id)}})`)).length,1);
   const replay=await cdp.eval(`window.fielora.agent.resume({run_id:${JSON.stringify(run.id)},user_message_id:${JSON.stringify(foreignMessage.id)}}).then(()=>null,e=>String(e))`);
   assert.ok(replay);
+  await rm(path.join(projectRoot,'clarified.txt'));
+  // Reproduce the user's actual counterquestion, including an unexplained
+  // repeated model proposal and a later effect in that rejected batch.
+  const counterConversation=await create('联网反问后重新判断');
+  const counterRun=await start(counterConversation,'联网反问澄清回归样例');
+  assert.equal((await settled(counterRun)).run.error_code,'AGENT_USER_INPUT_REQUIRED');
+  await restartApp();
+  await show(counterConversation);
+  async function answerVisibleQuestion(text) {
+    await wait("document.querySelector('[data-testid=agent-pause-notice]')");
+    await cdp.eval(`(()=>{const el=document.querySelector('textarea[name=prompt]');const setter=Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype,'value').set;setter.call(el,${JSON.stringify(text)});el.dispatchEvent(new Event('input',{bubbles:true}));})()`);
+    await wait("!document.querySelector('[data-testid=send-message]').disabled");
+    await cdp.eval("document.querySelector('[data-testid=send-message]').click()");
+  }
+  await answerVisibleQuestion('这个你不可以联网搜索吗');
+  await wait(`window.fielora.agent.get({run_id:${JSON.stringify(counterRun.id)}}).then(r=>r.current_step>=4)`);
+  const counterPaused=await settled(counterRun);
+  assert.equal(counterPaused.run.status,'PAUSED');
+  assert.equal(counterPaused.run.error_code,'AGENT_USER_INPUT_REQUIRED');
+  assert.ok(counterPaused.tools.some(t=>t.error_code==='AGENT_CLARIFICATION_REPEATED'));
+  assert.equal(counterPaused.tools.filter(t=>t.name==='request_user_input'&&t.status==='COMPLETED').length,2);
+  assert.ok(!counterPaused.tools.some(t=>t.arguments.path==='must-not-exist.txt'));
+  await assert.rejects(readFile(path.join(projectRoot,'must-not-exist.txt')));
+  const counterMessages=await cdp.eval(`window.fielora.conversation.listMessages({conversation_id:${JSON.stringify(counterConversation.id)}})`);
+  assert.equal(counterMessages.filter(m=>m.role==='ASSISTANT').length,2);
+  assert.ok(counterMessages.at(-1).content.includes('没有注册 web.search/web.fetch'));
+  const answeredMessage=counterMessages.find(m=>m.content==='这个你不可以联网搜索吗');
+  const counterCalls=counterPaused.events.filter(e=>e.kind==='MODEL_COMPLETED'&&e.payload.step>=2);
+  assert.ok(counterCalls.length>=3);
+  for(const event of counterCalls) {
+    assert.equal(event.payload.prompt.user_input.replies.at(-1).source_user_message_id,answeredMessage.id);
+    assert.ok(event.payload.prompt.visible_tool_names.includes('capability_status'));
+    assert.ok(!event.payload.prompt.visible_tool_names.includes('web.search'));
+  }
+  await wait("document.body.innerText.includes('没有注册 web.search/web.fetch')");
+  await captureScreenshot(cdp,path.join(evidence,'counterquestion-explained.png'));
+  await writeFile(path.join(evidence,'counterquestion.json'),JSON.stringify(counterPaused,null,2));
+  await restartApp();
+  await show(counterConversation);
+  await answerVisibleQuestion('fixture-approved-source');
+  await wait(`window.fielora.agent.get({run_id:${JSON.stringify(counterRun.id)}}).then(r=>r.current_step>=5)`);
+  const counterCompleted=await settled(counterRun);
+  assert.equal(counterCompleted.run.status,'COMPLETED');
+  assert.equal((await cdp.eval(`window.fielora.agent.list({conversation_id:${JSON.stringify(counterConversation.id)}})`)).length,1);
+  assert.ok(counterCompleted.tools.some(t=>t.name==='run_command'&&t.receipt?.success===true));
+  console.log('CLARIFICATION_COUNTERQUESTION_RESTART_REJECTION_EXPLANATION_PASS');
   const regularConversation=await create('普通暂停按钮');
   const regular=await settled(await start(regularConversation,'修复失败样例'));
   assert.equal(regular.run.status,'PAUSED');
@@ -118,7 +164,7 @@ try {
   await cdp.eval("[...document.querySelectorAll('.agent-pause-actions button')].find(b=>b.textContent==='停止任务').click()");
   await wait(`window.fielora.agent.get({run_id:${JSON.stringify(regular.run.id)}}).then(r=>r.status==='CANCELLED')`);
   await wait("document.querySelectorAll('.agent-pause-actions button,[data-testid=stop-agent]').length===0");
-  await writeFile(path.join(evidence,'summary.json'),JSON.stringify({status:'PASS',fixture:'deterministic; no actual Archify installation or provider call',sameRun:run.id,restart:true,invalidAnswersRejected:4,noPostQuestionMutation:true,resumeAndStopButtons:true,layout},null,2));
+  await writeFile(path.join(evidence,'summary.json'),JSON.stringify({status:'PASS',fixture:'deterministic; no actual Archify installation or provider call',sameRun:run.id,restart:true,invalidAnswersRejected:4,noPostQuestionMutation:true,counterquestion:{run:counterRun.id,unexplainedRepeatRejected:true,explainedRepeatVisible:true,nativeLatestReply:true,noPostRejectionMutation:true,restart:true,verifiedFixtureCompletion:true},resumeAndStopButtons:true,layout},null,2));
   console.log('AGENT_CAPABILITY_CLARIFICATION_E2E=PASS');
 } catch (error) {
   if(cdp) { await captureScreenshot(cdp,path.join(evidence,'failure.png')).catch(()=>{});await writeFile(path.join(evidence,'failure-ui.txt'),await cdp.eval('document.body.innerText').catch(()=>'')); }

@@ -136,6 +136,17 @@ test('Rich Result message bridge admits only bounded typed sidecars', () => {
 test('Complete Agent bridge accepts only bounded typed execution and approval payloads', () => {
   const start={field_id:fieldId,conversation_id:fieldId,provider_config_id:fieldId,model_id:'gpt-test',task:'Fix the failing test',permission:'REVIEW_CHANGES',max_steps:24} as const;
   assert.equal(validateStartAgent(start).permission,'REVIEW_CHANGES');
+  const budget = { max_execution_ms: 14_400_000, max_input_tokens: 10_000_000, max_output_tokens: 262_144 };
+  assert.deepEqual(validateStartAgent({ ...start, resource_budget: budget }).resource_budget, budget);
+  assert.deepEqual(validateResumeAgent({ run_id: fieldId, resource_budget: budget }).resource_budget, budget);
+  assert.deepEqual(validateStartAgent({ ...start, resource_budget: { max_execution_ms: 5_820_000 } }).resource_budget, { max_execution_ms: 5_820_000, max_input_tokens: 0, max_output_tokens: 0 });
+  for (const resource_budget of [
+    { ...budget, max_execution_ms: 86_400_001 }, { ...budget, max_input_tokens: -1 },
+    { ...budget, max_output_tokens: 1.5 }, { ...budget, max_output_tokens: '262144' }, { ...budget, unlimited: true },
+  ]) {
+    assert.throws(() => validateStartAgent({ ...start, resource_budget }));
+    assert.throws(() => validateResumeAgent({ run_id: fieldId, resource_budget }));
+  }
   assert.equal(validateStartAgent({...start,max_steps:null}).max_steps,null);
   assert.equal(validateStartAgent({...start,user_message_id:fieldId}).user_message_id,fieldId);
   assert.throws(()=>validateStartAgent({...start,user_message_id:'not-an-id'}));
