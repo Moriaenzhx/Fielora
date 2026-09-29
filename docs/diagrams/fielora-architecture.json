@@ -1,0 +1,251 @@
+{
+  "schema_version": 1,
+  "diagram_type": "architecture",
+  "meta": {
+    "title": "Fielora · 系统架构",
+    "locale": "zh-CN",
+    "quality_profile": "showcase",
+    "viewBox": [
+      1330,
+      650
+    ],
+    "repository": {
+      "url": "https://github.com/Moriaenzhx/Fielora",
+      "revision": "7919a64c4b6aa8409a61fcf4d39aa1b027460415",
+      "provider": "github"
+    }
+  },
+  "components": [
+    {
+      "id": "desktop",
+      "type": "frontend",
+      "label": "桌面工作面",
+      "sublabel": "Project · 对话 · 文件 · 审查",
+      "pos": [
+        30,
+        280
+      ],
+      "size": [
+        220,
+        76
+      ],
+      "sources": [
+        {
+          "path": "apps/desktop/src/renderer/App.tsx"
+        }
+      ]
+    },
+    {
+      "id": "host",
+      "type": "backend",
+      "label": "Electron 宿主",
+      "sublabel": "可信 IPC · 窗口与原生集成",
+      "pos": [
+        360,
+        280
+      ],
+      "size": [
+        220,
+        76
+      ],
+      "sources": [
+        {
+          "path": "apps/desktop/src/main.ts"
+        }
+      ]
+    },
+    {
+      "id": "harness",
+      "type": "backend",
+      "label": "Harness · 九层职责",
+      "sublabel": "Rust Core · AgentCoordinator",
+      "pos": [
+        710,
+        280
+      ],
+      "size": [
+        240,
+        76
+      ],
+      "sources": [
+        {
+          "path": "crates/fielora-core/src/agent_runtime.rs"
+        }
+      ]
+    },
+    {
+      "id": "capability",
+      "type": "backend",
+      "label": "Capability",
+      "sublabel": "目录与资产 · 工具后端",
+      "pos": [
+        1080,
+        280
+      ],
+      "size": [
+        220,
+        76
+      ],
+      "sources": [
+        {
+          "path": "crates/fielora-agent/src/lib.rs"
+        }
+      ]
+    },
+    {
+      "id": "model",
+      "type": "cloud",
+      "label": "Model",
+      "sublabel": "中立接口 · 多供应商适配器",
+      "pos": [
+        710,
+        60
+      ],
+      "size": [
+        240,
+        76
+      ],
+      "sources": [
+        {
+          "path": "crates/fielora-model/src/lib.rs"
+        }
+      ]
+    },
+    {
+      "id": "storage",
+      "type": "database",
+      "label": "持久化与恢复",
+      "sublabel": "StorageWorker · SQLite",
+      "pos": [
+        710,
+        500
+      ],
+      "size": [
+        240,
+        76
+      ],
+      "sources": [
+        {
+          "path": "crates/fielora-storage/src/lib.rs"
+        }
+      ]
+    },
+    {
+      "id": "resources",
+      "type": "backend",
+      "label": "Skill 与扩展",
+      "sublabel": "Skill · Resource · Plugin",
+      "pos": [
+        1080,
+        60
+      ],
+      "size": [
+        220,
+        76
+      ],
+      "sources": [
+        {
+          "path": "crates/fielora-agent/src/skills.rs"
+        }
+      ]
+    },
+    {
+      "id": "backends",
+      "type": "external",
+      "label": "工具后端",
+      "sublabel": "文件 · 命令 · Web · MCP",
+      "pos": [
+        1080,
+        500
+      ],
+      "size": [
+        220,
+        76
+      ],
+      "sources": [
+        {
+          "path": "crates/fielora-agent/src/lib.rs"
+        }
+      ]
+    }
+  ],
+  "connections": [
+    {
+      "from": "desktop",
+      "to": "host",
+      "label": "可信 IPC",
+      "variant": "emphasis"
+    },
+    {
+      "from": "host",
+      "to": "harness",
+      "label": "FIPC",
+      "variant": "emphasis"
+    },
+    {
+      "from": "harness",
+      "to": "capability",
+      "label": "受控调用",
+      "variant": "emphasis"
+    },
+    {
+      "from": "harness",
+      "to": "model",
+      "label": "请求与响应",
+      "fromSide": "top",
+      "toSide": "bottom"
+    },
+    {
+      "from": "harness",
+      "to": "storage",
+      "label": "状态与证据",
+      "fromSide": "bottom",
+      "toSide": "top",
+      "labelDy": 85
+    },
+    {
+      "from": "capability",
+      "to": "resources",
+      "label": "发现与加载",
+      "fromSide": "top",
+      "toSide": "bottom",
+      "variant": "dashed"
+    },
+    {
+      "from": "capability",
+      "to": "backends",
+      "label": "操作与回执",
+      "fromSide": "bottom",
+      "toSide": "top",
+      "labelDy": 85
+    }
+  ],
+  "cards": [
+    {
+      "dot": "violet",
+      "title": "Model · 提出行动",
+      "items": [
+        "理解、推理、生成；不自行授予权限",
+        "fielora-model 归一化模型调用和响应"
+      ]
+    },
+    {
+      "dot": "emerald",
+      "title": "Harness · 控制与验证",
+      "items": [
+        "L1 接入 · L2 上下文 · L3 模型调用",
+        "L4 编排 · L5 执行控制 · L6 连续性",
+        "L7 治理 · L8 验证恢复 · L9 可观测性"
+      ]
+    },
+    {
+      "dot": "cyan",
+      "title": "Capability · 提供能力",
+      "items": [
+        "Tool 是可执行子集；Skill 提供操作指导",
+        "浏览器由 Electron 承载；原生工具由 Rust 承载",
+        "九层是职责划分，不是九个独立服务"
+      ]
+    }
+  ]
+}
