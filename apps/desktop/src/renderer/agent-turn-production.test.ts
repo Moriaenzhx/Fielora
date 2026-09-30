@@ -26,7 +26,7 @@ test('production conversation has one turn-owned agent presentation path', () =>
   assert.match(turn, /data-agent-turn="true"/);
   assert.match(turn, /data-agent-kind=\{requestKind\}/);
   assert.match(turn, /data-testid="agent-answer"/);
-  assert.match(turn, /!textOnlyAnswer && !terminal/);
+  assert.match(turn, /!textOnlyAnswer && run && presentation/);
   assert.match(turn, /data-agent-run-id=/);
   assert.match(turn, /data-user-message-id=/);
   assert.match(turn, /data-testid="agent-execution-status"/);
@@ -91,17 +91,13 @@ test('transient model-loop stages do not become permanent completed steps and re
   assert.doesNotMatch([workspace, styles].join('\n'), /message-navigator/);
 });
 
-test('current run state is separate from collapsed completed chronology', () => {
-  assert.match(turn, /const \[detailsOpen, setDetailsOpen\] = useState\(displayMode === 'DETAILED'\)/);
-  assert.match(turn, /if \(terminal\) setDetailsOpen\(false\)/);
-  assert.match(turn, /detailsOpen && <div className="agent-run-details"/);
-  assert.match(turn, /data-testid="agent-progress-summary"/);
-  assert.match(turn, /function currentRunStateLabel/);
-  assert.match(turn, /等待批准|正在思考|正在验证/);
-  assert.match(turn, /return <div className=\{`agent-progress-summary/);
-  assert.doesNotMatch(turn, /return <aside className=\{`agent-progress-summary/);
-  assert.match(turn, /function CompletedActivityHistory/);
-  assert.doesNotMatch(turn, /\{completedSteps\}\/\{presentation\.totalSteps\} 步|data-step-current|data-step-total/);
+test('one stream survives the live-to-terminal transition and states remain distinct', () => {
+  assert.doesNotMatch(turn, /AgentDisplayContext|displayMode|LiveActivityPreview/);
+  assert.match(turn, /!textOnlyAnswer && run && presentation/);
+  assert.match(turn, /data-testid="agent-pause-notice"/);
+  assert.match(turn, /stopping \? '正在停止'/);
+  assert.match(turn, /currentRunStateLabel/);
+  assert.equal((turn.match(/<ConversationActivityStream /g) ?? []).length, 1);
 });
 
 test('review uses a compact file picker and continuous numbered diff with shared controls', () => {
@@ -114,7 +110,7 @@ test('review uses a compact file picker and continuous numbered diff with shared
 
 test('action execution starts with a factual preparation state and never invents model progress', () => {
   assert.match(turn, /activityItems\.length === 0/);
-  assert.match(turn, /data-execution-stage=\{run.status === 'PAUSED' \? 'PAUSED'.*thinking \? 'THINKING' : 'ACTIVE'\}/);
+  assert.match(turn, /data-execution-stage=\{run.status\}/);
   assert.doesNotMatch(turn, /正在准备任务上下文/);
   assert.match(projection, /event\.kind !== 'ASSISTANT_NARRATIVE'/);
   assert.doesNotMatch(projection, /text_delta[^\n]*Narrative/);
@@ -124,11 +120,8 @@ test('action execution starts with a factual preparation state and never invents
 
 test('running presentation is narrative and activity chronology followed by honest current state', () => {
   assert.doesNotMatch(workspace, /agent-execution-layer|setExecutionHost|executionHost=\{/);
-  assert.match(turn, /<LiveActivityPreview items=\{activityItems\}/);
   assert.match(turn, /<AgentProgressSummary run=\{run\}/);
   assert.match(turn, /data-testid="agent-execution-status"/);
-  assert.match(turn, /data-testid="agent-run-details"/);
-  assert.match(turn, /const statusLabel = currentRunStateLabel\(run, events, tools, thinking\)/);
   assert.doesNotMatch(turn, /第 \{presentation\.activeStep\}|presentation\.totalSteps/);
   const activityStart = turn.indexOf('function ConversationActivityStream');
   const activityEnd = turn.indexOf('function AgentProgressSummary', activityStart);
@@ -138,7 +131,7 @@ test('running presentation is narrative and activity chronology followed by hone
   assert.match(turn, /toolTitle\(tool\.name\)/);
   assert.match(turn, /toolDetail\(tool\)/);
   assert.match(turn, /activityTimestamp\(entry\.completedAt/);
-  assert.match(turn, /className="conversation-tool-body"/);
+  assert.match(turn, /className="operation-detail"/);
   assert.doesNotMatch(turn, /agent-completion-time|function CompletionTime/);
   assert.ok((turn.match(/<MarkdownMessage/g)?.length ?? 0) >= 3);
 });
@@ -183,39 +176,25 @@ test('terminal result expands changed files and routes an exact file into Human 
   assert.match(workspace, /historicalReview\?\.review \?\? agentReview/);
 });
 
-test('activity uses compact native disclosure without status dots or warning backgrounds', () => {
-  const activityStart = turn.indexOf('function ActivityGroup');
-  const activityEnd = turn.indexOf('function ActivityApprovalRecord', activityStart);
-  const activitySource = turn.slice(activityStart, activityEnd);
-  const activityStylesStart = styles.indexOf('.conversation-activity-stream {');
-  const activityStylesEnd = styles.indexOf('.agent-live-files {', activityStylesStart);
-  const activityStyles = styles.slice(activityStylesStart, activityStylesEnd);
-  assert.match(activitySource, /<AppIcon name=\{inspectionBatch \? 'folderOpen' : activityIcon\(item\.groupKind\)\}/);
-  assert.match(activitySource, /<details open=\{detailed \|\| undefined\} className=\{`conversation-activity-group/);
-  assert.match(activitySource, /<summary className="conversation-activity-group-summary"/);
-  assert.match(activitySource, /if \(!detailed\) return <CompactActivityGroup/);
-  assert.doesNotMatch(activitySource, /conversation-activity-group-summary"[^>]*onClick|conversation-activity-group[^\n]*is-expanded/);
-  assert.doesNotMatch(activitySource, /<i aria-hidden|>已完成</);
-  assert.doesNotMatch(activityStyles, /conversation-activity-entries > li > i|conversation-activity-group \{[^}]*border-left|surface-warning|color-warning|color-text-success|color-text-danger/s);
-  assert.match(activityStyles, /\.conversation-activity-stream \{[^}]*background: transparent;/s);
-  assert.match(activityStyles, /\.conversation-activity-group \{[^}]*background: transparent;/s);
-  assert.match(activityStyles, /\.agent-progress-summary \{[^}]*background: transparent;/s);
-  assert.match(activityStyles, /\.agent-progress-summary-trigger \{[^}]*border-top: 1px solid var\(--fl-color-border-soft\);[^}]*background: transparent;[^}]*box-shadow: none;/s);
-  assert.doesNotMatch(turn, /agent-progress-orbit/);
-  assert.match(turn, /agent-status-indicator/);
+test('activity has one lightweight list and one selected detail outside its scrollport', () => {
+  const css = readFileSync(path.join(rendererRoot, 'styles/conversation-execution.css'), 'utf8');
+  assert.match(turn, /data-testid="operation-group-toggle" aria-expanded=\{state.open\}/);
+  assert.match(turn, /data-testid="operation-list"/);
+  assert.match(turn, /OperationDetail key=\{selected.id\}/);
+  assert.match(turn, /activityDetailFields\(entry.tool\)/);
+  assert.match(turn, /window.fielora.clipboard.writeText\(field.text\)/);
+  assert.doesNotMatch(turn, /className="conversation-tool-body"|className="compact-command-panel" data-testid="compact-operation-detail"/);
+  assert.match(css, /max-height: 256px; overflow-y: auto/);
+  assert.match(css, /920px/);
+  assert.match(css, /@container conversation \(max-width: 640px\)/);
 });
 
-test('activity presentation filters runtime terminology and reveals groups and operations separately', () => {
-  assert.match(projection, /tool\.name === 'delegate_readonly'/);
-  assert.match(turn, /if \(!knownNames\.has\(tool\.name\)\)/);
-  assert.match(turn, /create_file: '创建'.*replace_text: '修改'.*write_file: '写入'/s);
-  assert.match(turn, /item\.entries, \.\.\.\(item\.notes/);
-  assert.match(turn, /<details open=\{detailed \|\| undefined\} className="conversation-tool-detail">/);
-  assert.match(turn, /<summary className="conversation-tool-summary"/);
-  assert.match(turn, /<MarkdownMessage content=\{text\} streaming=\{streaming\} activityFiles=\{activityFiles\}\/>/);
-  assert.doesNotMatch(turn, /<details className="conversation-narrative-detail compact-narrative-detail">/);
-  assert.match(projection, /if \(event\.kind === 'PHASE_CHANGED'\) \{\s*currentGroup = null;\s*continue;/s);
-  assert.match(projection, /if \(receiptToolId && projectedToolIds\.has\(receiptToolId\)\) continue/);
+test('progress Markdown is rendered without lexical filtering or preview truncation', () => {
+  const start = turn.indexOf('function NarrativeBlock');
+  const narrative = turn.slice(start, turn.indexOf('function ConversationActivityStream', start));
+  assert.match(narrative, /<MarkdownMessage content=\{text\} streaming=\{streaming\}/);
+  assert.doesNotMatch(narrative, /preview|slice\(|expandedContent|compact-narrative/);
+  assert.doesNotMatch(projection, /isRoutineNarrative/);
 });
 
 test('activity uses the conversation scroll only and running composer actions keep the active accent', () => {
@@ -249,15 +228,11 @@ test('terminal duration leads collapsed chronology and the exact result Markdown
     'hello',
     '```',
   ].join('\n');
-  assert.match(turn, /<button type="button" className="agent-terminal-runtime"[^>]*data-testid="agent-execution-detail-toggle"/);
-  assert.match(turn, />已处理 \{result\.duration\}</);
-  assert.match(turn, /function CompletedActivityHistory/);
+  assert.match(turn, /已处理 \{presentation.elapsed\}/);
   assert.match(turn, /className="agent-execution-detail is-history"/);
-  assert.match(turn, /<CompletedActivityHistory events=\{events\} items=\{activityItems\} tools=\{tools\} activityFiles=\{activityFiles\}\/>/);
-  const terminalRuntime = turn.indexOf('<button type="button" className="agent-terminal-runtime"');
-  const terminalDetail = turn.indexOf('{detailOpen && <>{executionDetail}', terminalRuntime);
-  const terminalMarkdown = turn.indexOf('<MarkdownMessage content={markdown} references={message?.references ?? []} onOpenReference={onOpenReference} onOpenImage={onOpenImage} modernStatusMarkers/>', terminalDetail);
-  assert.ok(terminalRuntime >= 0 && terminalRuntime < terminalDetail && terminalDetail < terminalMarkdown);
+  const execution = turn.indexOf('<ConversationActivityStream items={activityItems}');
+  const result = turn.indexOf('<AgentTerminalResult run={run}');
+  assert.ok(execution > 0 && result > execution);
   assert.doesNotMatch(turn, /function ResultText|naturalResultParagraph|stripAnswerHeading/);
   assert.match(turn, /const markdown = message\?\.content \|\| result\.detail/);
   assert.equal(actionFixture.split('\n')[0], '## 修改');
@@ -272,16 +247,9 @@ test('terminal duration leads collapsed chronology and the exact result Markdown
   assert.match(styles, /\.agent-terminal-runtime \{[^}]*border-bottom: 1px solid var\(--fl-color-divider\)/s);
 });
 
-test('live edited files reuse applied Agent Review data and remain identical in the terminal result', () => {
+test('result files still use applied review evidence and the existing review action', () => {
   assert.match(turn, /appliedAgentReview\(review\)/);
   assert.match(reviewSource, /review\.files\.filter\(\(file\) => file\.state === 'APPLIED'\)/);
-  assert.match(turn, /data-testid="agent-live-edited-files"/);
-  assert.match(turn, /data-live-review-path=\{file\.path\}/);
-  assert.match(turn, /editedReview && editedReview\.files\.length > 0 && <LiveEditedFiles/);
   assert.match(turn, /editedReview && editedReview\.files\.length > 0 && <ChangedFiles/);
-  assert.match(turn, /detailsOpen && <div className="agent-run-details"/);
-  assert.match(turn, /\['PROPOSED', 'RUNNING', 'WAITING_APPROVAL'\]\.includes\(tool\.status\)/);
-  assert.match(turn, /再显示 \{remaining\} 个文件/);
-  assert.match(styles, /\.agent-live-files small b, \.agent-live-files small i[^}]*var\(--fl-color-text-muted\)/);
-  assert.match(styles, /\.agent-live-files small i[^}]*font-style: normal/);
+  assert.match(turn, /onReviewFile=\{onReviewFile\}/);
 });

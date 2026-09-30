@@ -1,5 +1,19 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
+import { activityDetailFields, activityStatusLabel } from './agent-activity-detail.ts';
+
+test('execution detail only displays existing fields and copies the same redacted DTO text', () => {
+  const value = { name: 'run_command', arguments: { program: 'pwsh', argv: ['-Command', '[REDACTED]'], cwd: 'project' }, receipt: { exit_code: 0, duration_ms: 1250, stdout: 'visible [REDACTED]', stderr: '' }, error_code: null } as AgentToolCallView;
+  const fields = activityDetailFields(value);
+  assert.equal(fields.find(field => field.label === '命令')?.text, 'pwsh -Command [REDACTED]');
+  assert.equal(fields.find(field => field.label === '标准输出')?.text, 'visible [REDACTED]');
+  assert.ok(!fields.some(field => ['标准错误', '执行环境', '参数'].includes(field.label)));
+  assert.equal(fields.find(field => field.label === '耗时')?.text, '1250 ms');
+  assert.deepEqual(activityDetailFields({ ...value, arguments: {}, receipt: null }), []);
+  assert.equal(activityStatusLabel('UNKNOWN'), '执行状态待确认');
+  assert.equal(activityStatusLabel('CANCELLED'), '已停止');
+  assert.equal(activityStatusLabel('WAITING_APPROVAL'), '等待批准');
+});
 import type { AgentRunView, AgentToolCallView, AgentEventView } from '@fielora/contracts';
 import { goalProgressLabel, activityFailureReason, activityNarrativePreview, activityToolDescription, activityToolIssue, browserLoadPauseReason, resolveActivityFileLink } from './agent-activity-detail.ts';
 

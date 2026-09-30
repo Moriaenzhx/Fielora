@@ -1,0 +1,253 @@
+{
+  "schema_version": 1,
+  "diagram_type": "architecture",
+  "meta": {
+    "title": "Fielora 系统架构",
+    "quality_profile": "showcase",
+    "locale": "zh-CN"
+  },
+  "components": [
+    {
+      "id": "user",
+      "type": "external",
+      "label": "用户",
+      "sublabel": "开发者 / 使用者",
+      "pos": [40, 240],
+      "size": [120, 60]
+    },
+    {
+      "id": "core",
+      "type": "backend",
+      "label": "fielora-core",
+      "sublabel": "核心运行时",
+      "pos": [240, 240],
+      "size": [130, 60]
+    },
+    {
+      "id": "agent",
+      "type": "backend",
+      "label": "fielora-agent",
+      "sublabel": "Agent 工具执行器",
+      "pos": [480, 240],
+      "size": [130, 60]
+    },
+    {
+      "id": "model",
+      "type": "backend",
+      "label": "fielora-model",
+      "sublabel": "模型交互层",
+      "pos": [240, 80],
+      "size": [130, 60]
+    },
+    {
+      "id": "storage",
+      "type": "database",
+      "label": "fielora-storage",
+      "sublabel": "持久化存储",
+      "pos": [720, 240],
+      "size": [130, 60]
+    },
+    {
+      "id": "platform",
+      "type": "backend",
+      "label": "fielora-platform",
+      "sublabel": "平台基础能力",
+      "pos": [480, 420],
+      "size": [130, 60]
+    },
+    {
+      "id": "contracts",
+      "type": "backend",
+      "label": "fielora-contracts",
+      "sublabel": "类型契约",
+      "pos": [40, 560],
+      "size": [130, 60]
+    },
+    {
+      "id": "field",
+      "type": "backend",
+      "label": "fielora-field",
+      "sublabel": "字段定义",
+      "pos": [240, 560],
+      "size": [130, 60]
+    },
+    {
+      "id": "skills",
+      "type": "cloud",
+      "label": "Skills",
+      "sublabel": ".agents/skills/",
+      "pos": [720, 80],
+      "size": [130, 60]
+    },
+    {
+      "id": "browser",
+      "type": "frontend",
+      "label": "Browser",
+      "sublabel": "内置浏览器",
+      "pos": [720, 420],
+      "size": [130, 60]
+    },
+    {
+      "id": "mcp",
+      "type": "external",
+      "label": "MCP Connections",
+      "sublabel": "外部工具连接",
+      "pos": [720, 560],
+      "size": [130, 60]
+    }
+  ],
+  "boundaries": [
+    {
+      "kind": "region",
+      "label": "Fielora 核心系统",
+      "wraps": ["core", "agent", "model", "storage", "platform", "contracts", "field"]
+    }
+  ],
+  "connections": [
+    {
+      "id": "user-to-core",
+      "from": "user",
+      "to": "core",
+      "label": "用户请求",
+      "variant": "emphasis"
+    },
+    {
+      "id": "core-to-agent",
+      "from": "core",
+      "to": "agent",
+      "label": "工具调用编排",
+      "variant": "default"
+    },
+    {
+      "id": "core-to-model",
+      "from": "core",
+      "to": "model",
+      "label": "LLM 交互",
+      "variant": "default"
+    },
+    {
+      "id": "core-to-storage",
+      "from": "core",
+      "to": "storage",
+      "label": "数据读写",
+      "variant": "default",
+      "route": "auto"
+    },
+    {
+      "id": "agent-to-skills",
+      "from": "agent",
+      "to": "skills",
+      "label": "加载 Skill",
+      "variant": "dashed"
+    },
+    {
+      "id": "agent-to-browser",
+      "from": "agent",
+      "to": "browser",
+      "label": "浏览器操作",
+      "variant": "default"
+    },
+    {
+      "id": "agent-to-mcp",
+      "from": "agent",
+      "to": "mcp",
+      "label": "MCP 协议",
+      "variant": "default"
+    },
+    {
+      "id": "agent-to-platform",
+      "from": "agent",
+      "to": "platform",
+      "label": "凭证/进程管理",
+      "variant": "dashed",
+      "labelDy": 50
+    },
+    {
+      "id": "model-to-platform",
+      "from": "model",
+      "to": "platform",
+      "label": "网络请求",
+      "variant": "dashed",
+      "route": "auto"
+    },
+    {
+      "id": "storage-to-field",
+      "from": "storage",
+      "to": "field",
+      "label": "依赖",
+      "variant": "dashed",
+      "labelDy": 40
+    },
+    {
+      "id": "storage-to-platform",
+      "from": "storage",
+      "to": "platform",
+      "label": "依赖",
+      "variant": "dashed",
+      "labelDx": -60,
+      "labelDy": 20
+    },
+    {
+      "id": "agent-to-contracts",
+      "from": "agent",
+      "to": "contracts",
+      "label": "契约类型",
+      "variant": "dashed",
+      "route": "auto",
+      "labelDx": 40
+    },
+    {
+      "id": "model-to-contracts",
+      "from": "model",
+      "to": "contracts",
+      "label": "契约类型",
+      "variant": "dashed",
+      "route": "auto",
+      "labelDx": -40
+    },
+    {
+      "id": "field-to-contracts",
+      "from": "field",
+      "to": "contracts",
+      "label": "依赖",
+      "variant": "dashed",
+      "labelDy": -30
+    },
+    {
+      "id": "platform-to-contracts",
+      "from": "platform",
+      "to": "contracts",
+      "label": "依赖",
+      "variant": "dashed",
+      "route": "auto"
+    }
+  ],
+  "cards": [
+    {
+      "dot": "cyan",
+      "title": "核心层",
+      "items": [
+        "fielora-core 负责 Agent 生命周期和工具调用编排",
+        "fielora-agent 执行具体工具（文件、Git、浏览器等）"
+      ]
+    },
+    {
+      "dot": "emerald",
+      "title": "支持层",
+      "items": [
+        "fielora-model 处理 LLM 交互和网络请求",
+        "fielora-storage 提供内容寻址持久化",
+        "fielora-platform 管理凭证、进程和 MCP 连接"
+      ]
+    },
+    {
+      "dot": "rose",
+      "title": "契约与扩展",
+      "items": [
+        "fielora-contracts 定义所有 crate 共享的类型契约",
+        "fielora-field 提供结构化字段定义",
+        "Skills (.agents/skills/) 支持可扩展的 Agent 能力"
+      ]
+    }
+  ]
+}

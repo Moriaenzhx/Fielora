@@ -1,20 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import type { AgentEventKind, AgentEventView, AgentToolCallView } from '@fielora/contracts';
-import { buildConversationActivityProjection, compactActivityHistory, compactOperationTimeline, compactExecutionTimeline, currentActivityPreview, reconcileLiveNarrative, isRoutineNarrative } from './agent-activity-projection.ts';
-
-test('existing-file preparation is folded but new failures and user questions remain visible', () => {
-  for (const text of [
-    '我注意到项目中已经存在一个 fielora-architecture.json 文件。让我先读取这个现有文件，了解其结构。',
-    '我看到项目中已存在一个架构定义文件。让我先完整读取这个文件，然后使用 archify。',
-    '我已读取了现有的架构文件。现在我需要按照 skill 的工作流程进行验证。',
-  ]) assert.equal(isRoutineNarrative(text), true);
-  for (const text of [
-    '我看到之前的验证失败了。底层错误是 node:dns/promises 不存在。',
-    '我注意到项目中已经存在文件。是否允许覆盖？',
-    '已确认输入文件位于项目根目录，修改工作目录后应使用绝对输入路径。',
-  ]) assert.equal(isRoutineNarrative(text), false);
-});
+import { buildConversationActivityProjection, compactOperationTimeline, reconcileLiveNarrative } from './agent-activity-projection.ts';
 
 test('compact process preserves narrative order and stable operation identity as results arrive', () => {
   const events = [event(1, 'TOOL_PROPOSED', { tool_call_id: 'a' }), event(2, 'ASSISTANT_NARRATIVE', { text: 'A progress note', step: 1 }), event(3, 'TOOL_PROPOSED', { tool_call_id: 'b' })];
@@ -29,68 +16,54 @@ test('compact process preserves narrative order and stable operation identity as
   assert.deepEqual(compactOperationTimeline(after), after);
 });
 
-test('compact mode folds repeated preparation and completed maintenance without losing evidence', () => {
+test('all progress prose and context boundaries remain visible, including repeated preparation', () => {
   const events = [event(1,'ASSISTANT_NARRATIVE',{text:'让我读取当前文件。',step:1}),
     event(2,'TOOL_PROPOSED',{tool_call_id:'a'}),
     event(3,'ASSISTANT_NARRATIVE',{text:'让我读取当前文件。',step:2}),
-    event(4,'TOOL_PROPOSED',{tool_call_id:'b'}),
-    event(5,'ASSISTANT_NARRATIVE',{text:'验证发现连线穿过组件，需要调整布局。',step:3}),
-    event(6,'RUN_PAUSED')];
-  const raw=buildConversationActivityProjection(events,[tool('a','read_file','OBSERVE','COMPLETED'),tool('b','read_file','OBSERVE','COMPLETED')]);
-  raw.splice(3,0,{id:'context',kind:'CONTEXT',sequence:3.5,occurredAt:3,completedAt:4,beforeBytes:60000,afterBytes:40000});
-  const snapshot=JSON.stringify(raw);
-  const compact=compactOperationTimeline(raw);
-  assert.deepEqual(compact.map(i=>i.kind),['GROUP','NARRATIVE','PHASE']);
-  const group=compact[0];
-  assert.equal(group?.kind==='GROUP' && group.entries.length,2);
-  assert.equal(group?.kind==='GROUP' && group.notes?.length,2);
-  assert.equal(group?.kind==='GROUP' && group.contextNotes?.length,1);
-  assert.equal(compact[1]?.kind==='NARRATIVE' && compact[1].text,'验证发现连线穿过组件，需要调整布局。');
-  assert.equal(JSON.stringify(raw),snapshot);
-  assert.deepEqual(compactOperationTimeline(compact),compact);
+    event(4,'TOOL_PROPOSED',{tool_call_id:'b'}), event(5,'RUN_PAUSED')];
+  const raw = buildConversationActivityProjection(events,[tool('a','read_file','OBSERVE','COMPLETED'),tool('b','read_file','OBSERVE','COMPLETED')]);
+  const snapshot = JSON.stringify(raw);
+  assert.deepEqual(compactOperationTimeline(raw).map(item => item.kind), ['NARRATIVE','GROUP','NARRATIVE','GROUP','PHASE']);
+  assert.equal(JSON.stringify(raw), snapshot);
+  const narrative = buildConversationActivityProjection([events[0]!], []);
+  assert.deepEqual(compactOperationTimeline(narrative), narrative);
 });
 
-test('preparation does not flash before its tool and user questions remain visible', () => {
-  const raw=buildConversationActivityProjection([event(1,'ASSISTANT_NARRATIVE',{text:'让我读取当前文件。',step:1})],[]);
-  assert.deepEqual(compactOperationTimeline(raw),[]);
-  assert.equal(raw.length,1);
-  const question=buildConversationActivityProjection([event(2,'ASSISTANT_NARRATIVE',{text:'我需要先知道应该选择哪一种？',step:2})],[]);
-  assert.equal(compactOperationTimeline(question)[0]?.kind,'NARRATIVE');
+test('eight mixed operations form one scope; lifecycle events do not multiply calls or remove retries', () => {
+  const tools = Array.from({length:8}, (_, i) => tool(`call-${i}`, i % 2 ? 'run_command' : 'read_file', i % 2 ? 'PROCESS' : 'OBSERVE', 'COMPLETED', {path:'same-path'}));
+  const events = tools.flatMap((t,i) => [event(i*3+1,'TOOL_PROPOSED',{tool_call_id:t.id}), event(i*3+2,'TOOL_STARTED',{tool_call_id:t.id}),event(i*3+3,'TOOL_COMPLETED',{tool_call_id:t.id})]);
+  const result = compactOperationTimeline(buildConversationActivityProjection(events, tools));
+  assert.equal(result.length, 1);
+  assert.equal(result[0]?.kind === 'GROUP' && result[0].entries.length, 8);
+  assert.equal(result[0]?.id, 'operations-tool-call-0');
+  const appended = compactOperationTimeline(buildConversationActivityProjection([...events,event(25,'TOOL_PROPOSED',{tool_call_id:'ninth'})],[...tools,tool('ninth','read_file','OBSERVE','RUNNING')]));
+  assert.equal(appended[0]?.id,result[0]?.id);
 });
 
-test('compact work categories retain failures and notes, omit only successful internal controls', () => {
-  const tools = [tool('a','skills.search','NETWORK','COMPLETED'),tool('control','record_request_intent','OBSERVE','COMPLETED'),tool('b','skills.prepare','NETWORK','FAILED'),tool('c','finish_task','OBSERVE','FAILED')];
-  const events = [event(1,'TOOL_PROPOSED',{tool_call_id:'a'}),event(2,'TOOL_PROPOSED',{tool_call_id:'control'}),event(3,'ASSISTANT_NARRATIVE',{text:'Retry the pinned source',step:2}),event(4,'TOOL_PROPOSED',{tool_call_id:'b'}),event(5,'RUN_PAUSED'),event(6,'TOOL_PROPOSED',{tool_call_id:'c'})];
-  const raw = buildConversationActivityProjection(events,tools);
-  const compact = compactExecutionTimeline(raw);
-  const groups = compact.filter(item=>item.kind==='GROUP');
-  assert.deepEqual(groups.map(group=>group.entries.map(entry=>entry.kind==='TOOL' && entry.tool.name)),[['skills.search','skills.prepare'],['finish_task']]);
-  assert.equal(groups[0]?.notes?.[0]?.text,'Retry the pinned source');
-  assert.equal(groups[0]?.entries[1]?.status,'FAILED');
-  assert.equal(compact[1]?.kind,'PHASE');
-  assert.ok(raw.some(item=>item.kind==='GROUP' && item.entries.some(entry=>entry.kind==='TOOL' && entry.tool.name==='record_request_intent')));
+test('execution scope, failures, questions and run boundaries prevent merging', () => {
+  for (const barrier of ['PHASE_CHANGED','TOOL_FAILED','RUN_PAUSED','RUN_STARTED','RECOVERY_STARTED'] as AgentEventKind[]) {
+    const events = [event(1,'TOOL_PROPOSED',{tool_call_id:'a'}),event(2,barrier,{tool_call_id:'a'}),event(3,'TOOL_PROPOSED',{tool_call_id:'b'})];
+    const result=compactOperationTimeline(buildConversationActivityProjection(events,[tool('a','read_file','OBSERVE','FAILED'),tool('b','read_file','OBSERVE','COMPLETED')]));
+    assert.equal(result.filter(item=>item.kind==='GROUP').length,2,barrier);
+  }
+  const question=[tool('a','read_file','OBSERVE','COMPLETED'),tool('q','request_user_input','OBSERVE','COMPLETED',{question:'选择哪个？'}),tool('b','read_file','OBSERVE','COMPLETED')];
+  const result=compactOperationTimeline(buildConversationActivityProjection(question.flatMap((t,i)=>[event(i*2+1,'TOOL_PROPOSED',{tool_call_id:t.id}),event(i*2+2,'TOOL_COMPLETED',{tool_call_id:t.id})]),question));
+  assert.equal(result.filter(item=>item.kind==='GROUP').length,3);
 });
 
-test('compact categories keep commands separate from files and do not cross an approval', () => {
-  const tools = [tool('read','read_file','OBSERVE','COMPLETED'),tool('cmd','run_command','PROCESS','COMPLETED'),tool('cmd2','run_command','PROCESS','RUNNING')];
-  const events=[event(1,'TOOL_PROPOSED',{tool_call_id:'read'}),event(2,'TOOL_PROPOSED',{tool_call_id:'cmd'}),event(3,'RUN_PAUSED'),event(4,'TOOL_PROPOSED',{tool_call_id:'cmd2'})];
-  const compact=compactExecutionTimeline(buildConversationActivityProjection(events,tools));
-  assert.deepEqual(compact.map(item=>item.kind==='GROUP'?item.groupKind:item.kind),['INSPECT','COMMAND','PHASE','COMMAND']);
+test('a control operation completing cannot remove the first row or change disclosure identity', () => {
+  const events = [event(1, 'TOOL_PROPOSED', { tool_call_id: 'plan' }), event(2, 'TOOL_PROPOSED', { tool_call_id: 'read' })];
+  const project = (status: AgentToolCallView['status']) => compactOperationTimeline(buildConversationActivityProjection(events, [tool('plan', 'work_plan', 'OBSERVE', status), tool('read', 'read_file', 'OBSERVE', 'COMPLETED')]));
+  const before = project('RUNNING');
+  const after = project('COMPLETED');
+  assert.equal(after[0]?.id, before[0]?.id);
+  assert.deepEqual(after[0]?.kind === 'GROUP' && after[0].entries.map(entry => entry.id), ['tool-plan', 'tool-read']);
 });
 
-test('adjacent observations combine into one group, preserve every note and distinguish tools without crossing approval', () => {
-  const names = ['search_text','list_files','read_file'];
-  const tools = names.map((name,index)=>tool(`t${index}`,name,'OBSERVE','COMPLETED',{path:'src'}));
-  const events = tools.flatMap((item,index)=>[event(index*3+1,'ASSISTANT_NARRATIVE',{step:index+1,text:`Finding ${index+1}`}),event(index*3+2,'TOOL_PROPOSED',{tool_call_id:item.id})]);
-  const raw = buildConversationActivityProjection(events,tools);
-  const compact = compactActivityHistory(raw);
-  assert.equal(compact.filter(item=>item.kind==='GROUP').length,1);
-  const group = compact.find(item=>item.kind==='GROUP')!;
-  assert.deepEqual(group.entries.map(entry=>entry.activityKind),['SEARCH','DIRECTORY','INSPECT']);
-  assert.equal(group.notes?.length,3);
-  const barrier = {id:'pause',kind:'PHASE' as const,sequence:3,occurredAt:3,phase:'PAUSED' as const,title:'Paused'};
-  assert.equal(compactActivityHistory([...raw.slice(0,2),barrier,...raw.slice(2)]).filter(item=>item.kind==='GROUP').length,2);
-  assert.equal(raw.length,6);
+test('progress Markdown preserves leading code indentation and trailing whitespace', () => {
+  const text = '    Get-Content README.md -Raw\n\n让我先读取文件。  \n';
+  const items = buildConversationActivityProjection([event(1, 'ASSISTANT_NARRATIVE', { text })], []);
+  assert.equal(items[0]?.kind === 'NARRATIVE' && items[0].text, text);
 });
 
 function event(sequence: number, kind: AgentEventKind, payload: Record<string, unknown> = {}): AgentEventView {
@@ -115,17 +88,6 @@ test('context compression pairs real lifecycle events and retains legacy complet
 function tool(id: string, name: string, effect: AgentToolCallView['effect'], status: AgentToolCallView['status'], argumentsValue: Record<string, unknown> = {}, receipt: Record<string, unknown> | null = null): AgentToolCallView {
   return { id, run_id: 'run-1', name, effect, status, policy_decision: 'ALLOW', arguments: argumentsValue, receipt, error_code: status === 'FAILED' ? 'FIXTURE_FAILED' : null, created_at: 1_000, updated_at: 30_000 };
 }
-
-test('live preview replaces older findings while preserving the full expandable history', () => {
-  const events = Array.from({ length: 40 }, (_, index) => event(index + 1, 'ASSISTANT_NARRATIVE', { step:index + 1, text:`Finding ${index + 1}` }));
-  const history = buildConversationActivityProjection(events, []);
-  const preview = currentActivityPreview(history, '');
-  assert.equal(preview.length, 1);
-  assert.equal(preview[0]?.kind, 'NARRATIVE');
-  assert.equal(preview[0]?.kind === 'NARRATIVE' && preview[0].text, 'Finding 40');
-  assert.equal(history.length, 40);
-  assert.deepEqual(currentActivityPreview(history, 'Finding 41 streaming'), []);
-});
 
 test('a completed browser call with failed assertions is presented as failed', () => {
   const history = buildConversationActivityProjection([event(1, 'TOOL_PROPOSED', { tool_call_id: 'check' }), event(2, 'TOOL_COMPLETED', { tool_call_id: 'check' })], [tool('check', 'browser_verify', 'NETWORK', 'COMPLETED', {}, { verification_eligible: true, success: false })]);
@@ -196,7 +158,7 @@ test('failed edits are described as attempts and excluded from edited file total
   }
   const mixed = buildConversationActivityProjection([...events,
     event(3, 'TOOL_PROPOSED', { tool_call_id: succeeded.id }), event(4, 'TOOL_COMPLETED', { tool_call_id: succeeded.id }),
-  ], [failed, succeeded])[0];
+  ], [failed, succeeded])[1];
   assert.equal(mixed?.kind, 'GROUP');
   if (mixed?.kind === 'GROUP') assert.match(mixed.title, /已编辑 1 个文件/);
 });

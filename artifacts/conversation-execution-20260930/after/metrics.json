@@ -1,0 +1,122 @@
+{
+  "metrics": [
+    {
+      "pane": {
+        "left": 308,
+        "right": 1280,
+        "width": 972,
+        "top": 44,
+        "bottom": 1000
+      },
+      "body": {
+        "left": 334,
+        "right": 1254,
+        "width": 920,
+        "top": -308.20001220703125,
+        "bottom": -236.20001220703125
+      },
+      "composer": {
+        "left": 334,
+        "right": 1254,
+        "width": 920,
+        "top": 886.4000244140625,
+        "bottom": 988.0000228881836
+      },
+      "overflow": false,
+      "font": 18,
+      "line": 28
+    },
+    {
+      "pane": {
+        "left": 308,
+        "right": 1440,
+        "width": 1132,
+        "top": 44,
+        "bottom": 1000
+      },
+      "body": {
+        "left": 414,
+        "right": 1334,
+        "width": 920,
+        "top": -308.20001220703125,
+        "bottom": -236.20001220703125
+      },
+      "composer": {
+        "left": 414,
+        "right": 1334,
+        "width": 920,
+        "top": 886.4000244140625,
+        "bottom": 988.0000228881836
+      },
+      "overflow": false,
+      "font": 18,
+      "line": 28
+    },
+    {
+      "pane": {
+        "left": 308,
+        "right": 648.0125122070312,
+        "width": 340.01251220703125,
+        "top": 44,
+        "bottom": 1000
+      },
+      "body": {
+        "left": 324,
+        "right": 632.0125122070312,
+        "width": 308.01251220703125,
+        "top": -1007.4000244140625,
+        "bottom": -851.4000244140625
+      },
+      "composer": {
+        "left": 324,
+        "right": 632.0125122070312,
+        "width": 308.01251220703125,
+        "top": 890.4000244140625,
+        "bottom": 992.0000228881836
+      },
+      "overflow": false,
+      "font": 18,
+      "line": 28
+    },
+    {
+      "pane": {
+        "left": 308,
+        "right": 676,
+        "width": 368,
+        "top": 44,
+        "bottom": 1000
+      },
+      "body": {
+        "left": 324,
+        "right": 660,
+        "width": 336,
+        "top": 279,
+        "bottom": 435
+      },
+      "composer": {
+        "left": 324,
+        "right": 660,
+        "width": 336,
+        "top": 890.4000244140625,
+        "bottom": 992.0000228881836
+      },
+      "overflow": false,
+      "font": 18,
+      "line": 28
+    }
+  ],
+  "fonts": {
+    "body": 21.6,
+    "code": 17,
+    "family": "\"Microsoft YaHei UI\", \"Microsoft YaHei\", sans-serif",
+    "codeFamily": "Consolas, monospace"
+  },
+  "scrollList": {
+    "height": 256,
+    "scroll": 320
+  },
+  "streaming": true,
+  "terminalIdentity": true,
+  "commandClipboard": true,
+  "dockDrag": true
+}

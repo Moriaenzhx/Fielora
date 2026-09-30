@@ -1,0 +1,67 @@
+/* Conversation-only reading and execution disclosure. Appearance scale/families
+ * continue to come from the existing user preferences and semantic theme. */
+.conversation-column {
+  --fl-layout-conversation-reading: 920px;
+  --fl-layout-conversation-gutter: 24px;
+  container-name: conversation;
+}
+.conversation-column > .message-list {
+  --fl-font-size-agent-body: calc(18px * var(--fl-ui-font-scale));
+  --fl-type-body-size: var(--fl-font-size-agent-body);
+  --fl-line-height-agent-body: calc(28px * var(--fl-ui-font-scale));
+  --fl-type-body-line-height: var(--fl-line-height-agent-body);
+  --fl-font-size-agent-execution: calc(16px * var(--fl-ui-font-scale));
+  padding-inline: max(24px, calc((100cqw - 920px) / 2));
+  padding-right: calc(max(24px, (100cqw - 920px) / 2) - var(--fl-conversation-scrollbar, 0px));
+  padding-bottom: calc(var(--fl-composer-height, 116px) + var(--fl-queued-height, 0px) + 88px);
+  scroll-padding-bottom: calc(var(--fl-composer-height, 116px) + 80px);
+}
+.conversation-column > .conversation-composer { width: min(920px, calc(100% - 48px)); }
+@container conversation (max-width: 640px) {
+  .conversation-column > .message-list { padding-left: 16px; padding-right: calc(16px - var(--fl-conversation-scrollbar, 0px)); }
+  .conversation-column > .conversation-composer { width: calc(100% - 32px); }
+}
+.message-list .message { margin-bottom: 24px; }
+.message-list .markdown-body { font-size: var(--fl-font-size-agent-body); line-height: var(--fl-line-height-agent-body); }
+.message-list .markdown-body p { margin-block: 0 16px; }
+.message-list .markdown-body > :last-child { margin-bottom: 0; }
+.message-list .markdown-body :not(pre) > code { white-space: break-spaces; overflow-wrap: anywhere; }
+.message-list .markdown-code-block { min-width: 0; max-width: 100%; }
+.message-list .markdown-code-block pre { overflow-x: auto; }
+.message-list .markdown-body pre, .message-list .markdown-body code { font-size: var(--fl-code-font-size); font-family: var(--fl-font-mono); }
+.message-list .conversation-activity-stream { gap: 16px; }
+.message-list .conversation-narrative { margin: 0; }
+.message-list .agent-terminal-result { margin-top: 24px; }
+.message-list .operation-group { min-width: 0; width: 100%; color: var(--fl-color-text-muted); font-size: var(--fl-font-size-agent-execution); line-height: calc(24px * var(--fl-ui-font-scale)); }
+.message-list .operation-summary, .message-list .operation-list button {
+  display: flex; align-items: center; gap: 8px; width: 100%; min-width: 0;
+  height: max(32px, calc(24px * var(--fl-ui-font-scale) + 8px));
+  padding: 4px 0; border: 0; border-radius: var(--fl-radius-control);
+  color: inherit; background: transparent; box-shadow: none;
+  font: inherit; text-align: left;
+}
+.message-list .operation-summary:hover, .message-list .operation-list button:hover,
+.message-list .operation-summary:focus-visible, .message-list .operation-list button:focus-visible { background: var(--fl-color-surface-hover); color: var(--fl-color-text); }
+.message-list .operation-label { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.message-list .operation-summary > .app-icon, .message-list .operation-list .app-icon { width: 16px; height: 16px; flex: 0 0 16px; }
+.message-list .operation-summary > .app-icon:last-child { transform: rotate(-90deg); }
+.message-list .operation-summary[aria-expanded="true"] > .app-icon:last-child { transform: none; }
+.message-list .operation-issue { color: var(--fl-color-text-danger); white-space: nowrap; }
+.message-list .operation-list { list-style: none; padding: 0; margin: 4px 0 0; max-height: 256px; overflow-y: auto; overflow-x: hidden; overscroll-behavior: contain; }
+.message-list .operation-list li { margin: 0; padding: 0; }
+.message-list .operation-list button[aria-expanded="true"] { color: var(--fl-color-text); }
+.message-list .operation-detail-link { margin-left: auto; white-space: nowrap; font-size: .8em; }
+.message-list .operation-detail {
+  min-width: 0; margin: 12px 0 0; padding: 0 0 0 24px;
+  border-left: 1px solid var(--fl-color-border-soft); background: transparent;
+  color: var(--fl-color-text); font-size: var(--fl-font-size-agent-execution);
+}
+.message-list .operation-detail-field + .operation-detail-field { margin-top: 12px; }
+.message-list .operation-detail-heading { display: flex; align-items: center; gap: 8px; color: var(--fl-color-text-muted); font-size: .85em; }
+.message-list .operation-detail-heading button { display: inline-flex; align-items: center; padding: 2px; color: inherit; border: 0; background: transparent; box-shadow: none; }
+.message-list .operation-detail-heading .app-icon { width: 16px; height: 16px; }
+.message-list .operation-detail-value { white-space: pre-wrap; overflow-wrap: anywhere; }
+.message-list .operation-detail pre { margin: 4px 0 0; padding: 8px 12px; max-width: 100%; max-height: 320px; overflow: auto; white-space: pre; background: var(--fl-color-code-background); font: var(--fl-code-font-size)/1.6 var(--fl-font-mono); }
+.message-list .operation-detail footer { display: flex; flex-wrap: wrap; gap: 8px 16px; margin-top: 12px; color: var(--fl-color-text-muted); font-size: .8em; }
+.message-list .operation-detail p { margin: 8px 0; }
+.message-list .context-activity .compact-command-panel { padding: 8px 0; background: transparent; border: 0; border-radius: 0; }

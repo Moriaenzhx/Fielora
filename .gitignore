@@ -87,3 +87,7 @@ apps/desktop/out-*/
 *.temp
 *.swp
 *~
+
+# Local skill-install rollback journal and preserved historical app bundle
+.agents/.skill-transactions/
+Fielora-current-delivery-preserve/

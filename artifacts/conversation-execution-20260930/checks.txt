@@ -1,0 +1,26 @@
+Local conversation execution presentation checks — 2026-09-30
+
+Runtime: D:/AppInstall/nvm/nvm/v24.18.1/node.exe (Node 24.18.1)
+Repository: F:/项目/Fielora
+
+1. Node 24.18.1 --test --test-isolation=none apps/desktop/src/renderer/agent-activity-detail.test.ts apps/desktop/src/renderer/agent-activity-projection.test.ts apps/desktop/src/renderer/agent-turn-production.test.ts
+Result: PASS, 38 tests, 0 failed. See unit.log.
+
+2. Node 24.18.1 node_modules/typescript/bin/tsc --noEmit -p apps/desktop/tsconfig.json --incremental --tsBuildInfoFile .tmp-conversation-ui.tsbuildinfo
+Result: exit 0. Temporary build-info file removed after verification.
+
+3. Working directory: apps/desktop
+Node 24.18.1 ../../node_modules/eslint/bin/eslint.js src/renderer/AgentTurn.tsx src/renderer/App.tsx src/renderer/ProjectWorkspace.tsx src/renderer/SettingsScreen.tsx src/renderer/agent-activity-detail.ts src/renderer/agent-activity-projection.ts src/renderer/agent-activity-detail.test.ts src/renderer/agent-activity-projection.test.ts src/renderer/agent-turn-production.test.ts
+Result: exit 0.
+
+4. Node 24.18.1 tests/e2e/conversation-execution-presentation-e2e.mjs
+Result: PASS, exit 0. See after/result.json and after/metrics.json.
+Real Electron development host with fixture records and replayed events; existing release Core executable. Isolated database and explicit Chromium user-data directory. No external model requests or actual tool execution.
+Verified: 1280/1440 windows; 920px reading rail; 18/28 body typography; eight operations in one collapsed summary and eight 32px rows; direct single-operation details; missing/conditional detail fields; full command clipboard; long path/command overflow; visible failure and pause; keyboard disclosure; stable details during stream and terminal transition; scroll-up retention and bottom following; ten-row list capped at 256px; workspace drag, narrow panel 16px gutters; font/code-font preferences and dark theme; legacy DETAILED preference no longer changes rendering mode.
+
+5. git diff --check
+Result: exit 0.
+
+Screenshot comparisons use the same narrative and operation fixture, default font preferences and 1x CSS device scale. before/detail-1440.png and after/detail-read-comparison-1440.png select the same README operation. Additional command details are in after/detail-focused-1440.png. Temporary project directories and identifiers differ between isolated runs.
+
+Not run: full premerge, full E2E suite, Rust tests, packaging, real-model end-to-end acceptance. Missing historical output is not reconstructed. Existing broad legacy display E2E scripts were not used as acceptance for this local replay.

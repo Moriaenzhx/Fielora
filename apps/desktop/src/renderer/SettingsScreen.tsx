@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { ModelInvocationEvent, ProviderConfigView } from '@fielora/contracts';
 import fieloraMark from '../../assets/fielora-brand-mark.svg';
-import { resolveUiLocale, type AgentDisplayMode, type AppPreferences, type StartupDestination, type UiLanguagePreference } from './app-preferences';
+import { resolveUiLocale, type AppPreferences, type StartupDestination, type UiLanguagePreference } from './app-preferences';
 import { AppearanceSettings } from './AppearanceSettings';
 import { AgentBudgetSettings } from './AgentBudgetSettings';
 import { ModelUsageSettings } from './ModelUsageSettings';
@@ -152,7 +152,6 @@ export function SettingsScreen({ preferences, onChange, onBack, initialCategory 
     </aside>}>
     <section className="settings-content" data-surface="content">
       {category === 'GENERAL' && <div className="settings-section" data-testid="settings-general"><header><h1>{t('常规', 'General')}</h1></header><section className="settings-card">
-        <div className="settings-row"><span><strong>{t('执行过程展示', 'Execution display')}</strong><small>{t('精简：每项操作显示一行，点击展开详情。详细：默认展开全部步骤。', 'Compact shows each operation on one expandable line. Detailed expands all steps by default.')}</small></span><SelectMenu value={preferences.agentDisplayMode} onChange={(value) => update({ agentDisplayMode: value as AgentDisplayMode })} ariaLabel={t('执行过程展示', 'Execution display')} testId="agent-display-mode" options={[{ value: 'COMPACT', label: t('精简', 'Compact') }, { value: 'DETAILED', label: t('详细', 'Detailed') }]} /></div>
         <div className="settings-row"><span><strong>{t('界面语言', 'Interface language')}</strong><small>{preferences.languagePreference === 'SYSTEM' ? t(`跟随 Windows 显示语言；当前为${systemUiLocale === 'zh-CN' ? '简体中文' : ' English'}。`, `Uses the Windows display language; currently ${systemUiLocale === 'zh-CN' ? 'Simplified Chinese' : 'English'}.`) : t('更改后立即生效，不需要重启。', 'Changes apply immediately without restarting.')}</small></span><SelectMenu value={preferences.languagePreference} onChange={(value) => update({ languagePreference: value as UiLanguagePreference })} ariaLabel={t('界面语言', 'Interface language')} testId="ui-language" options={languageOptions} /></div>
         <div className="settings-row"><span><strong>{t('默认工作面', 'Default workspace')}</strong><small>{t('选择启动 Fielora 时显示的主要工作面。', 'Choose the primary workspace shown when Fielora starts.')}</small></span><SelectMenu value={preferences.startupDestination === 'NOW' ? 'NOW' : 'PROJECTS'} onChange={(value) => update({ startupDestination: value as StartupDestination })} ariaLabel={t('默认工作面', 'Default workspace')} testId="startup-destination" options={[{ value: 'PROJECTS', label: t('项目', 'Projects') }, { value: 'NOW', label: t('现在', 'Now') }]} /></div>
       </section></div>}

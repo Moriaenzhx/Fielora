@@ -83,134 +83,15 @@ export interface ConversationContextActivityItem {
 
 export type ConversationActivityItem = ConversationActivityGroupItem | ConversationActivityNarrativeItem | ConversationActivityPhaseItem | ConversationActivityApprovalItem | ConversationContextActivityItem;
 
-/** Conservative presentation rule: retain findings, blockers and decisions.
- * Only boilerplate next-action narration is folded, never deleted from history.
- */
-export function isRoutineNarrative(text: string): boolean {
-  const plain = text.trim();
-  if (/[?？]|是否|能否|请|需要.*(?:提供|回答|输入|选择)/.test(plain)) return false;
-  if (/发现|确认|原因|失败|错误|阻塞|需要你|请你|权限|风险|验证通过|不支持|已完成|改用|改为|策略|found|failed|error|blocked|verified/i.test(plain)) return false;
-  // Presence + preparation is not a new result. Keep actual failures/questions
-  // above visible, and preserve this text in the group's disclosure.
-  if (/^我(?:注意到|看到|已读取)[\s\S]*(?:已有|已经存在|已存在|现有|文件)[\s\S]*(?:让我|首先|现在我需要|然后使用)/.test(plain)) return true;
-  return /^(?:让我|现在让我|首先让我|我需要先|现在需要|我将(?:先|使用|读取|检查|运行)|正在(?:核对|读取|检查)(?:第|当前|文件|项目)|接下来(?:我|将)|Let me\b|I(?:'ll| will) (?:read|check|run|inspect)\b)/i.test(plain);
-}
-
-/** Adjacent operations absorb routine notes and finished maintenance records.
- * Meaningful commentary, approvals and lifecycle boundaries remain in place.
+/** Preserve every narrative and the execution scopes established by the ledger.
+ * The first actual call owns the disclosure identity, regardless of later status.
  */
 export function compactOperationTimeline(items: readonly ConversationActivityItem[]): ConversationActivityItem[] {
-  const result: ConversationActivityItem[] = [];
-  let operations: ConversationActivityItem[] = [];
-  let notes: ConversationActivityNarrativeItem[] = [];
-  let contexts: ConversationContextActivityItem[] = [];
-  const seen = new Set<string>();
-  const flush = () => {
-    const groups = compactExecutionTimeline(operations);
-    const last = [...groups].reverse().find((item): item is ConversationActivityGroupItem => item.kind === 'GROUP');
-    if (last) {
-      last.notes = [...(last.notes ?? []), ...notes].sort((a,b)=>a.sequence-b.sequence);
-      last.contextNotes = [...(last.contextNotes ?? []), ...contexts].sort((a,b)=>a.sequence-b.sequence);
-      result.push(...groups);
-    } else {
-      // A persisted preparation note may arrive one event before its tool.
-      // Keep it in detailed history until an operation can own its disclosure;
-      // never flash a paragraph and immediately move it into a closed group.
-      result.push(...groups, ...contexts);
-    }
-    operations = []; notes = []; contexts = [];
-  };
-  for (const item of items) {
-    if (item.kind === 'GROUP') {
-      operations.push({ ...item, notes: [], contextNotes: [] });
-      notes.push(...(item.notes ?? []));
-      contexts.push(...(item.contextNotes ?? []));
-    } else if (item.kind === 'NARRATIVE') {
-      const identity = item.text.trim().replace(/\s+/g,' ');
-      const routine = isRoutineNarrative(item.text) || seen.has(identity);
-      seen.add(identity);
-      if (routine) notes.push(item);
-      else { flush(); result.push(item); }
-    } else if (item.kind === 'CONTEXT' && !item.interrupted) {
-      contexts.push(item);
-    } else {
-      flush();
-      result.push(item);
-    }
-  }
-  flush();
-  return result;
-}
-
-/** A small current preview; the full ordered projection remains the history. */
-export function currentActivityPreview(items: readonly ConversationActivityItem[], liveNarrative: string): ConversationActivityItem[] {
-  const eligible = compactActivityHistory(items).filter((item) => item.kind === 'NARRATIVE' || item.kind === 'GROUP');
-  if (liveNarrative) return eligible.filter((item) => item.kind === 'GROUP').slice(-1);
-  const lastNarrative = eligible.map((item) => item.kind).lastIndexOf('NARRATIVE');
-  if (lastNarrative < 0) return eligible.slice(-1);
-  return [eligible[lastNarrative]!, ...eligible.slice(lastNarrative + 1).filter((item) => item.kind === 'GROUP').slice(-1)];
-}
-
-/** Merge adjacent observation work, keeping all notes and receipts in order. */
-export function compactActivityHistory(items: readonly ConversationActivityItem[]): ConversationActivityItem[] {
-  const result: ConversationActivityItem[] = [];
-  let pending: ConversationActivityItem[] = [];
-  const flush = () => {
-    const groups = pending.filter((item): item is ConversationActivityGroupItem => item.kind === 'GROUP');
-    if (groups.length < 2) result.push(...pending);
-    else {
-      const notes = pending.filter((item): item is ConversationActivityNarrativeItem => item.kind === 'NARRATIVE');
-      const entries = groups.flatMap((group) => group.entries);
-      const last = notes.at(-1);
-      if (last) result.push(last);
-      result.push({ ...groups[0]!, entries, notes, title: groupTitle(entries), groupKind: groupKind(entries), completedAt: entries.every(entry => entry.completedAt !== null) ? Math.max(...entries.map(entry => entry.completedAt!)) : null });
-    }
-    pending = [];
-  };
-  for (const item of items) {
-    if (item.kind === 'NARRATIVE' || (item.kind === 'GROUP' && item.entries.every(entry => ['INSPECT', 'SEARCH', 'DIRECTORY'].includes(entry.activityKind)))) pending.push(item);
-    else { flush(); result.push(item); }
-  }
-  flush();
-  return result;
-}
-
-/** Presentation only: retain original events/receipts for the detailed view.
- * Combine neighbouring work of the same kind; never cross approvals or pauses.
- */
-export function compactExecutionTimeline(items: readonly ConversationActivityItem[]): ConversationActivityItem[] {
-  const result: ConversationActivityItem[] = [];
-  let pending: ConversationActivityGroupItem | null = null;
-  let notes: ConversationActivityNarrativeItem[] = [];
-  const category = (entry: ConversationActivityEntry): ConversationActivityGroupKind => {
-    if (entry.kind === 'TOOL') {
-      if (entry.tool.name.startsWith('skills.') || ['list_skills', 'load_skill', 'verify_skill'].includes(entry.tool.name)) return 'NETWORK';
-      if (entry.tool.name === 'run_command') return 'COMMAND';
-    }
-    return ['SEARCH', 'DIRECTORY'].includes(entry.activityKind) ? 'INSPECT' : entry.activityKind;
-  };
-  const titles: Record<ConversationActivityGroupKind, string> = { INSPECT: '文件与信息检查', SEARCH: '搜索', DIRECTORY: '目录', CHANGE: '文件修改', VERIFY: '结果验证', COMMAND: '命令与测试', VERSION: '版本管理', NETWORK: '搜索、下载与扩展', OTHER: '任务控制', MIXED: '执行记录' };
-  const flush = () => { if (pending) result.push(pending); result.push(...notes); pending = null; notes = []; };
-  for (const item of items) {
-    if (item.kind === 'NARRATIVE' && pending) { notes.push(item); continue; }
-    if (item.kind !== 'GROUP') { flush(); result.push(item); continue; }
-    for (const entry of item.entries) {
-      // Successful internal bookkeeping has no user action; failures stay visible.
-      if (entry.kind === 'TOOL' && !['FAILED', 'UNKNOWN', 'DENIED', 'CANCELLED'].includes(entry.status) && ['record_request_intent', 'finish_task', 'work_plan'].includes(entry.tool.name)) continue;
-      const kind = category(entry);
-      if (pending && pending.groupKind === kind) {
-        pending.entries.push(entry);
-        (pending.notes ??= []).push(...notes);
-        notes = [];
-      } else {
-        flush();
-        pending = { ...item, id: `compact-${entry.id}`, sequence: entry.sequence, occurredAt: entry.occurredAt, groupKind: kind, title: titles[kind], entries: [entry], notes: [] };
-      }
-      pending.completedAt = pending.entries.every(e => e.completedAt !== null) ? Math.max(...pending.entries.map(e => e.completedAt!)) : null;
-    }
-  }
-  flush();
-  return result;
+  return items.flatMap<ConversationActivityItem>(item => {
+    if (item.kind !== 'GROUP') return [item];
+    const entries = item.entries;
+    return entries.length ? [{ ...item, id: `operations-${entries[0]!.id}`, entries }] : [];
+  });
 }
 
 export function reconcileLiveNarrative(
@@ -352,8 +233,8 @@ function approvalIdentity(event: AgentEventView): { approvalId: string; toolCall
 function narrativeFor(event: AgentEventView): ConversationActivityNarrativeItem | null {
   if (event.kind !== 'ASSISTANT_NARRATIVE') return null;
   const payload = payloadOf(event);
-  const text = payloadString(payload, 'text').trim();
-  if (!text) return null;
+  const text = payloadString(payload, 'text');
+  if (!text.trim()) return null;
   return {
     id: `narrative-${event.sequence}`,
     kind: 'NARRATIVE',
@@ -432,7 +313,7 @@ export function buildConversationActivityProjection(
       completedAt: terminal?.created_at ?? (['COMPLETED', 'FAILED', 'DENIED', 'CANCELLED', 'UNKNOWN'].includes(tool.status) ? tool.updated_at : null),
       activityKind: activityKindFor(tool, verificationToolIds),
       tool,
-      status: tool.status === 'COMPLETED' && tool.receipt && typeof tool.receipt === 'object' && !Array.isArray(tool.receipt) && (tool.receipt as EventPayload).success === false ? 'FAILED' : tool.status,
+      status: tool.status === 'COMPLETED' && tool.receipt && typeof tool.receipt === 'object' && !Array.isArray(tool.receipt) && ((tool.receipt as EventPayload).success === false || (typeof (tool.receipt as EventPayload).exit_code === 'number' && (tool.receipt as EventPayload).exit_code !== 0)) ? 'FAILED' : tool.status,
       toolId: tool.id,
     });
   };
@@ -475,12 +356,19 @@ export function buildConversationActivityProjection(
       continue;
     }
 
-    if (event.kind === 'PHASE_CHANGED') {
+    if (event.kind === 'PHASE_CHANGED' || ['RUN_CREATED', 'RUN_STARTED', 'RUN_COMPLETED', 'RUN_FAILED', 'RUN_CANCELLED', 'RECOVERY_STARTED', 'TOOL_FAILED', 'TOOL_UNKNOWN', 'TOOL_DENIED', 'TOOL_CANCELLED'].includes(event.kind)) {
       currentGroup = null;
       continue;
     }
 
+    if (event.kind === 'TOOL_COMPLETED') {
+      const finished = toolById.get(toolIdFor(event));
+      const receipt = finished?.receipt as EventPayload | null;
+      if (finished?.name === 'request_user_input' || receipt?.success === false || (typeof receipt?.exit_code === 'number' && receipt.exit_code !== 0)) currentGroup = null;
+    }
+
     if (event.kind === 'TOOL_PROPOSED' && !approvalToolIds.has(toolIdFor(event))) {
+      if (toolById.get(toolIdFor(event))?.name === 'request_user_input') currentGroup = null;
       appendTool(event);
       continue;
     }

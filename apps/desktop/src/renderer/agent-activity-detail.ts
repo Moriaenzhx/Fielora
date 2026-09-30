@@ -1,5 +1,37 @@
 import type { AgentEventView, AgentRunView, AgentToolCallView } from '@fielora/contracts';
 
+export function activityStatusLabel(status: AgentToolCallView['status']): string {
+  return { PROPOSED: '等待执行', RUNNING: '执行中', WAITING_APPROVAL: '等待批准', COMPLETED: '已完成', FAILED: '执行失败', DENIED: '已拒绝', CANCELLED: '已停止', UNKNOWN: '执行状态待确认' }[status];
+}
+
+export interface ActivityDetailField { label: string; text: string; code?: boolean }
+
+/** Only the existing renderer DTO is used, including its upstream redaction.
+ * Display and clipboard share exactly these strings; never fetch raw logs.
+ */
+export function activityDetailFields(tool: AgentToolCallView): ActivityDetailField[] {
+  const object = (value: unknown): Record<string, unknown> => value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : {};
+  const args = object(tool.arguments);
+  const receipt = object(tool.receipt);
+  const fields: ActivityDetailField[] = [];
+  const present = (value: unknown) => value !== null && value !== undefined && value !== '' && !(typeof value === 'object' && Object.keys(value).length === 0);
+  const add = (label: string, value: unknown, code = false) => {
+    if (present(value)) fields.push({ label, text: typeof value === 'string' ? value : JSON.stringify(value, null, 2), code });
+  };
+  add('操作对象', args.path ?? args.paths ?? args.url ?? receipt.path);
+  add('工作目录', receipt.cwd ?? args.cwd);
+  add('执行环境', receipt.environment ?? args.environment);
+  if (tool.name === 'run_command') add('命令', activityToolDescription(tool), true);
+  const remainingArgs = Object.fromEntries(Object.entries(args).filter(([key, value]) => present(value) && !['path', 'paths', 'url', 'cwd', 'environment', ...(tool.name === 'run_command' ? ['program', 'argv'] : [])].includes(key)));
+  add('参数', remainingArgs, true);
+  for (const [key, label] of [['stdout', '标准输出'], ['stderr', '标准错误'], ['output', '输出'], ['error', '错误']] as const) add(label, receipt[key], true);
+  add('错误码', tool.error_code);
+  const remainingReceipt = Object.fromEntries(Object.entries(receipt).filter(([key, value]) => present(value) && !['stdout', 'stderr', 'output', 'error', 'cwd', 'environment', 'duration_ms'].includes(key)));
+  add('回执', remainingReceipt, true);
+  if (typeof receipt.duration_ms === 'number') add('耗时', `${receipt.duration_ms} ms`);
+  return fields;
+}
+
 export function goalProgressLabel(events: readonly AgentEventView[]): string | null {
   const latest = [...events].reverse().find(event => event.kind === 'CHECKPOINT_CREATED'
     && (event.payload as Record<string, unknown>)?.kind === 'GENERAL_WORK_STATE_V1');

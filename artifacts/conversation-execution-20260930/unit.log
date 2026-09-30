@@ -1,0 +1,50 @@
+✔ execution detail only displays existing fields and copies the same redacted DTO text (15.8323ms)
+(node:40252) [MODULE_TYPELESS_PACKAGE_JSON] Warning: Module type of file:///F:/%E9%A1%B9%E7%9B%AE/Fielora/apps/desktop/src/renderer/agent-activity-detail.test.ts is not specified and it doesn't parse as CommonJS.
+Reparsing as ES module because module syntax was detected. This incurs a performance overhead.
+To eliminate this warning, add "type": "module" to \\?\F:\项目\Fielora\apps\desktop\package.json.
+(Use `node --trace-warnings ...` to show where the warning was created)
+✔ failed and legacy uncommitted browser loads explain the verification pause (0.7431ms)
+✔ plan records explain their next action and evidence issues without implying verification (0.4848ms)
+✔ adjacent reads and searches remain distinguishable in collapsed operation rows (0.4094ms)
+✔ long analysis has a bounded original-text preview while concise progress stays visible (0.6283ms)
+✔ budget failure is explained from the persisted status without inventing a pause (0.5848ms)
+✔ historical file links require same-run successful read evidence and preserve the SHA guard (1.2721ms)
+✔ saving an edit does not claim that verification is running (0.4172ms)
+✔ compact process preserves narrative order and stable operation identity as results arrive (2.7374ms)
+✔ all progress prose and context boundaries remain visible, including repeated preparation (1.0864ms)
+✔ eight mixed operations form one scope; lifecycle events do not multiply calls or remove retries (3.058ms)
+✔ execution scope, failures, questions and run boundaries prevent merging (0.7567ms)
+✔ a control operation completing cannot remove the first row or change disclosure identity (0.3871ms)
+✔ progress Markdown preserves leading code indentation and trailing whitespace (0.2051ms)
+✔ context compression pairs real lifecycle events and retains legacy completed records (0.53ms)
+✔ a completed browser call with failed assertions is presented as failed (0.307ms)
+✔ narrative is the activity boundary and the real event sequence is never regrouped by activity type (1.071ms)
+✔ failed edits are described as attempts and excluded from edited file totals (0.5028ms)
+✔ approved tools remain after the approval anchor and carry persisted terminal time (0.5484ms)
+✔ internal delegate bookkeeping and transient delta event kinds do not become durable conversation activity (0.2232ms)
+✔ live narrative is replaced by the matching durable model turn without duplication (0.3138ms)
+✔ production conversation has one turn-owned agent presentation path (0.5095ms)
+✔ legacy production activity and standalone result paths are absent (5.2029ms)
+✔ durable events project into one chronological conversation activity stream (0.4128ms)
+✔ terminal hierarchy and human review use shared production tokens (2.1913ms)
+✔ transient model-loop stages do not become permanent completed steps and review stays responsive (2.9868ms)
+✔ one stream survives the live-to-terminal transition and states remain distinct (0.5431ms)
+✔ review uses a compact file picker and continuous numbered diff with shared controls (0.3974ms)
+✔ action execution starts with a factual preparation state and never invents model progress (0.6324ms)
+✔ running presentation is narrative and activity chronology followed by honest current state (1.047ms)
+✔ composer queues steering without parallel runs and keeps an explicit user turn status (9.9662ms)
+✔ auto follow can be paused by scrolling and restored to the active task (0.6237ms)
+✔ terminal result expands changed files and routes an exact file into Human Review (0.4649ms)
+✔ activity has one lightweight list and one selected detail outside its scrollport (0.8469ms)
+✔ progress Markdown is rendered without lexical filtering or preview truncation (0.3418ms)
+✔ activity uses the conversation scroll only and running composer actions keep the active accent (2.4772ms)
+✔ terminal duration leads collapsed chronology and the exact result Markdown (1.0982ms)
+✔ result files still use applied review evidence and the existing review action (0.2689ms)
+ℹ tests 38
+ℹ suites 0
+ℹ pass 38
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 398.9092

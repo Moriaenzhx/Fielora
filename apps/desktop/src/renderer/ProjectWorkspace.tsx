@@ -724,6 +724,7 @@ export function ProjectWorkspace({ onNow, onBrowse, onFields, onSettings, newCon
   const [streamingOutput, setStreamingOutput] = useState('');
   const [streamingStep, setStreamingStep] = useState(0);
   const [agentRun, setAgentRun] = useState<AgentRunView | null>(null);
+  const [agentStopping, setAgentStopping] = useState(false);
   const [agentEvents, setAgentEvents] = useState<AgentEventView[]>([]);
   const [agentTools, setAgentTools] = useState<AgentToolCallView[]>([]);
   const [agentFileRevisions, setAgentFileRevisions] = useState<FileArtifactRevisionReviewView[]>([]);
@@ -1650,10 +1651,10 @@ export function ProjectWorkspace({ onNow, onBrowse, onFields, onSettings, newCon
 
   async function cancelAgent() {
     if (!agentRun || sendingRef.current) return;
-    sendingRef.current = true; setBusy(true); setError('');
+    sendingRef.current = true; setBusy(true); setError(''); setAgentStopping(true);
     try { const next = await window.fielora.agent.cancel({ run_id: agentRun.id }); await loadAgentRun(next); }
     catch (reason) { setError(reasonMessage(reason)); }
-    finally { sendingRef.current = false; setBusy(false); }
+    finally { sendingRef.current = false; setBusy(false); setAgentStopping(false); }
   }
 
   async function retryAgent() {
@@ -2428,12 +2429,18 @@ export function ProjectWorkspace({ onNow, onBrowse, onFields, onSettings, newCon
     const measure = () => {
       column.style.setProperty('--fl-composer-height', `${Math.ceil(composer.getBoundingClientRect().height)}px`);
       column.style.setProperty('--fl-queued-height', `${Math.ceil(queue?.getBoundingClientRect().height ?? 0)}px`);
+      column.style.setProperty('--fl-conversation-scrollbar', `${list ? list.offsetWidth - list.clientWidth : 0}px`);
     };
-    const observer = new ResizeObserver(measure);
+    let frame = 0;
+    const observer = new ResizeObserver(() => {
+      window.cancelAnimationFrame(frame);
+      frame = window.requestAnimationFrame(measure);
+    });
     observer.observe(composer);
+    if (list) observer.observe(list);
     if (queue) observer.observe(queue);
     measure();
-    return () => observer.disconnect();
+    return () => { observer.disconnect(); window.cancelAnimationFrame(frame); };
   }, [conversationId, queuedFollowUps.length]);
 
   function openActivityFile(file: ActivityFileLink) {
@@ -2705,6 +2712,7 @@ export function ProjectWorkspace({ onNow, onBrowse, onFields, onSettings, newCon
     copied={Boolean(currentTerminalMessage && copiedMessageId === currentTerminalMessage.id)}
     onResume={() => void resumeAgent()}
     onStop={() => void cancelAgent()}
+    stopping={agentStopping}
     onRetry={() => void retryAgent()}
     onReview={() => openAgentReview()}
     onReviewFile={(path) => openAgentReview(path)}
@@ -2776,7 +2784,12 @@ export function ProjectWorkspace({ onNow, onBrowse, onFields, onSettings, newCon
       <section className={`conversation-column${visibleMessages.length === 0 && !streamingOutput ? ' is-empty-conversation' : ''}`} data-surface="content">
         {!project ? newConversationStart ? <div className="new-conversation-start" data-testid="new-conversation-start"><div><p className="eyebrow">新对话</p><h2>开始一条新对话</h2><p>先选择一个本地文件夹建立 Project，然后即可创建第一条对话。Project 与对话各自独立，不会修改文件夹内容。</p><button className="secondary-button" onClick={() => void addProject()} data-testid="new-conversation-choose-project"><AppIcon name="folder"/>选择 Project 文件夹</button></div></div> : <div className="project-overview" data-testid="project-overview"><header><div><p className="eyebrow">PROJECTS</p><h1>项目</h1><p>本地文件夹、持久对话、文件变更和运行结果。</p></div><button className="secondary-button" onClick={() => void addProject()}><AppIcon name="folder"/>打开文件夹</button></header><div className="project-overview-empty"><h2>还没有项目</h2><p>使用左侧“项目”旁的 ＋ 或上方“打开文件夹”添加第一个本地 Project。</p></div></div> : <>
           <header className="conversation-header conversation-context-header"><div className="conversation-heading"><AppIcon name="folder"/><div className="conversation-title-line"><h2 title={conversation?.title ?? '新对话'}>{conversation?.title ?? '新对话'}</h2>{conversation && <ConversationActionsMenu onRename={() => setConversationDialog({ kind: 'RENAME', value: conversation.title })} onDelete={() => setConversationDialog({ kind: 'DELETE' })}/>}</div></div></header>
-          <div className="message-list" ref={messageListRef}>
+          <div className="message-list" ref={messageListRef} onClickCapture={(event) => {
+            if (!(event.target instanceof Element) || !event.target.closest('.operation-summary, .operation-list button, .agent-terminal-runtime, summary')) return;
+            // An explicit disclosure is reading, not a request to follow new output.
+            atLatestAnswerRef.current = false;
+            setAtLatestAnswer(false);
+          }}>
             {!conversation || (visibleMessages.length === 0 && !streamingOutput) ? <div className="conversation-empty" data-testid={!conversation ? 'project-empty-conversation' : undefined}><h3>{conversation ? '从这里开始工作' : project.title}</h3><p>{conversation ? '描述你想在当前项目中完成的任务。' : '开始新的工作'}</p></div> : visibleMessages.map((message, index) => {
               const isCurrentAgentAssistant = Boolean(agentRun && agentTurn?.assistantMessageId === message.id);
               if (message.role === 'ASSISTANT' && message.invocation_id) {
