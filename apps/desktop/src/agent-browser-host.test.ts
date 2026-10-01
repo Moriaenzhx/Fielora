@@ -48,8 +48,8 @@ test('browser tools reject privileged schemes and credential-bearing URLs', () =
 });
 
 test('development server arguments remain literal and reject shell programs', () => {
-  assert.equal(browserServerCommand({ program: 'npm', argv: ['run', 'dev', '--', '--host', '127.0.0.1'] }), "& 'npm.cmd' 'run' 'dev' '--' '--host' '127.0.0.1'");
-  assert.equal(browserServerCommand({ program: 'node', argv: ["test'file.js", '$(secret); `echo x`'] }), "& 'node' 'test''file.js' '$(secret); `echo x`'");
+  assert.equal(browserServerCommand({ program: 'npm', argv: ['run', 'dev', '--', '--host', '127.0.0.1'] }, 'win32'), "& 'npm.cmd' 'run' 'dev' '--' '--host' '127.0.0.1'");
+  assert.equal(browserServerCommand({ program: 'node', argv: ["test'file.js", '$(secret); `echo x`'] }, 'win32'), "& 'node' 'test''file.js' '$(secret); `echo x`'");
   assert.throws(() => browserServerCommand({ program: 'powershell', argv: ['-Command', 'anything'] }));
   assert.throws(() => browserServerCommand({ program: 'node', argv: ['line\nbreak'] }));
 });
@@ -151,4 +151,12 @@ test('inspect requests the owned browser surface and preserves readiness and tru
   const result = await finished;
   assert.deepEqual(revealed, ['owned-run', 'owned-conversation']);
   for (const [key, value] of Object.entries(receipt)) assert.deepEqual(result[key], value);
+});
+
+test('POSIX server arguments survive the real shell without interpolation', { skip: process.platform === 'win32' }, async () => {
+  const { execFileSync } = await import('node:child_process');
+  const args = ["test'file.js", '$(secret); `echo x`', 'two words', ''];
+  const command = browserServerCommand({ program: 'node', argv: ['-e', 'console.log(JSON.stringify(process.argv.slice(1)))', '--', ...args] }, 'darwin');
+  const output = execFileSync('/bin/zsh', ['-c', command], { encoding: 'utf8' });
+  assert.deepEqual(JSON.parse(output), args);
 });

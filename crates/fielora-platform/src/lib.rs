@@ -92,12 +92,14 @@ pub enum ManagedChildError {
 
 /// A generic, bounded local child process owned by Fielora.
 ///
-/// The child receives no inherited environment and is attached to a Windows
-/// Job Object so closing or terminating this owner applies to the process tree.
+/// The child receives no inherited environment. A Windows Job Object or an
+/// independently created Unix process group provides owned descendant cleanup.
 pub struct ManagedChild {
     child: Child,
     #[cfg(windows)]
     job: WindowsJob,
+    #[cfg(unix)]
+    group: UnixProcessGroup,
 }
 
 impl std::fmt::Debug for ManagedChild {
@@ -152,7 +154,15 @@ impl ManagedChild {
                 command.env(key, value);
             }
         }
+        #[cfg(unix)]
+        command.process_group(0);
         let mut child = command.spawn()?;
+        #[cfg(unix)]
+        let group = UnixProcessGroup::new(
+            child
+                .id()
+                .ok_or(ManagedChildError::ProcessHandleUnavailable)?,
+        )?;
         drop(command);
         drop(secret_environment);
         #[cfg(windows)]
@@ -182,6 +192,8 @@ impl ManagedChild {
                 child,
                 #[cfg(windows)]
                 job,
+                #[cfg(unix)]
+                group,
             },
             stdio,
         ))
@@ -201,9 +213,11 @@ impl ManagedChild {
         termination_timeout: Duration,
     ) -> Result<ExitStatus, ManagedChildError> {
         if let Some(status) = self.child.try_wait()? {
+            self.terminate_tree()?;
             return Ok(status);
         }
         if let Ok(result) = tokio::time::timeout(graceful_timeout, self.child.wait()).await {
+            self.terminate_tree()?;
             return Ok(result?);
         }
         self.terminate_tree()?;
@@ -218,11 +232,57 @@ impl ManagedChild {
         {
             self.job.terminate()
         }
-        #[cfg(not(windows))]
+        #[cfg(unix)]
         {
-            self.child.start_kill()?;
-            Ok(())
+            self.group.terminate().map_err(ManagedChildError::Io)
         }
+    }
+}
+
+/// Owns a child launched with `process_group(0)`. This is lifecycle cleanup,
+/// not a sandbox: a cooperating group cannot contain a process that calls setsid.
+#[cfg(unix)]
+pub struct UnixProcessGroup {
+    pid: i32,
+    terminated: std::cell::Cell<bool>,
+}
+
+#[cfg(unix)]
+impl UnixProcessGroup {
+    pub fn new(child_pid: u32) -> std::io::Result<Self> {
+        let pid = i32::try_from(child_pid)
+            .ok()
+            .filter(|pid| *pid > 1)
+            .ok_or_else(|| std::io::Error::other("invalid child process group"))?;
+        Ok(Self {
+            pid,
+            terminated: std::cell::Cell::new(false),
+        })
+    }
+
+    pub fn terminate(&self) -> std::io::Result<()> {
+        if self.terminated.get() {
+            return Ok(());
+        }
+        // Negative PID addresses only this independently created child group.
+        if unsafe { libc::kill(-self.pid, libc::SIGKILL) } == 0 {
+            self.terminated.set(true);
+            return Ok(());
+        }
+        let error = std::io::Error::last_os_error();
+        if error.raw_os_error() == Some(libc::ESRCH) {
+            self.terminated.set(true);
+            Ok(())
+        } else {
+            Err(error)
+        }
+    }
+}
+
+#[cfg(unix)]
+impl Drop for UnixProcessGroup {
+    fn drop(&mut self) {
+        let _ = self.terminate();
     }
 }
 
@@ -447,7 +507,10 @@ pub trait CredentialStore: Send + Sync {
 }
 
 #[derive(Debug, Default, Clone, Copy)]
-pub struct WindowsCredentialStore;
+pub struct SystemCredentialStore;
+
+// Preserve source compatibility for existing integrations.
+pub use SystemCredentialStore as WindowsCredentialStore;
 
 #[cfg(windows)]
 impl CredentialStore for WindowsCredentialStore {
@@ -538,7 +601,7 @@ impl CredentialStore for WindowsCredentialStore {
     }
 }
 
-#[cfg(not(windows))]
+#[cfg(not(any(windows, target_os = "macos")))]
 impl CredentialStore for WindowsCredentialStore {
     fn store(&self, _: &str, _: SecretBytes) -> Result<(), CredentialError> {
         Err(CredentialError::Platform)
@@ -554,6 +617,70 @@ impl CredentialStore for WindowsCredentialStore {
     }
 }
 
+#[cfg(target_os = "macos")]
+const KEYCHAIN_SERVICE: &str = "Fielora";
+
+#[cfg(target_os = "macos")]
+fn keychain_error(error: security_framework::base::Error) -> CredentialError {
+    if error.code() == security_framework_sys::base::errSecItemNotFound {
+        CredentialError::NotFound
+    } else {
+        CredentialError::Platform
+    }
+}
+
+#[cfg(target_os = "macos")]
+impl CredentialStore for SystemCredentialStore {
+    fn store(&self, target: &str, secret: SecretBytes) -> Result<(), CredentialError> {
+        if secret.expose().is_empty() || secret.expose().len() > MAX_CREDENTIAL_BYTES {
+            return Err(CredentialError::InvalidSize);
+        }
+        security_framework::passwords::set_generic_password(
+            KEYCHAIN_SERVICE,
+            target,
+            secret.expose(),
+        )
+        .map_err(keychain_error)
+    }
+
+    fn read(&self, target: &str) -> Result<SecretBytes, CredentialError> {
+        use security_framework::passwords::{PasswordOptions, generic_password};
+        generic_password(PasswordOptions::new_generic_password(
+            KEYCHAIN_SERVICE,
+            target,
+        ))
+        .map(SecretBytes::new)
+        .map_err(keychain_error)
+    }
+
+    fn delete(&self, target: &str) -> Result<(), CredentialError> {
+        match security_framework::passwords::delete_generic_password(KEYCHAIN_SERVICE, target)
+            .map_err(keychain_error)
+        {
+            Ok(()) | Err(CredentialError::NotFound) => Ok(()),
+            Err(error) => Err(error),
+        }
+    }
+
+    fn exists(&self, target: &str) -> bool {
+        use security_framework::item::{ItemClass, ItemSearchOptions, Limit};
+        // Metadata admission never requests the password data.
+        ItemSearchOptions::new()
+            .class(ItemClass::generic_password())
+            .service(KEYCHAIN_SERVICE)
+            .account(target)
+            .load_attributes(true)
+            .load_data(false)
+            .limit(Limit::Max(1))
+            .search()
+            .is_ok()
+    }
+
+    fn static_exists(&self, credential_ref: &CredentialRef) -> bool {
+        self.exists(&credential_ref.target_name())
+    }
+}
+
 #[cfg(windows)]
 fn wide(value: &str) -> Vec<u16> {
     value.encode_utf16().chain(std::iter::once(0)).collect()
@@ -561,7 +688,7 @@ fn wide(value: &str) -> Vec<u16> {
 
 #[derive(Debug, Error)]
 pub enum PlatformError {
-    #[error("LOCALAPPDATA is unavailable")]
+    #[error("platform application data directory is unavailable")]
     LocalAppDataUnavailable,
     #[error("platform I/O failed: {0}")]
     Io(#[from] std::io::Error),
@@ -586,9 +713,10 @@ pub struct PlatformPaths {
 impl PlatformPaths {
     pub fn resolve(allow_development_override: bool) -> Result<Self, PlatformError> {
         let root = if allow_development_override {
-            std::env::var_os("FIELORA_DATA_DIR")
-                .map(PathBuf::from)
-                .unwrap_or(resolve_local_app_data_root()?)
+            match std::env::var_os("FIELORA_DATA_DIR") {
+                Some(root) => PathBuf::from(root),
+                None => resolve_local_app_data_root()?,
+            }
         } else {
             resolve_local_app_data_root()?
         };
@@ -646,10 +774,19 @@ impl PlatformPaths {
     }
 }
 
+#[cfg(not(target_os = "macos"))]
 fn resolve_local_app_data_root() -> Result<PathBuf, PlatformError> {
     std::env::var_os("LOCALAPPDATA")
         .map(PathBuf::from)
         .map(|path| path.join("Fielora"))
+        .ok_or(PlatformError::LocalAppDataUnavailable)
+}
+
+#[cfg(target_os = "macos")]
+fn resolve_local_app_data_root() -> Result<PathBuf, PlatformError> {
+    std::env::var_os("HOME")
+        .map(PathBuf::from)
+        .map(|path| path.join("Library/Application Support/Fielora"))
         .ok_or(PlatformError::LocalAppDataUnavailable)
 }
 
@@ -733,6 +870,34 @@ mod tests {
 
     fn temporary_root() -> PathBuf {
         std::env::temp_dir().join(format!("fielora-platform-{}", Uuid::now_v7()))
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn managed_child_shutdown_closes_descendant_pipes() {
+        use tokio::io::{AsyncBufReadExt, AsyncReadExt, BufReader};
+        let (mut child, stdio) = ManagedChild::spawn(ManagedChildConfig {
+            executable: PathBuf::from("/bin/sh"),
+            arguments: vec!["-c".into(), "/bin/sleep 30 & echo ready; wait".into()],
+            working_directory: std::env::temp_dir(),
+        })
+        .unwrap();
+        let mut output = BufReader::new(stdio.stdout);
+        let mut line = String::new();
+        tokio::time::timeout(Duration::from_secs(3), output.read_line(&mut line))
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(line.trim(), "ready");
+        child
+            .shutdown(Duration::from_millis(10), Duration::from_secs(2))
+            .await
+            .unwrap();
+        let mut tail = String::new();
+        tokio::time::timeout(Duration::from_secs(2), output.read_to_string(&mut tail))
+            .await
+            .expect("descendant retained the pipe")
+            .unwrap();
     }
 
     #[test]
@@ -842,9 +1007,9 @@ mod tests {
         );
     }
 
-    #[cfg(windows)]
+    #[cfg(any(windows, target_os = "macos"))]
     #[test]
-    fn windows_static_credential_round_trip_replaces_and_deletes() {
+    fn system_static_credential_round_trip_replaces_and_deletes() {
         struct Cleanup(CredentialRef);
         impl Drop for Cleanup {
             fn drop(&mut self) {

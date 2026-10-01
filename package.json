@@ -62,14 +62,16 @@
     "test:portable:agent": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/test-agent-portable.ps1",
     "audit:context": "node scripts/audit-context.mjs",
     "refresh:context": "node scripts/refresh-context-manifest.mjs",
-    "verify:dev:docs": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/verify-development.ps1 -Lane Docs",
-    "verify:dev:ui": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/verify-development.ps1 -Lane Ui",
-    "verify:dev:core": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/verify-development.ps1 -Lane Core",
-    "verify:dev:cross": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/verify-development.ps1 -Lane Cross",
-    "verify:premerge": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/verify-development.ps1 -Lane PreMerge",
+    "verify:dev:docs": "node scripts/verify-development.mjs Docs",
+    "verify:dev:ui": "node scripts/verify-development.mjs Ui",
+    "verify:dev:core": "node scripts/verify-development.mjs Core",
+    "verify:dev:cross": "node scripts/verify-development.mjs Cross",
+    "verify:premerge": "node scripts/verify-development.mjs PreMerge",
     "verify:phase01": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/verify-phase01.ps1",
     "verify:phase02": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/verify-phase02.ps1",
     "verify:phase03": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/verify-phase03.ps1",
-    "verify:phase04": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/verify-phase04.ps1"
+    "verify:phase04": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/verify-phase04.ps1",
+    "test:e2e:macos": "pnpm build:core:debug && node tests/e2e/macos-development-e2e.mjs dev",
+    "test:e2e:macos:packaged": "node tests/e2e/macos-development-e2e.mjs packaged"
   }
 }

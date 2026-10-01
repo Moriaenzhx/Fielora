@@ -158,3 +158,5 @@
     backdrop-filter: none;
   }
 }
+
+:root[data-platform="macos"] [data-surface="chrome"][data-chrome-plane="window"][data-brand-chrome="top"]::after { content: none; }

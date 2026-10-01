@@ -1,4 +1,4 @@
-import { execFile, spawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
+import { execFile, execFileSync, spawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
 import { createHash, randomUUID } from 'node:crypto';
 import { chmod, lstat, readdir, readFile, realpath, rename, stat, unlink, writeFile } from 'node:fs/promises';
 import path from 'node:path';
@@ -21,6 +21,23 @@ interface TerminalRun {
   emittedBytes: number;
   truncated: boolean;
   tail: string;
+  terminated: boolean;
+}
+
+// All Unix terminals are launched in their own group. Never signal the app's group.
+function terminateRun(run: TerminalRun): void {
+  if (run.terminated || !run.child.pid) return;
+  try {
+    if (process.platform === 'win32') {
+      execFileSync('taskkill.exe', ['/PID', String(run.child.pid), '/T', '/F'], { windowsHide: true, stdio: 'ignore', timeout: 5000 });
+    } else {
+      process.kill(-run.child.pid, 'SIGKILL');
+    }
+    run.terminated = true;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ESRCH' || run.child.exitCode !== null || run.child.signalCode !== null) run.terminated = true;
+    else throw error;
+  }
 }
 
 function digest(bytes: Uint8Array): string {
@@ -93,10 +110,7 @@ export class WorkspaceRuntime {
     const run = this.#runs.get(id);
     if (run?.child.pid && run.child.exitCode === null) {
       run.cancelled = true;
-      const pid = run.child.pid;
-      await new Promise<void>((resolve, reject) => execFile('taskkill.exe', ['/PID', String(pid), '/T', '/F'], { windowsHide: true }, error => {
-        if (error && this.#runs.has(id)) reject(new Error('BROWSER_SERVER_STOP_FAILED')); else resolve();
-      }));
+      terminateRun(run);
     }
     this.#agentServers.delete(id);
   }
@@ -196,7 +210,7 @@ export class WorkspaceRuntime {
   async getEnvironment(rootPath: string): Promise<WorkspaceEnvironmentView> {
     const root = await this.#root(rootPath);
     const git = (args: string[]) => new Promise<string>((resolve, reject) => {
-      execFile('git.exe', args, { cwd: root, windowsHide: true, timeout: 5_000, maxBuffer: 256 * 1024 }, (error, stdout) => {
+      execFile(process.platform === 'win32' ? 'git.exe' : 'git', args, { cwd: root, windowsHide: true, timeout: 5_000, maxBuffer: 256 * 1024 }, (error, stdout) => {
         if (error) reject(error); else resolve(stdout.trim());
       });
     });
@@ -243,13 +257,18 @@ export class WorkspaceRuntime {
       if (!(await stat(nextDirectory)).isDirectory()) throw new Error('Terminal directory is unavailable');
       return { run_id: runId, working_directory: nextDirectory };
     }
-    const child = spawn('powershell.exe', ['-NoLogo', '-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-Command', command], {
+    const shell = process.platform === 'win32' ? 'powershell.exe' : process.platform === 'darwin' ? '/bin/zsh' : '/bin/sh';
+    const args = process.platform === 'win32'
+      ? ['-NoLogo', '-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-Command', command]
+      : ['-c', command];
+    const child = spawn(shell, args, {
       cwd: currentDirectory,
       env: process.env,
       windowsHide: true,
+      detached: process.platform !== 'win32',
       stdio: ['pipe', 'pipe', 'pipe'],
     });
-    const run: TerminalRun = { child, fieldId, cancelled: false, emittedBytes: 0, truncated: false, tail: '' };
+    const run: TerminalRun = { child, fieldId, cancelled: false, emittedBytes: 0, truncated: false, tail: '', terminated: false };
     this.#runs.set(runId, run);
     this.#emit({ event: 'event.workspace.terminal', run_id: runId, field_id: fieldId, kind: 'STARTED', stream: null, text: null, exit_code: null });
     const output = (stream: 'STDOUT' | 'STDERR', bytes: Buffer): void => {
@@ -276,6 +295,7 @@ export class WorkspaceRuntime {
       this.#runs.delete(runId);
       this.#emit({ event: 'event.workspace.terminal', run_id: runId, field_id: fieldId, kind: run.cancelled ? 'CANCELLED' : 'FAILED', stream: null, text: run.cancelled ? null : error.message, exit_code: null });
     });
+    child.on('exit', () => { terminateRun(run); });
     child.on('close', (code) => {
       this.#agentServers.delete(runId);
       if (!this.#runs.delete(runId)) return;
@@ -295,7 +315,7 @@ export class WorkspaceRuntime {
     const run = this.#runs.get(runId);
     if (!run) throw new Error('Terminal run is not active');
     run.cancelled = true;
-    run.child.kill();
+    terminateRun(run);
   }
 
   dispose(): void {
@@ -303,7 +323,7 @@ export class WorkspaceRuntime {
     for (const run of this.#runs.values()) {
       if ([...this.#agentServers].some(id => this.#runs.get(id) === run)) continue;
       run.cancelled = true;
-      run.child.kill();
+      terminateRun(run);
     }
     this.#runs.clear();
   }

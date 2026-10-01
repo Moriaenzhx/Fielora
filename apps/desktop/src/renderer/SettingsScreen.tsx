@@ -1,3 +1,4 @@
+import { shortcutLabel } from './platform';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { ModelInvocationEvent, ProviderConfigView } from '@fielora/contracts';
 import fieloraMark from '../../assets/fielora-brand-mark.svg';
@@ -180,7 +181,7 @@ export function SettingsScreen({ preferences, onChange, onBack, initialCategory 
       </div>}
       {category === 'EXTENSIONS' && <CapabilityExtensionsSettings activeTab={extensionTab} fieldId={fieldId} onTabChange={setExtensionTab}/>}
       {category === 'STORAGE_DATA' && <StorageDataSettings preferences={preferences} onPreferencesChange={onChange} />}
-      {category === 'SHORTCUTS' && <div className="settings-section" data-testid="settings-shortcuts"><header><h1>键盘快捷键</h1></header><section className="settings-card shortcut-list"><div><span>新对话</span><kbd>Ctrl+N</kbd></div><div><span>打开 Project 文件夹</span><kbd>Ctrl+O</kbd></div><div><span>显示或隐藏侧栏</span><kbd>Ctrl+B</kbd></div><div><span>审阅</span><kbd>Ctrl+Shift+G</kbd></div><div><span>终端</span><kbd>Ctrl+`</kbd></div><div><span>浏览器 / 新建浏览页面</span><kbd>Ctrl+T</kbd></div><div><span>文件</span><kbd>Ctrl+P</kbd></div><div><span>地址栏</span><kbd>Ctrl+L</kbd></div><div><span>刷新网页</span><kbd>Ctrl+R</kbd></div></section></div>}
+      {category === 'SHORTCUTS' && <div className="settings-section" data-testid="settings-shortcuts"><header><h1>键盘快捷键</h1></header><section className="settings-card shortcut-list"><div><span>新对话</span><kbd>{shortcutLabel("Ctrl+N")}</kbd></div><div><span>打开 Project 文件夹</span><kbd>{shortcutLabel("Ctrl+O")}</kbd></div><div><span>显示或隐藏侧栏</span><kbd>{shortcutLabel("Ctrl+B")}</kbd></div><div><span>审阅</span><kbd>{shortcutLabel("Ctrl+Shift+G")}</kbd></div><div><span>终端</span><kbd>{shortcutLabel("Ctrl+`")}</kbd></div><div><span>浏览器 / 新建浏览页面</span><kbd>{shortcutLabel("Ctrl+T")}</kbd></div><div><span>文件</span><kbd>{shortcutLabel("Ctrl+P")}</kbd></div><div><span>地址栏</span><kbd>{shortcutLabel("Ctrl+L")}</kbd></div><div><span>刷新网页</span><kbd>{shortcutLabel("Ctrl+R")}</kbd></div></section></div>}
       {category === 'ABOUT' && <div className="settings-section" data-testid="settings-about"><header><h1>关于</h1></header><section className="settings-card about-card"><img src={fieloraMark} alt="" /><span><strong>Fielora Desktop 0.1.0</strong><small>Windows 11 x64 · Electron 43.4.0 · schema 11</small></span></section></div>}
     </section>
   </WorkspaceSurface>;

@@ -1,7 +1,8 @@
+import { packagedApplication, launchDesktop, killTestProcess, deleteTestCredential } from '../support/platform.mjs';
 import assert from 'node:assert/strict';
 import { spawn, spawnSync } from 'node:child_process';
 import { createServer } from 'node:http';
-import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { createServer as createNetServer } from 'node:net';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
@@ -11,8 +12,10 @@ const root = path.resolve(import.meta.dirname, '..', '..');
 const mode = process.argv[2] ?? 'dev';
 assert.ok(['dev', 'packaged', 'portable'].includes(mode), `Unsupported Browse E2E mode: ${mode}`);
 const packaged = mode === 'packaged' || mode === 'portable';
-const appPath = process.env.FIELORA_PACKAGED_APP ?? path.join(root, 'apps', 'desktop', 'out', 'Fielora-win32-x64', 'Fielora.exe');
+const appPath = process.env.FIELORA_PACKAGED_APP ?? packagedApplication(root);
 const localAppData = await mkdtemp(path.join(tmpdir(), `fielora-browse-${mode}-e2e-`));
+const evidenceDir = process.env.FIELORA_E2E_EVIDENCE_DIR ?? path.join(root, 'artifacts', 'phase03');
+await mkdir(evidenceDir, { recursive: true });
 const webpackOutput = path.join(root, 'apps', 'desktop', '.webpack');
 assert.equal(path.relative(root, webpackOutput), path.join('apps', 'desktop', '.webpack'), 'fresh-build cleanup must remain scoped to the desktop Webpack output');
 if (!packaged) await rm(webpackOutput, { recursive: true, force: true });
@@ -232,11 +235,7 @@ async function launch() {
     FIELORA_E2E_DEBUG_PORT: String(debuggingPort),
     ELECTRON_MIRROR: 'https://npmmirror.com/mirrors/electron/',
   };
-  const child = packaged
-    ? spawn(appPath, [], { env, windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'] })
-    : spawn(process.env.ComSpec ?? 'cmd.exe', ['/d', '/s', '/c', 'pnpm --filter @fielora/desktop start'], {
-      cwd: root, env, windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'],
-    });
+  const child = launchDesktop(root, appPath, packaged, env);
   child.stdout.on('data', (chunk) => output.push(String(chunk)));
   child.stderr.on('data', (chunk) => output.push(String(chunk)));
   return child;
@@ -259,8 +258,16 @@ async function waitForTarget(predicate, timeoutMs = targetTimeoutMs) {
 }
 
 async function assertBrowsePageTargets(appTargetId, expectedUrls) {
-  const pageTargets = (await targets()).filter((item) => item.type === 'page' && item.id !== appTargetId);
-  assert.equal(pageTargets.length, expectedUrls.length, 'each loaded Browse Page must own exactly one WebContents target');
+  // Native WebContents destruction completes after the product page is removed.
+  // Require the same exact target set, allowing that asynchronous close to settle.
+  let pageTargets = [];
+  const deadline = Date.now() + 3000;
+  do {
+    pageTargets = (await targets()).filter((item) => item.type === 'page' && item.id !== appTargetId);
+    if (JSON.stringify(pageTargets.map(item => item.url).sort()) === JSON.stringify([...expectedUrls].sort())) break;
+    await new Promise(resolve => setTimeout(resolve, 25));
+  } while (Date.now() < deadline);
+  assert.equal(pageTargets.length, expectedUrls.length, `each loaded Browse Page must own exactly one WebContents target: ${JSON.stringify(pageTargets.map(({id,url,title})=>({id,url,title})))}`);
   assert.deepEqual(pageTargets.map((item) => item.url).sort(), [...expectedUrls].sort());
 }
 
@@ -295,15 +302,20 @@ async function interactWithPageElement(cdp, selector) {
 }
 
 async function pressKey(cdp, key, code, windowsVirtualKeyCode, modifiers = 0) {
-  const common = { key, code, windowsVirtualKeyCode, nativeVirtualKeyCode: windowsVirtualKeyCode, modifiers };
+  const common = { key, code, windowsVirtualKeyCode, ...(process.platform === 'win32' ? { nativeVirtualKeyCode: windowsVirtualKeyCode } : {}), modifiers };
   await cdp.send('Input.dispatchKeyEvent', { type: 'rawKeyDown', ...common });
   await cdp.send('Input.dispatchKeyEvent', { type: 'keyUp', ...common });
 }
 
 async function pressCtrlShortcut(cdp, key, code, windowsVirtualKeyCode) {
-  await cdp.send('Input.dispatchKeyEvent', { type: 'rawKeyDown', key: 'Control', code: 'ControlLeft', windowsVirtualKeyCode: 17, nativeVirtualKeyCode: 17, modifiers: 2 });
-  await pressKey(cdp, key, code, windowsVirtualKeyCode, 2);
-  await cdp.send('Input.dispatchKeyEvent', { type: 'keyUp', key: 'Control', code: 'ControlLeft', windowsVirtualKeyCode: 17, nativeVirtualKeyCode: 17 });
+  const modifier = process.platform === 'darwin' ? 4 : 2;
+  if (process.platform === 'darwin') {
+    // CDP bypasses Cocoa's key binding translation; pass the native editing
+    // command alongside the key event (Input.dispatchKeyEvent.commands).
+    const editing = { a: 'selectAll', c: 'copy', v: 'paste', x: 'cut', z: 'undo' }[key];
+    await cdp.send('Input.dispatchKeyEvent', { type: 'rawKeyDown', key, code, windowsVirtualKeyCode, modifiers: modifier, commands: editing ? [editing] : [] });
+    await cdp.send('Input.dispatchKeyEvent', { type: 'keyUp', key, code, windowsVirtualKeyCode, modifiers: modifier });
+  } else await pressKey(cdp, key, code, windowsVirtualKeyCode, modifier);
 }
 
 async function dragDivider(cdp, testId, delta) {
@@ -317,6 +329,8 @@ async function dragDivider(cdp, testId, delta) {
 }
 
 async function surfaceSnapshot(cdp) {
+  await waitExpression(cdp, `(()=>{const host=document.querySelector('[data-testid="browse-viewport"]');const panel=host?.closest('.utility-launcher, .project-layout');return host&&!panel?.getAnimations({subtree:true}).some(animation=>animation.playState==='running')})()`);
+  await waitExpression(cdp, `window.fielora.browser.getState().then(state=>{const rect=document.querySelector('[data-testid="browse-viewport"]')?.getBoundingClientRect();return rect&&['x','y','width','height'].every(key=>Math.abs(state.surface.bounds[key]-Math.round(rect[key]))<=1)})`);
   return cdp.evaluate(`(async()=>{const state=await window.fielora.browser.getState();const rect=document.querySelector('[data-testid="browse-viewport"]')?.getBoundingClientRect();const utility=document.querySelector('[data-testid="utility-launcher"]')?.getBoundingClientRect();const rail=document.querySelector('[data-testid="utility-rail"]')?.getBoundingClientRect();return{state,rect:rect?{x:Math.round(rect.left),y:Math.round(rect.top),width:Math.round(rect.width),height:Math.round(rect.height)}:null,utility:utility?{x:Math.round(utility.left),width:Math.round(utility.width),right:Math.round(utility.right)}:null,rail:rail?{x:Math.round(rail.left),width:Math.round(rail.width),right:Math.round(rail.right)}:null,window:{width:innerWidth,height:innerHeight,dpr:devicePixelRatio}};})()`);
 }
 
@@ -714,7 +728,7 @@ try {
   assert.equal(remoteViewport.probeColumns.split(' ').length, 1, 'the rendered responsive fixture must collapse to one column');
   const narrowRenderedPage = await webCdp.send('Page.captureScreenshot', { format: 'png' });
   assert.ok(narrowRenderedPage.data.length > 1000, 'the narrow remote viewport must still produce rendered pixels');
-  await writeFile(path.join(root, 'artifacts', 'phase03', 'slice05-narrow-runtime.png'), Buffer.from(narrowRenderedPage.data, 'base64'));
+  await writeFile(path.join(evidenceDir, 'slice05-narrow-runtime.png'), Buffer.from(narrowRenderedPage.data, 'base64'));
   checkpoint('native-window-viewport-dpr');
 
   await appCdp.evaluate(`window.fieloraTest.resizeWindow({width:1180,height:760})`);
@@ -815,7 +829,7 @@ try {
   webCdp.close();
   assert.equal(await waitExit(launched), 0);
   if (packaged) {
-    const acceptancePath = path.join(root, 'artifacts', 'phase03', mode === 'portable' ? 'PHASE_03_PORTABLE_ACCEPTANCE.json' : 'PHASE_03_PACKAGED_ACCEPTANCE.json');
+    const acceptancePath = path.join(evidenceDir, mode === 'portable' ? 'PHASE_03_PORTABLE_ACCEPTANCE.json' : 'PHASE_03_PACKAGED_ACCEPTANCE.json');
     await writeFile(acceptancePath, `${JSON.stringify({ status: 'PASS', mode, application: appPath, trusted_origin: trustedOrigin, checks: checkpoints, captured_at: new Date().toISOString() }, null, 2)}\n`);
   }
   console.log(`Phase 03 Browse Desktop E2E (Slices 01-05, ${mode}): PASS`);
@@ -824,7 +838,7 @@ try {
   webCdp?.close();
   localCdp?.close();
   fixtureServer.close();
-  if (launched && launched.exitCode === null) spawnSync('taskkill.exe', ['/PID', String(launched.pid), '/T', '/F'], { windowsHide: true });
+  if (launched && launched.exitCode === null) killTestProcess(launched.pid);
   await new Promise((resolve) => setTimeout(resolve, 150));
   try { await rm(localAppData, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 }); } catch {}
 }

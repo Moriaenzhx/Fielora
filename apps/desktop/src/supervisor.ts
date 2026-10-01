@@ -131,10 +131,11 @@ export class CoreProcessSupervisor extends EventEmitter {
   }
 
   private resolveCorePath(): string {
-    if (app.isPackaged) return path.join(process.resourcesPath, 'fielora-core.exe');
+    const executable = process.platform === 'win32' ? 'fielora-core.exe' : 'fielora-core';
+    if (app.isPackaged) return path.join(process.resourcesPath, executable);
     const override = process.env.FIELORA_CORE_PATH;
     if (override) return path.resolve(override);
-    return path.resolve(app.getAppPath(), '..', '..', 'target', 'debug', 'fielora-core.exe');
+    return path.resolve(app.getAppPath(), '..', '..', 'target', 'debug', executable);
   }
 
   private onExit(child: ChildProcessWithoutNullStreams, code: number | null, signal: NodeJS.Signals | null): void {

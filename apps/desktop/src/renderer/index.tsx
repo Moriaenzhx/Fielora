@@ -1,3 +1,4 @@
+import { isMac } from './platform';
 import { StrictMode } from 'react';
 import { createRoot } from 'react-dom/client';
 import { App } from './App';
@@ -11,6 +12,7 @@ import { UiLocaleProvider } from './ui-locale';
 import './styles/index.css';
 import '../types';
 
+document.documentElement.dataset.platform = isMac ? 'macos' : 'other';
 const root = document.getElementById('root');
 if (!root) throw new Error('Renderer root is missing');
 const initialDark = window.matchMedia('(prefers-color-scheme: dark)').matches;

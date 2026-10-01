@@ -1,3 +1,4 @@
+import { shortcutLabel } from './platform';
 import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { toBrowserUserMessage } from '../browser-policy';
@@ -345,7 +346,7 @@ export function BrowsePanel({ browser, onSaveToLibrary, onOpenBrowserSettings, w
               </span>}
           />)}
         </TabStrip>
-        <button className="browser-new-page" aria-label="新建页面" title="新建页面 (Ctrl+T)" onClick={() => void createPage()} data-testid="browser-new-page"><AppIcon name="plus"/></button>
+        <button className="browser-new-page" aria-label="新建页面" title={shortcutLabel("新建页面 (Ctrl+T)")} onClick={() => void createPage()} data-testid="browser-new-page"><AppIcon name="plus"/></button>
       </div>}
       <div className="browser-toolbar">
         <div className="browser-actions" aria-label="页面导航">
@@ -354,7 +355,7 @@ export function BrowsePanel({ browser, onSaveToLibrary, onOpenBrowserSettings, w
           <button
             aria-label="刷新"
             aria-busy={page.is_loading}
-            title="刷新 (Ctrl+R)"
+            title={shortcutLabel("刷新 (Ctrl+R)")}
             data-testid="browser-reload"
             disabled={!page.url}
             onClick={() => void act(() => browser.reload())}
@@ -380,12 +381,12 @@ export function BrowsePanel({ browser, onSaveToLibrary, onOpenBrowserSettings, w
           <button className="browser-overflow-button" type="button" aria-label="浏览器菜单" aria-haspopup="menu" aria-expanded={menuOpen} onClick={() => setMenuOpen((current) => !current)} data-testid="browser-overflow"><AppIcon name="more"/></button>
           {menuOpen && <div className="browser-overflow-menu" role="menu" aria-label="浏览器菜单" data-surface="overlay" data-testid="browser-overflow-menu">
             <div className="browser-menu-group">
-              <button role="menuitem" type="button" onClick={() => { setMenuOpen(false); void createPage(); }}><span>新建标签页</span><kbd>Ctrl+T</kbd></button>
+              <button role="menuitem" type="button" onClick={() => { setMenuOpen(false); void createPage(); }}><span>新建标签页</span><kbd>{shortcutLabel("Ctrl+T")}</kbd></button>
               <button role="menuitem" type="button" disabled={!/^https?:\/\//u.test(page.url)} onClick={() => void saveToLibrary()} data-testid="browser-save-library"><span>保存到资料库</span></button>
             </div>
             <div className="browser-menu-group">
-              <button role="menuitem" type="button" disabled={!page.url} onClick={() => { setMenuOpen(false); void act(() => browser.reload()); }}><span>刷新页面</span><kbd>Ctrl+R</kbd></button>
-              <button role="menuitem" type="button" disabled={!page.active_page_id} onClick={() => { setMenuOpen(false); void closePage(page.active_page_id); }}><span>关闭标签页</span><kbd>Ctrl+W</kbd></button>
+              <button role="menuitem" type="button" disabled={!page.url} onClick={() => { setMenuOpen(false); void act(() => browser.reload()); }}><span>刷新页面</span><kbd>{shortcutLabel("Ctrl+R")}</kbd></button>
+              <button role="menuitem" type="button" disabled={!page.active_page_id} onClick={() => { setMenuOpen(false); void closePage(page.active_page_id); }}><span>关闭标签页</span><kbd>{shortcutLabel("Ctrl+W")}</kbd></button>
             </div>
             <div className="browser-menu-group browser-menu-settings">
               <button role="menuitem" type="button" onClick={() => { setMenuOpen(false); onOpenBrowserSettings(); }} data-testid="browser-open-settings"><span>浏览器设置</span></button>

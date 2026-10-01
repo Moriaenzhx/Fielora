@@ -3685,3 +3685,13 @@ Archify 生成失败已对齐生产 Run：56 次模型调用、9 次压缩、6 �
 ## 2026-09-29 — Archify 真实复发修复候选
 
 上一轮新版真实Run仍失败：默认Node14、错误cwd/输入路径、误判schema、目录大回执与重复说明。当前新增Skill加载时的相关运行时候选发现，诊断分层与保守恢复投影、目录分页和模型输入去重、准备说明折叠。沿现有权限/状态/ToolRuntime，无迁移、全局环境切换或安装。原输入的本地工具对照及工程检查通过；真实qwen原任务未续跑，架构图仍未完成。交付和桌面检查边界见artifacts/recurrence-repair-20260929/DELIVERY.md。
+
+
+## 2026-10-01 — Mac 开发环境与正确开发分支
+
+用户要求把 GitHub 最新代码下载到当前 Mac，配置并启动，后续在 Mac 开发。首次误选停在 9 月 15 日的 main@b334b02；用户指出后已核对全部远程分支，切换并跟踪 phase/complete-agent-v0.1@bc16374（9 月 30 日，包含 main 没有的 65 个提交）。Mac 适配先保存 Git stash，再按新版代码重新应用；本机 Core/Electron profile 已备份。原生 Core、StorageManager 数据目录、Git/zsh 和测试 glob 已适配，273 项 TS、类型/lint、6 项非凭据 Core 集成通过，真实窗口显示新版新聊天/已安排/资料库。未新增 schema migration，Windows 数据未迁移，Mac Keychain/发布打包/完整 Gate 尚未完成。详见 docs/engineering/MACOS_DEVELOPMENT.md。
+
+
+## 2026-10-02 — macOS 开发基线补齐
+
+在 `phase/complete-agent-v0.1@bc16374` 上补齐原生 Keychain、Unix 进程组取消/超时/退出清理、POSIX 字面参数引用、Command 菜单提示与交通灯避让、Finder/外部编辑器发现、Finder 启动 PATH 读取和原生 ARM64 `.app` 打包。Git 仓库署名按用户纠正设为 Moriaen；GitHub CLI 已安装，网页授权尚未完成。跨平台 Node Gate 保留原 Docs/Ui/Core/Cross/PreMerge 分层；历史 Phase portable 发布脚本仍是 Windows 产物。本机 Cross、Phase 02 和 Mac 专项 dev/packaged 验收通过，完整 PreMerge 的两条历史桌面流程尚未通过。完整验证和已知边界以 `docs/engineering/MACOS_DEVELOPMENT.md` 为准，不把本地 fixture 作为真实模型验收。

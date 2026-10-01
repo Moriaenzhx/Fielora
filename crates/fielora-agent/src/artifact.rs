@@ -5050,7 +5050,10 @@ mod tests {
             Err(AgentError::WorkspaceEscape)
         );
         assert!(!outside.join("out.docx").exists());
+        #[cfg(windows)]
         fs::remove_dir(&link).unwrap();
+        #[cfg(unix)]
+        fs::remove_file(&link).unwrap();
         fs::remove_dir_all(root).unwrap();
         fs::remove_dir_all(outside).unwrap();
     }

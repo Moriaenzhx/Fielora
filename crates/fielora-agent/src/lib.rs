@@ -4102,10 +4102,22 @@ impl ToolRuntime {
         use std::os::windows::process::CommandExt;
         #[cfg(windows)]
         command.creation_flags(0x08000000);
+        #[cfg(unix)]
+        {
+            use std::os::unix::process::CommandExt;
+            command.process_group(0);
+        }
         let mut child = command
             .spawn()
             .map_err(|error| command_spawn_error(&args.program, error.kind()))?;
-        let job = ProcessJob::assign(&child)?;
+        let job = match ProcessJob::assign(&child) {
+            Ok(job) => job,
+            Err(error) => {
+                let _ = child.kill();
+                let _ = child.wait();
+                return Err(error);
+            }
+        };
         let stdout = child.stdout.take().ok_or(AgentError::IoFailed)?;
         let stderr = child.stderr.take().ok_or(AgentError::IoFailed)?;
         let stdout_reader = thread::spawn(move || read_bounded(stdout, MAX_COMMAND_OUTPUT_BYTES));
@@ -4132,6 +4144,8 @@ impl ToolRuntime {
             }
             thread::sleep(Duration::from_millis(25));
         };
+        // A finished parent can leave descendants holding the output pipes open.
+        job.terminate();
         let (stdout, stdout_truncated) =
             stdout_reader.join().map_err(|_| AgentError::IoFailed)??;
         let (stderr, stderr_truncated) =
@@ -4335,7 +4349,7 @@ fn parse_args<T: for<'de> Deserialize<'de>>(value: &Value) -> Result<T, AgentErr
 }
 
 fn normalize_relative(value: &str) -> Result<PathBuf, AgentError> {
-    if value.is_empty() || value.contains('\0') {
+    if value.is_empty() || value.contains('\0') || value.contains(':') {
         return Err(AgentError::WorkspaceEscape);
     }
     let path = Path::new(value);
@@ -4664,6 +4678,9 @@ fn sanitized_command(program: impl AsRef<OsStr>) -> Command {
         "TEMP",
         "TMP",
         "USERPROFILE",
+        "HOME",
+        "TMPDIR",
+        "LANG",
         "PROGRAMFILES",
         "PROGRAMFILES(X86)",
         "PROGRAMDATA",
@@ -4748,16 +4765,20 @@ impl Drop for ProcessJob {
     }
 }
 
-#[cfg(not(windows))]
-struct ProcessJob;
+#[cfg(unix)]
+struct ProcessJob(fielora_platform::UnixProcessGroup);
 
-#[cfg(not(windows))]
+#[cfg(unix)]
 impl ProcessJob {
-    fn assign(_child: &std::process::Child) -> Result<Self, AgentError> {
-        Ok(Self)
+    fn assign(child: &std::process::Child) -> Result<Self, AgentError> {
+        fielora_platform::UnixProcessGroup::new(child.id())
+            .map(Self)
+            .map_err(|_| AgentError::IoFailed)
     }
 
-    fn terminate(&self) {}
+    fn terminate(&self) {
+        let _ = self.0.terminate();
+    }
 }
 
 #[cfg(test)]
@@ -4845,7 +4866,10 @@ mod tests {
                 .code(),
             "AGENT_WORKSPACE_ESCAPE"
         );
+        #[cfg(windows)]
         fs::remove_dir(&link).unwrap();
+        #[cfg(unix)]
+        fs::remove_file(&link).unwrap();
         fs::remove_dir_all(root).unwrap();
         let _ = fs::remove_dir_all(artifacts);
     }
@@ -6286,7 +6310,10 @@ mod tests {
             AgentError::FileChanged
         );
 
+        #[cfg(windows)]
         fs::remove_dir(&link).unwrap();
+        #[cfg(unix)]
+        fs::remove_file(&link).unwrap();
         fs::remove_dir_all(root).unwrap();
         fs::remove_dir_all(outside).unwrap();
         fs::remove_dir_all(artifacts).unwrap();
@@ -6300,7 +6327,11 @@ mod tests {
         let result = runtime
             .execute(
                 "run_command",
-                &json!({"program":"cmd.exe","argv":["/d","/c","exit 7"],"timeout_ms":10000}),
+                &if cfg!(windows) {
+                    json!({"program":"cmd.exe","argv":["/d","/c","exit 7"],"timeout_ms":10000})
+                } else {
+                    json!({"program":"/bin/sh","argv":["-c","exit 7"],"timeout_ms":10000})
+                },
                 true,
                 &cancel,
             )
@@ -6658,6 +6689,67 @@ mod tests {
         assert_eq!(worker.join().unwrap().unwrap_err(), AgentError::Cancelled);
         fs::remove_dir_all(root).unwrap();
         fs::remove_dir_all(artifacts).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn unix_commands_cancel_timeout_and_drain_inherited_pipes() {
+        for mode in ["cancel", "timeout", "exit"] {
+            let (root, artifacts) = fixture();
+            let cancel = CommandCancellation::default();
+            let worker_cancel = cancel.clone();
+            let worker_root = root.clone();
+            let worker_artifacts = artifacts.clone();
+            let (tx, rx) = std::sync::mpsc::channel();
+            let script = if mode == "exit" {
+                "/bin/sleep 30 & echo $! > child.pid; exit 0"
+            } else {
+                "/bin/sleep 30 & echo $! > child.pid; wait"
+            };
+            let worker = thread::spawn(move || {
+                let result = ToolRuntime::new(&worker_root, &worker_artifacts)
+                    .unwrap()
+                    .execute(
+                        "run_command",
+                        &json!({"program":"/bin/sh","argv":["-c", script],"timeout_ms":1000}),
+                        true,
+                        &worker_cancel,
+                    );
+                let _ = tx.send(result);
+            });
+            let deadline = Instant::now() + Duration::from_secs(3);
+            while !root.join("child.pid").exists() && Instant::now() < deadline {
+                thread::sleep(Duration::from_millis(10));
+            }
+            let pid = fs::read_to_string(root.join("child.pid")).unwrap();
+            if mode == "cancel" {
+                cancel.cancel();
+            }
+            let result = rx
+                .recv_timeout(Duration::from_secs(5))
+                .expect("command or inherited pipes did not terminate");
+            match mode {
+                "cancel" => assert_eq!(result.unwrap_err(), AgentError::Cancelled),
+                "timeout" => assert_eq!(result.unwrap_err(), AgentError::CommandTimeout),
+                _ => assert!(result.unwrap().receipt["success"].as_bool().unwrap()),
+            }
+            worker.join().unwrap();
+            let deadline = Instant::now() + Duration::from_secs(2);
+            loop {
+                let status = Command::new("/bin/ps")
+                    .args(["-o", "stat=", "-p", pid.trim()])
+                    .output()
+                    .unwrap();
+                let state = String::from_utf8_lossy(&status.stdout);
+                if state.trim().is_empty() || state.trim().starts_with('Z') {
+                    break;
+                }
+                assert!(Instant::now() < deadline, "descendant still running");
+                thread::sleep(Duration::from_millis(10));
+            }
+            fs::remove_dir_all(root).unwrap();
+            fs::remove_dir_all(artifacts).unwrap();
+        }
     }
 
     #[derive(Default)]

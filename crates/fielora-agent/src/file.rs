@@ -891,6 +891,7 @@ mod tests {
     use std::fs;
     use std::io::Write;
     use std::path::PathBuf;
+    #[cfg(windows)]
     use std::process::Command;
     use uuid::Uuid;
     use zip::ZipWriter;
@@ -1169,7 +1170,10 @@ mod tests {
                 .unwrap_err(),
             AgentError::FileOutsideProject
         );
+        #[cfg(windows)]
         fs::remove_dir(&link).unwrap();
+        #[cfg(unix)]
+        fs::remove_file(&link).unwrap();
         fs::remove_dir_all(root).unwrap();
         fs::remove_dir_all(outside).unwrap();
     }

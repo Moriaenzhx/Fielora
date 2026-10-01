@@ -109,10 +109,11 @@ test('top rail terminal and right launcher terminal use separate presentations',
   assert.match(workspace, /TERMINAL: \{[^\n]*icon: 'terminal'/);
 });
 
-test('both terminals use a normal PowerShell transcript and prompt without legacy action chrome', () => {
+test('both terminals use platform shell transcripts and prompts without legacy action chrome', () => {
   assert.match(workspace, /Windows PowerShell/);
   assert.match(workspace, /className="terminal-transcript"[\s\S]*?<form className="terminal-prompt" data-terminal-inline-prompt="true"/);
-  assert.match(workspace, /PS \{workingDirectory\}&gt;/);
+  assert.match(workspace, /isMac \? '' : 'PS '/);
+  assert.match(workspace, /isMac \? 'zsh' : 'Windows PowerShell'/);
   assert.match(workspace, /working_directory: workingDirectory/);
   assert.match(workspace, /terminalRef\.current = \{ runId: 'pending', command: nextCommand, output: '' \}/);
   assert.match(workspace, /if \(active\.runId === 'pending'\) active\.runId = event\.run_id/);

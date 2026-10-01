@@ -63,7 +63,7 @@ test('development marker only targets the exact packaged output inside the repo'
   try {
     const output = path.join(fixtureRoot, 'apps', 'desktop', 'out', 'Fielora-win32-x64');
     await mkdir(output, { recursive: true });
-    assert.equal(await markDevelopmentOutput({ repoRoot: fixtureRoot, createdAt: '2026-06-01T00:00:00.000Z' }), output);
+    assert.equal(await markDevelopmentOutput({ platform: 'win32', arch: 'x64', repoRoot: fixtureRoot, createdAt: '2026-06-01T00:00:00.000Z' }), output);
     const marker = JSON.parse(await readFile(path.join(output, '.fielora-retention.json'), 'utf8'));
     assert.deepEqual(marker, { version: 1, kind: 'development-package', createdAt: '2026-06-01T00:00:00.000Z', status: 'succeeded' });
   } finally {

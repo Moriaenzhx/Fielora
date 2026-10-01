@@ -6,12 +6,13 @@
   "main": ".webpack/main",
   "scripts": {
     "start": "node ../../scripts/check-node-version.cjs && electron-forge start",
-    "package": "electron-forge package --arch=x64 --platform=win32",
-    "make": "electron-forge make --arch=x64 --platform=win32",
+    "package": "electron-forge package",
+    "make": "electron-forge make",
     "icon:generate": "node ../../scripts/generate-desktop-icon.cjs",
     "typecheck": "tsc --noEmit",
     "lint": "eslint src webpack.*.ts forge.config.ts",
-    "test": "node --test src/**/*.test.ts"
+    "test": "node --test \"src/**/*.test.ts\"",
+    "icon:mac": "node ../../scripts/generate-macos-icon.mjs"
   },
   "dependencies": {
     "@codemirror/commands": "^6.11.0",

@@ -392,11 +392,11 @@ export class BrowserRuntime {
     const contents = page.view?.webContents;
     const template: MenuItemConstructorOptions[] = [];
     if (contents && !contents.isDestroyed() && page.state.url) {
-      template.push({ label: '重新加载', accelerator: 'Ctrl+R', click: () => this.reloadPage(page) });
+      template.push({ label: '重新加载', accelerator: 'CommandOrControl+R', click: () => this.reloadPage(page) });
       template.push({ label: '复制页面地址', click: () => clipboard.writeText(page.state.url) });
       template.push({ type: 'separator' });
     }
-    template.push({ label: '关闭页面', accelerator: 'Ctrl+W', click: () => { if (this.isLivePage(page)) this.closePage(pageId); } });
+    template.push({ label: '关闭页面', accelerator: 'CommandOrControl+W', click: () => { if (this.isLivePage(page)) this.closePage(pageId); } });
     if (this.diagnosticsEnabled) {
       console.info(`[browse-page-context-menu] page=${page.state.id} loaded=${Boolean(page.state.url)} items=${template.filter((item) => item.type !== 'separator').length}`);
     }
@@ -694,16 +694,16 @@ export class BrowserRuntime {
 
     if (params.isEditable) {
       separator();
-      template.push({ label: '撤销', accelerator: 'Ctrl+Z', enabled: params.editFlags.canUndo, click: () => contents.undo() });
-      template.push({ label: '重做', accelerator: 'Ctrl+Y', enabled: params.editFlags.canRedo, click: () => contents.redo() });
+      template.push({ label: '撤销', accelerator: 'CommandOrControl+Z', enabled: params.editFlags.canUndo, click: () => contents.undo() });
+      template.push({ label: '重做', accelerator: process.platform === 'darwin' ? 'Command+Shift+Z' : 'Ctrl+Y', enabled: params.editFlags.canRedo, click: () => contents.redo() });
       separator();
-      template.push({ label: '剪切', accelerator: 'Ctrl+X', enabled: params.editFlags.canCut, click: () => contents.cut() });
-      template.push({ label: '复制', accelerator: 'Ctrl+C', enabled: params.editFlags.canCopy, click: () => contents.copy() });
-      template.push({ label: '粘贴', accelerator: 'Ctrl+V', enabled: params.editFlags.canPaste, click: () => contents.paste() });
-      template.push({ label: '全选', accelerator: 'Ctrl+A', enabled: params.editFlags.canSelectAll, click: () => contents.selectAll() });
+      template.push({ label: '剪切', accelerator: 'CommandOrControl+X', enabled: params.editFlags.canCut, click: () => contents.cut() });
+      template.push({ label: '复制', accelerator: 'CommandOrControl+C', enabled: params.editFlags.canCopy, click: () => contents.copy() });
+      template.push({ label: '粘贴', accelerator: 'CommandOrControl+V', enabled: params.editFlags.canPaste, click: () => contents.paste() });
+      template.push({ label: '全选', accelerator: 'CommandOrControl+A', enabled: params.editFlags.canSelectAll, click: () => contents.selectAll() });
     } else if (params.selectionText) {
       separator();
-      template.push({ label: '复制', accelerator: 'Ctrl+C', enabled: params.editFlags.canCopy, click: () => contents.copy() });
+      template.push({ label: '复制', accelerator: 'CommandOrControl+C', enabled: params.editFlags.canCopy, click: () => contents.copy() });
     }
 
     separator();
@@ -719,7 +719,7 @@ export class BrowserRuntime {
       enabled: activeIndex >= 0 && activeIndex + 1 < history.length(),
       click: () => this.goToHistoryIndex(page, history.getActiveIndex() + 1),
     });
-    template.push({ label: '重新加载', accelerator: 'Ctrl+R', click: () => contents.reload() });
+    template.push({ label: '重新加载', accelerator: 'CommandOrControl+R', click: () => contents.reload() });
 
     separator();
     template.push({

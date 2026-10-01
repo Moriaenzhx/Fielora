@@ -272,8 +272,14 @@ mod tests {
             )
             .unwrap();
         assert!(read.observation.contains("DISPLAY_LABEL"));
-        assert_eq!(read.receipt["path"], display_path(&dependency));
-        assert_eq!(read.receipt["reference_root"], display_path(&project));
+        assert_eq!(
+            read.receipt["path"],
+            display_path(&dependency.canonicalize().unwrap())
+        );
+        assert_eq!(
+            read.receipt["reference_root"],
+            display_path(&project.canonicalize().unwrap())
+        );
         for path in [base.join("unrelated.js"), project.join(".git/config")] {
             assert!(
                 runtime
@@ -344,7 +350,7 @@ mod tests {
         assert_eq!(search.receipt["matches"], 1);
         assert_eq!(
             search.receipt["matched_locations"][0]["path"],
-            display_path(&reference.join("view.js"))
+            display_path(&reference.join("view.js").canonicalize().unwrap())
         );
         for path in [
             base.join("sibling.js"),

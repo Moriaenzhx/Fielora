@@ -39,6 +39,7 @@ import {
   validateScreenshotEvidence, validateScreenshotEvidenceByRun, validateScreenshotEvidenceByVerification, validateScreenshotEvidencePreview,
 } from './validation';
 import { WorkspaceRuntime } from './workspace-runtime';
+import { prepareMacEnvironment } from './macos-environment';
 import { detectSafeRasterMime, loadSelectedAttachments, readStoredImage, storeImageAttachment } from './attachment-runtime';
 import { focusUsableWindow, usableWindow, withUsableWindow } from './window-lifecycle';
 import { desktopFoundationUserDataPath, hasExplicitUserDataDirectory } from './runtime-identity';
@@ -62,6 +63,8 @@ if (process.platform === 'win32') {
   app.commandLine.appendSwitch('disable-features', [...disabledFeatures].join(','));
 }
 
+app.setName('Fielora');
+
 protocol.registerSchemesAsPrivileged([
   { scheme: 'fielora', privileges: { standard: true, secure: true, supportFetchAPI: true } },
 ]);
@@ -73,6 +76,8 @@ protocol.registerSchemesAsPrivileged([
 if (process.env.FIELORA_E2E !== '1' && !hasExplicitUserDataDirectory(process.argv)) {
   app.setPath('userData', desktopFoundationUserDataPath(app.getPath('appData')));
 }
+
+if (process.env.FIELORA_E2E === '1' && process.env.FIELORA_E2E_USER_DATA) app.setPath('userData', process.env.FIELORA_E2E_USER_DATA);
 
 if (process.env.FIELORA_E2E === '1' && /^\d{2,5}$/.test(process.env.FIELORA_E2E_DEBUG_PORT ?? '')) {
   app.commandLine.appendSwitch('remote-debugging-port', process.env.FIELORA_E2E_DEBUG_PORT);
@@ -161,16 +166,16 @@ function showTrustedEditContextMenu(params: ContextMenuParams): void {
   const contents = window.webContents;
   const template: MenuItemConstructorOptions[] = [];
   if (params.isEditable) {
-    template.push({ label: '撤销', accelerator: 'Ctrl+Z', enabled: params.editFlags.canUndo, click: () => contents.undo() });
-    template.push({ label: '重做', accelerator: 'Ctrl+Y', enabled: params.editFlags.canRedo, click: () => contents.redo() });
+    template.push({ label: '撤销', accelerator: 'CommandOrControl+Z', enabled: params.editFlags.canUndo, click: () => contents.undo() });
+    template.push({ label: '重做', accelerator: process.platform === 'darwin' ? 'Command+Shift+Z' : 'Ctrl+Y', enabled: params.editFlags.canRedo, click: () => contents.redo() });
     template.push({ type: 'separator' });
-    template.push({ label: '剪切', accelerator: 'Ctrl+X', enabled: params.editFlags.canCut, click: () => contents.cut() });
-    template.push({ label: '复制', accelerator: 'Ctrl+C', enabled: params.editFlags.canCopy, click: () => contents.copy() });
-    template.push({ label: '粘贴', accelerator: 'Ctrl+V', enabled: params.editFlags.canPaste, click: () => contents.paste() });
+    template.push({ label: '剪切', accelerator: 'CommandOrControl+X', enabled: params.editFlags.canCut, click: () => contents.cut() });
+    template.push({ label: '复制', accelerator: 'CommandOrControl+C', enabled: params.editFlags.canCopy, click: () => contents.copy() });
+    template.push({ label: '粘贴', accelerator: 'CommandOrControl+V', enabled: params.editFlags.canPaste, click: () => contents.paste() });
     template.push({ type: 'separator' });
-    template.push({ label: '全选', accelerator: 'Ctrl+A', enabled: params.editFlags.canSelectAll, click: () => contents.selectAll() });
+    template.push({ label: '全选', accelerator: 'CommandOrControl+A', enabled: params.editFlags.canSelectAll, click: () => contents.selectAll() });
   } else if (params.selectionText) {
-    template.push({ label: '复制', accelerator: 'Ctrl+C', enabled: params.editFlags.canCopy, click: () => contents.copy() });
+    template.push({ label: '复制', accelerator: 'CommandOrControl+C', enabled: params.editFlags.canCopy, click: () => contents.copy() });
   }
   if (template.length === 0) return;
   if (!app.isPackaged || process.env.FIELORA_E2E === '1') {
@@ -236,6 +241,21 @@ const workspaceOpenApplications: Array<{
 async function findWorkspaceApplication(target: Exclude<WorkspaceOpenTargetId, 'FILE_EXPLORER'>): Promise<string | null> {
   const application = workspaceOpenApplications.find((item) => item.target === target);
   if (!application) return null;
+  if (process.platform === 'darwin') {
+    const bundles: Partial<Record<WorkspaceOpenTargetId, string[]>> = {
+      VISUAL_STUDIO_CODE: ['Visual Studio Code.app'], CURSOR: ['Cursor.app'],
+      INTELLIJ_IDEA: ['IntelliJ IDEA.app', 'IntelliJ IDEA CE.app'],
+      PYCHARM: ['PyCharm.app', 'PyCharm CE.app'], WEBSTORM: ['WebStorm.app'],
+    };
+    for (const directory of ['/Applications', path.join(os.homedir(), 'Applications')]) {
+      for (const bundle of bundles[target] ?? []) {
+        const candidate = path.join(directory, bundle);
+        try { if ((await stat(candidate)).isDirectory()) return candidate; } catch { /* Not installed here. */ }
+      }
+    }
+    return null;
+  }
+  if (process.platform !== 'win32') return null;
   for (const candidate of application.commonPaths.filter((value) => path.isAbsolute(value))) {
     try { await access(candidate); return candidate; } catch { /* Try PATH next. */ }
   }
@@ -268,6 +288,7 @@ async function findWorkspaceApplication(target: Exclude<WorkspaceOpenTargetId, '
 }
 
 async function workspaceProtocolAvailable(target: Exclude<WorkspaceOpenTargetId, 'FILE_EXPLORER'>): Promise<boolean> {
+  if (process.platform !== 'win32') return false;
   const scheme = target === 'VISUAL_STUDIO_CODE' ? 'vscode' : target === 'CURSOR' ? 'cursor' : null;
   if (!scheme) return false;
   return new Promise<boolean>((resolve) => execFile('reg.exe', ['query', `HKCR\\${scheme}\\shell\\open\\command`, '/ve'], { windowsHide: true, timeout: 2_500 }, (error) => resolve(!error)));
@@ -319,14 +340,14 @@ let workspaceOpenTargetsCache: WorkspaceOpenTargetView[] | null = null;
 
 async function workspaceOpenTargets(): Promise<WorkspaceOpenTargetView[]> {
   if (workspaceOpenTargetsCache) return workspaceOpenTargetsCache;
-  const explorerExecutable = path.join(process.env.WINDIR || 'C:\\Windows', 'explorer.exe');
+  const explorerExecutable = process.platform === 'darwin' ? '/System/Library/CoreServices/Finder.app' : path.join(process.env.WINDIR || 'C:\\Windows', 'explorer.exe');
   const detected = await Promise.all(workspaceOpenApplications.map(async (application) => {
     const executable = await findWorkspaceApplication(application.target);
     const available = Boolean(executable) || await workspaceProtocolAvailable(application.target);
     return { application, available, iconDataUrl: await workspaceApplicationIcon(executable) };
   }));
   workspaceOpenTargetsCache = [
-    { target: 'FILE_EXPLORER', label: '文件资源管理器', icon_data_url: await workspaceApplicationIcon(explorerExecutable) },
+    { target: 'FILE_EXPLORER', label: process.platform === 'darwin' ? 'Finder' : '文件资源管理器', icon_data_url: await workspaceApplicationIcon(explorerExecutable) },
     ...detected.filter((item) => item.available).map(({ application, iconDataUrl }) => ({ target: application.target, label: application.label, icon_data_url: iconDataUrl })),
   ];
   return workspaceOpenTargetsCache;
@@ -342,7 +363,7 @@ function registerBridgeHandlers(): void {
     const surface = windowSurfaceColors(theme as WindowSurfaceTheme, background);
     withUsableWindow(appWindow, (window) => {
       window.setBackgroundColor(surface.background);
-      window.setTitleBarOverlay({ color: surface.background, symbolColor: surface.symbols, height: surface.height });
+      if (process.platform !== 'darwin') window.setTitleBarOverlay({ color: surface.background, symbolColor: surface.symbols, height: surface.height });
     });
     return null;
   });
@@ -498,6 +519,10 @@ function registerBridgeHandlers(): void {
       return null;
     }
     if (!executable) throw new Error('这个应用当前不可用');
+    if (process.platform === 'darwin') {
+      await new Promise<void>((resolve, reject) => execFile('/usr/bin/open', ['-a', executable, root], error => error ? reject(error) : resolve()));
+      return null;
+    }
     const child = spawn(executable, [root], { cwd: root, detached: true, windowsHide: true, stdio: 'ignore' });
     child.unref();
     return null;
@@ -919,7 +944,9 @@ async function createWindow(): Promise<void> {
     backgroundColor: initialSurface.background,
     autoHideMenuBar: true,
     titleBarStyle: 'hidden',
-    titleBarOverlay: { color: initialSurface.background, symbolColor: initialSurface.symbols, height: initialSurface.height },
+    ...(process.platform === 'darwin'
+      ? { trafficLightPosition: { x: 14, y: 15 } }
+      : { titleBarOverlay: { color: initialSurface.background, symbolColor: initialSurface.symbols, height: initialSurface.height } }),
     show: false,
     webPreferences: {
       preload: MAIN_WINDOW_PRELOAD_WEBPACK_ENTRY,
@@ -931,7 +958,7 @@ async function createWindow(): Promise<void> {
     },
   });
   appWindow = window;
-  window.removeMenu();
+  if (process.platform !== 'darwin') window.removeMenu();
   browserRuntime = new BrowserRuntime(window, (state) => {
     withUsableWindow(appWindow, (current) => current.webContents.send(channels.browserEvent, state));
   }, !app.isPackaged || process.env.FIELORA_E2E === '1');
@@ -966,14 +993,15 @@ if (!singleInstance) app.quit();
 else {
   app.on('second-instance', () => { focusUsableWindow(appWindow); });
   app.whenReady().then(async () => {
-    const localAppData = process.env.LOCALAPPDATA;
-    if (!localAppData) throw new Error('LOCALAPPDATA is unavailable');
+    await prepareMacEnvironment();
+    if (process.platform === 'darwin') Menu.setApplicationMenu(Menu.buildFromTemplate([{ role: 'appMenu' }, { role: 'editMenu' }, { role: 'windowMenu' }]));
+    const localAppData = process.platform === 'darwin' ? app.getPath('appData') : process.env.LOCALAPPDATA;
+    if (!localAppData) throw new Error('Platform application data directory is unavailable');
     const developmentRoot = (!app.isPackaged || process.env.FIELORA_E2E === '1') ? process.env.FIELORA_DATA_DIR : undefined;
     storageManager = await StorageManager.open(localAppData, developmentRoot);
     scheduledTaskService = await ScheduledTaskService.open(path.join(app.getPath('userData'), 'scheduled-tasks.json'), executeScheduledTask);
     registerBridgeHandlers();
     if (app.isPackaged) await registerApplicationProtocol();
-    await createWindow();
     supervisor.on('notification', (message) => {
       if (message.method === 'host.browser.execute') { agentBrowserHost.handle(message.params); return; }
       if (message.method === 'host.browser.cancel') { agentBrowserHost.cancel(message.params.request_id); return; }
@@ -983,9 +1011,10 @@ else {
       if (payload.state !== 'READY') agentBrowserHost.reset();
       withUsableWindow(appWindow, (window) => window.webContents.send(channels.coreEvent, { event: 'event.core.health', ...payload }));
     });
-    void supervisor.start()
-      .then(() => scheduledTaskService?.start())
-      .catch((error) => console.error('Core startup failed', error));
+    // Resolve the initial handshake before the renderer's first data request.
+    await supervisor.start().catch((error) => console.error('Core startup failed', error));
+    await createWindow();
+    if (supervisor.getHealth().state === 'READY') scheduledTaskService?.start();
   });
 }
 

@@ -24,7 +24,7 @@ use fielora_field::{
 };
 use fielora_model::{ModelClient, ModelError, ProviderEndpoint};
 use fielora_platform::{
-    CredentialStore, DeviceIdentity, PlatformPaths, SecretBytes, WindowsCredentialStore,
+    CredentialStore, DeviceIdentity, PlatformPaths, SecretBytes, SystemCredentialStore,
 };
 use fielora_storage::{
     ProviderConfigRecord, StorageHandle, StorageWorker, create_portable_snapshot, schema_version,
@@ -188,7 +188,7 @@ struct Runtime {
     health: HealthDTO,
     hello_completed: bool,
     storage: StorageHandle,
-    credentials: Arc<WindowsCredentialStore>,
+    credentials: Arc<SystemCredentialStore>,
     async_runtime: Option<tokio::runtime::Runtime>,
     cancellations: Arc<Mutex<HashMap<String, CancellationToken>>>,
     completed_invocations: Arc<Mutex<HashSet<String>>>,
@@ -277,7 +277,7 @@ fn run() -> Result<(), CoreError> {
             }
         })
         .map_err(|error| CoreError::Output(io::Error::other(error)))?;
-    let credentials = Arc::new(WindowsCredentialStore);
+    let credentials = Arc::new(SystemCredentialStore);
     let async_runtime = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .worker_threads(4)

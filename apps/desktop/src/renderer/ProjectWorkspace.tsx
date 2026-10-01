@@ -1,3 +1,4 @@
+import { shortcutLabel, terminalName, isMac } from './platform';
 import { readAppPreferences } from './app-preferences';
 import type { ActivityFileLink } from './agent-activity-detail';
 import { Fragment, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type ClipboardEvent, type DragEvent, type MouseEvent as ReactMouseEvent, type ReactNode } from 'react';
@@ -235,12 +236,12 @@ function TerminalSession({ workingDirectory, command, lastCommand, output, runni
     if (!(event.target as HTMLElement).closest('button')) inputRef.current?.focus();
   }}>
     <div ref={transcriptRef} className="terminal-transcript" data-testid={`${testId}-output`}>
-      <p>Windows PowerShell</p>
-      <p>Copyright (C) Microsoft Corporation. All rights reserved.</p>
-      {lastCommand && <p className="terminal-history-command"><span>PS {workingDirectory}&gt;</span> {lastCommand}</p>}
+      <p>{isMac ? 'zsh' : 'Windows PowerShell'}</p>
+      {!isMac && <p>Copyright (C) Microsoft Corporation. All rights reserved.</p>}
+      {lastCommand && <p className="terminal-history-command"><span>{isMac ? '' : 'PS '}{workingDirectory}{isMac ? ' %' : '>'}</span> {lastCommand}</p>}
       {output && <pre>{output}</pre>}
       <form className="terminal-prompt" data-terminal-inline-prompt="true" onSubmit={(event) => { event.preventDefault(); onRun(); }}>
-        <span>PS {workingDirectory}&gt;</span>
+        <span>{isMac ? '' : 'PS '}{workingDirectory}{isMac ? ' %' : '>'}</span>
         <input ref={inputRef} value={command} onChange={(event) => onCommandChange(event.target.value)} aria-label={testId === 'terminal' ? 'Terminal command' : 'Bottom terminal command'} autoComplete="off" autoCapitalize="none" spellCheck={false} data-testid={`${testId}-command`}/>
         {running && <button type="button" onClick={onCancel} aria-label="停止当前命令"><AppIcon name="close"/></button>}
       </form>
@@ -2131,7 +2132,7 @@ export function ProjectWorkspace({ onNow, onBrowse, onFields, onSettings, newCon
       FILES: { id: 'files', kind: 'FILES', label: '文件', icon: 'folder' },
       REVIEW: { id: 'review', kind: 'REVIEW', label: '审阅', icon: 'diff' },
       BROWSER: { id: 'browser', kind: 'BROWSER', label: '浏览器', icon: 'browse', tabHostId: 'right-workspace-browser-page-tabs' },
-      TERMINAL: { id: 'terminal', kind: 'TERMINAL', label: 'PowerShell', icon: 'terminal' },
+      TERMINAL: { id: 'terminal', kind: 'TERMINAL', label: terminalName, icon: 'terminal' },
     };
     if (kind === 'REVIEW') {
       setHistoricalReview(null);
@@ -2661,10 +2662,10 @@ export function ProjectWorkspace({ onNow, onBrowse, onFields, onSettings, newCon
     </div>}
   </> : null;
   const dockTools: RightWorkspaceTool[] = [
-    { id: 'review', label: '审阅', icon: 'diff', shortcut: 'Ctrl+Shift+G', onOpen: () => openDockTool('REVIEW') },
-    { id: 'terminal', label: 'PowerShell', icon: 'terminal', shortcut: 'Ctrl+`', onOpen: () => openDockTool('TERMINAL') },
-    { id: 'browser', label: '浏览器', icon: 'browse', shortcut: 'Ctrl+T', onOpen: () => openDockTool('BROWSER') },
-    { id: 'files', label: '文件', icon: 'folder', shortcut: 'Ctrl+P', onOpen: () => openDockTool('FILES') },
+    { id: 'review', label: '审阅', icon: 'diff', shortcut: shortcutLabel('Ctrl+Shift+G'), onOpen: () => openDockTool('REVIEW') },
+    { id: 'terminal', label: terminalName, icon: 'terminal', shortcut: shortcutLabel('Ctrl+`'), onOpen: () => openDockTool('TERMINAL') },
+    { id: 'browser', label: '浏览器', icon: 'browse', shortcut: shortcutLabel('Ctrl+T'), onOpen: () => openDockTool('BROWSER') },
+    { id: 'files', label: '文件', icon: 'folder', shortcut: shortcutLabel('Ctrl+P'), onOpen: () => openDockTool('FILES') },
   ];
   const dockViews = project ? dockTabs.map((tab) => {
     const session = fileDockSessions[tab.id] ?? null;
@@ -2904,7 +2905,7 @@ export function ProjectWorkspace({ onNow, onBrowse, onFields, onSettings, newCon
     {project && terminalLayer && createPortal(<>
       <ResizableDivider orientation="horizontal" label="调整终端高度" value={bottomTerminalHeight} min={170} max={520} onResizeStart={beginBottomTerminalDrag} onResize={(clientY) => resizeBottomTerminalDuringDrag(clientY, false)} onResizeEnd={(clientY) => resizeBottomTerminalDuringDrag(clientY, true)} onKeyboardResize={(delta) => updateBottomTerminalHeight(bottomTerminalHeight - delta)} testId="bottom-terminal-resizer" className="terminal-resizer" />
       <section className="terminal-dock bottom-terminal-dock" data-testid="bottom-terminal-dock" aria-hidden={!bottomTerminalOpen}>
-        <header><div><AppIcon name="terminalPanel"/><strong>PowerShell</strong></div><button type="button" onClick={() => setBottomTerminalOpen(false)} aria-label="关闭底部终端" data-testid="bottom-terminal-close"><AppIcon name="close"/></button></header>
+        <header><div><AppIcon name="terminalPanel"/><strong>{terminalName}</strong></div><button type="button" onClick={() => setBottomTerminalOpen(false)} aria-label="关闭底部终端" data-testid="bottom-terminal-close"><AppIcon name="close"/></button></header>
         <TerminalSession workingDirectory={terminalWorkingDirectory || project.root_path} command={terminalCommand} lastCommand={terminalLastCommand} output={terminalOutput} running={Boolean(terminalRunId)} active={bottomTerminalOpen} onCommandChange={setTerminalCommand} onRun={() => void runTerminal(terminalCommand, 'BOTTOM')} onCancel={() => terminalRunId ? void window.fielora.workspace.cancelTerminal({ run_id: terminalRunId }) : undefined} testId="bottom-terminal"/>
       </section>
     </>, terminalLayer)}

@@ -558,6 +558,9 @@ name = "fielora-platform"
 version = "0.1.0"
 dependencies = [
  "fielora-contracts",
+ "libc",
+ "security-framework",
+ "security-framework-sys",
  "thiserror",
  "tokio",
  "uuid",

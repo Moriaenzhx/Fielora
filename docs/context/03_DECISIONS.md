@@ -503,3 +503,13 @@ Agent 的新 Process 提案不再以历史相同 argv 自动替换为旧回执�
 ## 2026-09-29 — 按真实失败链修复，不把结构化错误当成验证
 
 用户明确要求“修复并给出错误原因”。内部错误不能推断为schema错误，结构化JSON包装不能背书CLI或文件路径正确。新任务从当前有界环境发现取得运行时候选，不盲信旧任务缓存、不自动切换全局环境。目录分页和展示折叠分别治理模型输入负担与用户阅读负担；工程验证和真实模型交付继续分别报告。
+
+
+## 2026-10-01 — Mac 开发主机与分支纠正
+
+用户要求后续在当前 Mac 开发和优化，并指出首次启动不是最新版本。核对后，当前本地目录 /Users/solan/projects/Fielora 跟踪 Moriaenzhx/Fielora 的 phase/complete-agent-v0.1，而非落后的默认 main；当前 GitHub 最新开发提交为 bc16374（2026-09-30）。后续下载/更新先核对实际开发分支和提交，保留 Mac 本地适配及用户数据，不把默认分支或旧测试证据当作最新版本验收。
+
+
+## 2026-10-02 — Mac 适配沿现有平台与 Agent 边界扩展
+
+用户授权补齐 Git、Keychain、跨平台脚本和进程管理、原生标题栏/快捷键/编辑器及 `.app`。共享 CredentialStore 根据本机平台使用 WinCred 或 Keychain，不使用明文 fallback。取消由现有 Capability 后端落实 Harness L5；不引入第二套 Runtime/权限/验证状态。默认 build/package 面向当前主机，Windows portable 历史交付独立保留。Git 署名最终为 Moriaen <formsg@163.com>；独立保存本地提交，GitHub 推送需本机完成正常登录。保留历史 stash、数据备份与旧 Evidence。

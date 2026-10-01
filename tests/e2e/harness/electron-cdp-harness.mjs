@@ -1,4 +1,4 @@
-import { spawn, spawnSync } from 'node:child_process';
+import { launchDesktop, killTestProcess } from '../../support/platform.mjs';
 import { writeFile } from 'node:fs/promises';
 import { appendFileSync } from 'node:fs';
 import { createServer } from 'node:net';
@@ -94,9 +94,7 @@ export async function launchElectron({ root, dataRoot, executablePath = '', args
     FIELORA_E2E: '1',
     FIELORA_E2E_DEBUG_PORT: String(port),
   };
-  const child = executablePath
-    ? spawn(executablePath, args, { cwd: root, env, windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'] })
-    : spawn(process.env.ComSpec ?? 'cmd.exe', ['/d', '/s', '/c', 'pnpm --filter @fielora/desktop start'], { cwd: root, env, windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'] });
+  const child = launchDesktop(root, executablePath, Boolean(executablePath), env, args);
   const record = chunk => {
     output.push(String(chunk));
     if (process.env.FIELORA_E2E_EVIDENCE_DIR) appendFileSync(path.join(process.env.FIELORA_E2E_EVIDENCE_DIR, 'electron-live.log'), String(chunk));
@@ -142,7 +140,7 @@ export async function waitForChildExit(child) {
 
 export async function cleanupElectronProcess(child, timeoutMs = 2_000) {
   if (!child || child.exitCode !== null) return;
-  spawnSync('taskkill.exe', ['/pid', String(child.pid), '/t', '/f'], { windowsHide: true, stdio: 'ignore' });
+  killTestProcess(child.pid);
   await Promise.race([
     new Promise((resolve) => child.once('exit', resolve)),
     new Promise((resolve) => setTimeout(resolve, timeoutMs)),

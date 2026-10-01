@@ -901,3 +901,6 @@ body[data-project-workspace="true"][data-workspace-panel-open="true"] .project-c
     margin-bottom: var(--fl-space-3);
   }
 }
+
+/* Native macOS traffic lights occupy the left side of the existing Chrome. */
+:root[data-platform="macos"] .desktop-chrome { padding-left: 84px; padding-right: var(--fl-space-3); }

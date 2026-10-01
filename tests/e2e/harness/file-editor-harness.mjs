@@ -6,6 +6,6 @@ export const renderingTestArgs = ['--disable-features=CalculateNativeWinOcclusio
 
 export async function replaceFileContent(cdp, selector, value) {
   await cdp.eval(`document.querySelector(${JSON.stringify(selector)}).focus()`);
-  for (const type of ['keyDown', 'keyUp']) await cdp.send('Input.dispatchKeyEvent', { type, key: 'a', code: 'KeyA', windowsVirtualKeyCode: 65, modifiers: 2 });
+  for (const type of ['keyDown', 'keyUp']) await cdp.send('Input.dispatchKeyEvent', { type, key: 'a', code: 'KeyA', windowsVirtualKeyCode: 65, modifiers: process.platform === 'darwin' ? 4 : 2, ...(process.platform === 'darwin' && type === 'keyDown' ? { commands: ['selectAll'] } : {}) });
   await cdp.send('Input.insertText', { text: value });
 }

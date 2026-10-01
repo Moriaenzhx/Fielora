@@ -80,15 +80,21 @@ pub fn inspect_environment(
             append_directories(&root, 2, &mut roots);
         }
     }
-    if let Some(home) = std::env::var_os("USERPROFILE") {
+    if let Some(home) = std::env::var_os("USERPROFILE").or_else(|| std::env::var_os("HOME")) {
         for suffix in [
             ".volta/tools/image/node",
             ".nvm",
+            ".nvm/versions/node",
+            ".cargo/bin",
             "scoop/apps/nodejs",
             "scoop/apps/nodejs-lts",
         ] {
             append_directories(&PathBuf::from(&home).join(suffix), 2, &mut roots);
         }
+    }
+    #[cfg(target_os = "macos")]
+    for root in ["/opt/homebrew/bin", "/usr/local/bin"] {
+        roots.push(PathBuf::from(root));
     }
     append_directories(&runtime.root.join(".fielora/tools"), 4, &mut roots);
     let candidates = discover_candidates(&args.program, &roots, path_roots);

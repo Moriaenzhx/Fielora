@@ -1,6 +1,6 @@
 # Fielora Agent 设计与实现错误记录
 
-状态：持续维护；首次整理：2026-09-14；最后更新：2026-09-26。
+状态：持续维护；首次整理：2026-09-14；最后更新：2026-10-02。
 
 目的：保存我们在设计、实现、诊断和验收 Agent 时犯过的错误，以及有效或失败的解决办法。记录服务于实际修复和设计学习，不是新的架构、审批 Gate 或完整历史阅读要求。
 
@@ -40,6 +40,7 @@
 | AE-018 | 适配器存在不等于默认 Agent 能调用；目录缺少候选查找 | Capability；Harness L2/L5 接入 | 本批补只读候选检索；Web 默认接入仍待补 |
 | AE-019 | 简单状态查询展示繁杂、上下文重复且漏报内置 Skill | Product UI / Model / Harness L2/L3/L9 | 展示已迭代并桌面验证；模型漏报与成本另行验证 |
 | AE-020 | Skill 使用中丢失说明、命令失败标记错误、重试不收敛 | Model；Harness L2/L4/L5/L6/L8 | 新生产 Run 已使用 Node24，仍循环308轮；机制局部通过不代表真实任务成功，见2026-09-26诊断 |
+| AE-021 | 非 Windows 进程取消为空实现，父进程结束后管道仍被后代持有 | Capability backend；Harness L5 | macOS 真实进程取消、超时、清理已验证；非安全沙箱 |
 
 ### AE-015 — 原因追问偏成修改，解释未结束且补丁错误提示不精确（2026-09-16）
 
@@ -541,3 +542,12 @@ Run 01a0ec46-697c-7860-9de8-bf520905be67确认运行上一轮新版，26轮/98.0
 AE-020 / AE-019 用户授权后的修复（2026-09-29）：Capability诊断增加固定reported_layer分类，内部/用法/路径错误不再背书有效CLI或提示改JSON，保留有界临时evidence/supportedFixes；L8仅对明确校验类比较诊断数，旧无分类回执保守处理。每次加载含Node/Python线索的Skill刷新既有只读运行时候选，不执行或选择版本，候选与成功探测分开经当前Run账本/压缩保留；新Run不依赖旧Run记忆。list_files默认100项、最多200项和16KiB观察页，明确next_offset与遍历遗漏；L2模型输入去除receipt重复paths。L9折叠“已有文件→准备读取”说明，同时保留错误/问题。均沿单一ToolRuntime与现有权限；没有换全局Node、安装工具或新增迁移。
 
 本地真实ToolRuntime验证了新加载Skill→发现并探测Node24、默认小页，以及相同原输入在Node14内部错误→Node24错误cwd的input/read→正确cwd的25条布局诊断三个阶段。原失败hash一致；没有编辑原架构规格或把校验失败写成成功。274项TS、180项Agent tests（5 ignored）、150项Core tests及Clippy通过；最终桌面包与未验证边界见artifacts/recurrence-repair-20260929/DELIVERY.md。模型是否理解并完成布局仍需真实任务验收，受限Coding Plan未自动运行。
+
+
+### AE-021 — macOS 取消与平台前提（2026-10-02）
+
+- **现象/原因：已确认。** 原 `ProcessJob` 的非 Windows `terminate` 为空实现；`ManagedChild` 和 Desktop Terminal 仅杀父进程。取消/超时后等待输出 reader 可能一直阻塞，浏览器服务器仍能存活。这是 Capability 执行后端没有落实 Harness L5 取消的实现缺口，不是 Model 的语义或规划错误。
+- **机制：工程已验证。** Unix 子进程独立进程组，取消、超时、正常父进程结束和 owner 释放清理所拥有的组。Rust 共享平台 guard，Desktop 复用既有 WorkspaceRuntime；保留 Windows Job Object/任务树路径。只操作本次启动的组；主动 setsid 脱离的进程不在此保证内，不称为 OS sandbox。L7 授权和 L8 验证保持原边界。
+- **其他平台前提：** Provider/static credentials 在 macOS 使用原有 CredentialStore 的 Keychain 实现，保持命名空间、2048 bytes 限制及脱敏；存在性只读 metadata。命令白名单增加 macOS 所需 HOME/TMPDIR/LANG；环境发现包含 HOME/nvm/Homebrew 的有界候选，不自动选版本。相对工作区路径对 drive/URL 的拒绝跨平台保持，路径 containment 不放宽。Windows junction 的测试清理与 Unix symlink 分开，macOS /var → /private/var 的预期使用 canonical receipt。
+- **验证：** 真实 Keychain 新增/覆盖/读取/删除；真实命令 cancel/timeout/父进程先退出；ManagedChild 后代持有 stdout 时 shutdown 必须按时收到 EOF；Desktop cancel/server stop/dispose 杀后代；13 项真实 Core 集成通过（本地 Provider fixture、重启、凭据、修复和验证）。完整 Rust 与 TS 结果见 Mac 开发说明。
+- **原任务边界：** 本次为开发主机准备，未调用外部真实模型，不能据此宣称原有业务任务或模型解题质量已验收。原则：每个平台都必须以真实 OS 行为验证共享生命周期契约，不能把可编译的空实现当作支持。

@@ -106,9 +106,9 @@ export async function applyArtifactRetention(plan, { dryRun = true } = {}) {
   return deleted;
 }
 
-export async function markDevelopmentOutput({ repoRoot, createdAt = new Date().toISOString() }) {
+export async function markDevelopmentOutput({ repoRoot, createdAt = new Date().toISOString(), platform = process.platform, arch = process.arch }) {
   const outputRoot = outputRootFor(path.resolve(repoRoot));
-  const target = assertOutputBoundary(repoRoot, path.join(outputRoot, 'Fielora-win32-x64'));
+  const target = assertOutputBoundary(repoRoot, path.join(outputRoot, `Fielora-${platform}-${arch}`));
   const stats = await lstat(target);
   if (!stats.isDirectory() || stats.isSymbolicLink()) throw new Error('Development package output is not a safe directory');
   const marker = { version: 1, kind: 'development-package', createdAt, status: 'succeeded' };

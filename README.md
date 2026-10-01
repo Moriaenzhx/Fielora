@@ -118,6 +118,8 @@ pnpm dev
 
 `pnpm dev` 会先构建 Rust Core，再启动 Electron 开发宿主。首次安装需要访问依赖源及 Electron 下载源。若本机装有多个 Node，请先确认当前终端使用 Node 24.x；使用已有运行时的完整路径也可以，不必卸载其他版本。
 
+macOS Apple Silicon 的本地开发启动与平台适配边界见 [macOS 开发指南](docs/engineering/MACOS_DEVELOPMENT.md)；当前同样跟踪 `phase/complete-agent-v0.1`，不以默认 `main` 作为最新开发版本。
+
 ### 第一次使用
 
 1. 打开 **设置 → 模型配置**，添加兼容服务、API Key 与模型标识。

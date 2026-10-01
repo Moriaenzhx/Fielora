@@ -6,10 +6,11 @@ type Request = { request_id: string; run_id: string; conversation_id: string; to
 const actions = ['open', 'inspect', 'reload', 'click', 'fill', 'select', 'scroll', 'screenshot', 'resize', 'request_login'];
 const properties = ['text', 'value', 'visible', 'enabled', 'readonly', 'before', 'contains', 'absent'];
 function bounded(value: unknown, max: number): value is string { return typeof value === 'string' && value.length > 0 && value.length <= max; }
-export function browserServerCommand(args: Record<string, unknown>): string {
+export function browserServerCommand(args: Record<string, unknown>, platform: NodeJS.Platform = process.platform): string {
   if (typeof args.program !== 'string' || !/^(node|npm|pnpm|yarn)(\.exe|\.cmd)?$/.test(args.program)
     || !Array.isArray(args.argv) || args.argv.length > 64 || !args.argv.every(a => typeof a === 'string' && a.length <= 2000 && !/[\0\r\n]/.test(a))) throw new Error('BROWSER_SERVER_ARGUMENTS');
-  const program = ['npm', 'pnpm', 'yarn'].includes(args.program) ? `${args.program}.cmd` : args.program;
+  const program = platform === 'win32' && ['npm', 'pnpm', 'yarn'].includes(args.program) ? `${args.program}.cmd` : args.program;
+  if (platform !== 'win32') return [program, ...args.argv].map(a => "'" + String(a).replaceAll("'", "'\"'\"'") + "'").join(' ');
   return `& ${[program, ...args.argv].map(a => `'${String(a).replaceAll("'", "''")}'`).join(' ')}`;
 }
 export function browserHttpUrl(value: unknown): string {

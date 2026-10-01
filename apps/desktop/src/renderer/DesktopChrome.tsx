@@ -1,3 +1,4 @@
+import { shortcutLabel } from './platform';
 import { useEffect, useRef, useState, type CSSProperties, type ReactNode } from 'react';
 import type { AppView } from './view-state';
 import { BrowsePanel } from './BrowseScreen';
@@ -240,14 +241,14 @@ export function DesktopChrome({ children }: { children: ReactNode }) {
   return <div className="desktop-frame" data-surface="canvas" data-testid="desktop-frame">
     <header className="desktop-chrome" ref={chromeRef} data-surface="chrome" data-chrome-plane="window" data-brand-chrome="top" data-testid="desktop-chrome">
       <div className="chrome-leading">
-        <button className={sidebarCollapsed ? 'active' : ''} title={t('显示或隐藏侧栏 (Ctrl+B)', 'Show or hide sidebar (Ctrl+B)')} onClick={toggleSidebar} data-testid="chrome-sidebar-toggle"><AppIcon name="sidebar"/></button>
+        <button className={sidebarCollapsed ? 'active' : ''} title={shortcutLabel(t('显示或隐藏侧栏 (Ctrl+B)', 'Show or hide sidebar (Ctrl+B)'))} onClick={toggleSidebar} data-testid="chrome-sidebar-toggle"><AppIcon name="sidebar"/></button>
         <button title={t('后退', 'Back')} disabled={!route.canBack} onClick={() => emit('fielora:navigation-back')} data-testid="chrome-back"><AppIcon name="back"/></button>
         <button title={t('前进', 'Forward')} disabled={!route.canForward} onClick={() => emit('fielora:navigation-forward')} data-testid="chrome-forward"><AppIcon name="forward"/></button>
       </div>
       <nav className="chrome-menus" aria-label={t('应用菜单', 'Application menu')}>
-        {menuButton('FILE', t('文件', 'File'), <><button role="menuitem" onClick={() => emit('fielora:new-conversation')}><span>{t('新对话', 'New conversation')}</span><kbd>Ctrl+N</kbd></button><button role="menuitem" onClick={() => emit('fielora:add-project')}><span>{t('打开文件夹…', 'Open folder…')}</span><kbd>Ctrl+O</kbd></button><button role="menuitem" onClick={() => emit('fielora:open-settings', 'GENERAL')}><span>{t('设置', 'Settings')}</span><kbd>Ctrl+,</kbd></button></>)}
-        {menuButton('EDIT', t('编辑', 'Edit'), <><button role="menuitem" onClick={() => document.execCommand('undo')}><span>{t('撤销', 'Undo')}</span><kbd>Ctrl+Z</kbd></button><button role="menuitem" onClick={() => document.execCommand('redo')}><span>{t('重做', 'Redo')}</span><kbd>Ctrl+Y</kbd></button><button role="menuitem" onClick={() => document.execCommand('selectAll')}><span>{t('全选', 'Select all')}</span><kbd>Ctrl+A</kbd></button></>)}
-        {menuButton('VIEW', t('视图', 'View'), <><button role="menuitem" onClick={toggleSidebar}><span>{sidebarCollapsed ? t('显示侧栏', 'Show sidebar') : t('隐藏侧栏', 'Hide sidebar')}</span><kbd>Ctrl+B</kbd></button><button role="menuitem" onClick={() => openUtility('HOME')}><span>{t('工作区工具', 'Workspace tools')}</span></button><button role="menuitem" onClick={toggleFocus}><span>{focusMode ? t('退出专注布局', 'Exit focus layout') : t('专注布局', 'Focus layout')}</span></button></>)}
+        {menuButton('FILE', t('文件', 'File'), <><button role="menuitem" onClick={() => emit('fielora:new-conversation')}><span>{t('新对话', 'New conversation')}</span><kbd>{shortcutLabel("Ctrl+N")}</kbd></button><button role="menuitem" onClick={() => emit('fielora:add-project')}><span>{t('打开文件夹…', 'Open folder…')}</span><kbd>{shortcutLabel("Ctrl+O")}</kbd></button><button role="menuitem" onClick={() => emit('fielora:open-settings', 'GENERAL')}><span>{t('设置', 'Settings')}</span><kbd>{shortcutLabel("Ctrl+,")}</kbd></button></>)}
+        {menuButton('EDIT', t('编辑', 'Edit'), <><button role="menuitem" onClick={() => document.execCommand('undo')}><span>{t('撤销', 'Undo')}</span><kbd>{shortcutLabel("Ctrl+Z")}</kbd></button><button role="menuitem" onClick={() => document.execCommand('redo')}><span>{t('重做', 'Redo')}</span><kbd>{shortcutLabel("Ctrl+Y")}</kbd></button><button role="menuitem" onClick={() => document.execCommand('selectAll')}><span>{t('全选', 'Select all')}</span><kbd>{shortcutLabel("Ctrl+A")}</kbd></button></>)}
+        {menuButton('VIEW', t('视图', 'View'), <><button role="menuitem" onClick={toggleSidebar}><span>{sidebarCollapsed ? t('显示侧栏', 'Show sidebar') : t('隐藏侧栏', 'Hide sidebar')}</span><kbd>{shortcutLabel("Ctrl+B")}</kbd></button><button role="menuitem" onClick={() => openUtility('HOME')}><span>{t('工作区工具', 'Workspace tools')}</span></button><button role="menuitem" onClick={toggleFocus}><span>{focusMode ? t('退出专注布局', 'Exit focus layout') : t('专注布局', 'Focus layout')}</span></button></>)}
         {menuButton('HELP', t('帮助', 'Help'), <><button role="menuitem" onClick={() => emit('fielora:open-settings', 'SHORTCUTS')}><span>{t('键盘快捷键', 'Keyboard shortcuts')}</span></button><button role="menuitem" onClick={() => emit('fielora:open-settings', 'ABOUT')}><span>{t('关于 Fielora', 'About Fielora')}</span></button></>)}
       </nav>
       <div className="chrome-drag-region" />
@@ -259,9 +260,9 @@ export function DesktopChrome({ children }: { children: ReactNode }) {
         <header><div>{utilityView !== 'HOME' && <button className="utility-back" aria-label={t('返回工具列表', 'Back to tools')} onClick={() => setUtilityView('HOME')}>←</button>}<strong>{utilityView === 'BROWSER' ? t('浏览器', 'Browser') : t('工作区工具', 'Workspace tools')}</strong></div></header>
         {utilityView === 'BROWSER' ? <BrowsePanel browser={window.fielora.browser} onSaveToLibrary={(input) => window.fielora.library.saveWeb(input)} onOpenBrowserSettings={() => emit('fielora:open-settings', 'BROWSER')} /> : <>
           <nav>
-            <button onClick={() => openWorkspace('DIFF')} data-testid="utility-review"><AppIcon name="diff"/><span>{t('审阅', 'Review')}</span><kbd>Ctrl+Shift+G</kbd></button>
-            <button onClick={() => setUtilityView('BROWSER')} data-testid="utility-browser"><AppIcon name="browse"/><span>{t('浏览器', 'Browser')}</span><kbd>Ctrl+T</kbd></button>
-            <button onClick={() => openWorkspace('FILES')} data-testid="utility-files"><AppIcon name="folder"/><span>{t('文件', 'Files')}</span><kbd>Ctrl+P</kbd></button>
+            <button onClick={() => openWorkspace('DIFF')} data-testid="utility-review"><AppIcon name="diff"/><span>{t('审阅', 'Review')}</span><kbd>{shortcutLabel("Ctrl+Shift+G")}</kbd></button>
+            <button onClick={() => setUtilityView('BROWSER')} data-testid="utility-browser"><AppIcon name="browse"/><span>{t('浏览器', 'Browser')}</span><kbd>{shortcutLabel("Ctrl+T")}</kbd></button>
+            <button onClick={() => openWorkspace('FILES')} data-testid="utility-files"><AppIcon name="folder"/><span>{t('文件', 'Files')}</span><kbd>{shortcutLabel("Ctrl+P")}</kbd></button>
           </nav>
           <p>{t('拖动左侧分隔线调整工具区宽度。', 'Drag the left divider to resize the tool area.')}</p>
         </>}
