@@ -79,7 +79,7 @@ pnpm --filter @fielora/desktop make  # 生成本机 ZIP
 - 外部打开支持 Finder，以及 `/Applications` 和 `~/Applications` 中检测到的 VS Code、Cursor、IntelliJ IDEA、PyCharm、WebStorm。
 - Finder 启动时有界读取用户 zsh/bash 的 PATH，保留已有启动 PATH 的优先级。Agent 环境发现包含 HOME 下 nvm/Volta 和 Homebrew 已知位置；候选发现不等于已验证版本。
 - 首次窗口加载前等待 Core 启动握手，避免界面首次读取项目时遇到 Core unavailable；启动失败仍显示窗口供诊断。
-- 本仓库 Git identity 为 `Moriaen <formsg@163.com>`，不修改其他仓库的全局署名。GitHub CLI 已安装；HTTPS 推送须先完成 `gh auth login`，再 `gh auth setup-git`。不把拉取公开仓库成功当作推送认证成功。
+- 本仓库 Git identity 为 `Moriaen <formsg@163.com>`，不修改其他仓库的全局署名。2026-10-02 已完成 GitHub CLI 设备授权，登录账号为 `Moriaenzhx`，凭据存于系统 keyring；已运行 `gh auth setup-git --hostname github.com`。仓库 API 确认具有 push 权限，向 `phase/complete-agent-v0.1` 的 `git push --dry-run` 通过；本次只做预检，未实际推送。新机器仍须单独完成 `gh auth login` 和 Git credential helper 配置。
 
 ## 验证记录与边界
 

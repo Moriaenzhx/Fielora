@@ -3694,4 +3694,4 @@ Archify 生成失败已对齐生产 Run：56 次模型调用、9 次压缩、6 �
 
 ## 2026-10-02 — macOS 开发基线补齐
 
-在 `phase/complete-agent-v0.1@bc16374` 上补齐原生 Keychain、Unix 进程组取消/超时/退出清理、POSIX 字面参数引用、Command 菜单提示与交通灯避让、Finder/外部编辑器发现、Finder 启动 PATH 读取和原生 ARM64 `.app` 打包。Git 仓库署名按用户纠正设为 Moriaen；GitHub CLI 已安装，网页授权尚未完成。跨平台 Node Gate 保留原 Docs/Ui/Core/Cross/PreMerge 分层；历史 Phase portable 发布脚本仍是 Windows 产物。本机 Cross、Phase 02 和 Mac 专项 dev/packaged 验收通过，完整 PreMerge 的两条历史桌面流程尚未通过。完整验证和已知边界以 `docs/engineering/MACOS_DEVELOPMENT.md` 为准，不把本地 fixture 作为真实模型验收。
+在 `phase/complete-agent-v0.1@bc16374` 上补齐原生 Keychain、Unix 进程组取消/超时/退出清理、POSIX 字面参数引用、Command 菜单提示与交通灯避让、Finder/外部编辑器发现、Finder 启动 PATH 读取和原生 ARM64 `.app` 打包。Git 仓库署名按用户纠正设为 Moriaen；用户随后完成 GitHub CLI 设备授权，账号 Moriaenzhx，凭据由系统 keyring 保存，已配置 Git credential helper。仓库写权限及当前开发分支推送 dry-run 通过，未实际推送代码。跨平台 Node Gate 保留原 Docs/Ui/Core/Cross/PreMerge 分层；历史 Phase portable 发布脚本仍是 Windows 产物。本机 Cross、Phase 02 和 Mac 专项 dev/packaged 验收通过，完整 PreMerge 的两条历史桌面流程尚未通过。完整验证和已知边界以 `docs/engineering/MACOS_DEVELOPMENT.md` 为准，不把本地 fixture 作为真实模型验收。
