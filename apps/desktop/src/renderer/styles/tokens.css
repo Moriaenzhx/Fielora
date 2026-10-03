@@ -59,10 +59,10 @@
   --fl-color-picker-hue-gradient: linear-gradient(90deg, #ff0000, #ffff00, #00ff00, #00ffff, #0000ff, #ff00ff, #ff0000);
 
   /* Typography */
-  --fl-font-sans: "Segoe UI Variable", "Segoe UI", "Microsoft YaHei UI", sans-serif;
-  --fl-font-mono: "Cascadia Code", Consolas, monospace;
-  --fl-font-agent-sans: "Segoe UI Variable", "Segoe UI", "Microsoft YaHei UI", sans-serif;
-  --fl-font-agent-mono: "Cascadia Code", Consolas, monospace;
+  --fl-font-sans: -apple-system, BlinkMacSystemFont, "Segoe UI Variable", "Segoe UI", "PingFang SC", "Microsoft YaHei UI", sans-serif;
+  --fl-font-mono: ui-monospace, "SFMono-Regular", Menlo, "Cascadia Code", Consolas, monospace;
+  --fl-font-agent-sans: -apple-system, BlinkMacSystemFont, "Segoe UI Variable", "Segoe UI", "PingFang SC", "Microsoft YaHei UI", sans-serif;
+  --fl-font-agent-mono: ui-monospace, "SFMono-Regular", Menlo, "Cascadia Code", Consolas, monospace;
   --fl-code-font-size: 13px;
   --fl-font-size-caption: calc(12px * var(--fl-ui-font-scale));
   --fl-font-size-meta: calc(13px * var(--fl-ui-font-scale));

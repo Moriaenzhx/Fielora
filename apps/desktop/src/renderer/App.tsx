@@ -6,6 +6,7 @@ import type {
 import fieloraLogo from '../../assets/fielora-brand-mark.svg';
 import { PrimaryNav } from './PrimaryNav';
 import { ProjectWorkspace } from './ProjectWorkspace';
+import type { ProviderSetupRequest } from './ModelServicesSettings';
 import { SettingsScreen, type SettingsCategory } from './SettingsScreen';
 import type { SelectedUsageModel } from './model-usage';
 import { LibraryScreen } from './LibraryScreen';
@@ -52,6 +53,7 @@ export function App() {
   const [newConversationRequest, setNewConversationRequest] = useState(0);
   const [addProjectRequest, setAddProjectRequest] = useState(0);
   const [workspaceRequest, setWorkspaceRequest] = useState<{ id: number; tool: 'FILES' | 'DIFF' | 'TERMINAL' | 'BROWSER' }>({ id: 0, tool: 'FILES' });
+  const [providerSetupRequest, setProviderSetupRequest] = useState<ProviderSetupRequest>();
   const [settingsCategory, setSettingsCategory] = useState<SettingsCategory>('GENERAL');
   const [modelSelection, setModelSelection] = useState<SelectedUsageModel | null>(null);
   const [settingsFieldId, setSettingsFieldId] = useState<string | null>(null);
@@ -72,7 +74,7 @@ export function App() {
         prefersReducedMotion: reducedMotion.matches,
         supportsBackdrop: CSS.supports('backdrop-filter', 'blur(1px)'),
       });
-      void window.fielora.window.setTitlebarTheme(effectiveAppearance, resolveTitlebarCaption(preferences.appearance, effectiveAppearance));
+      void window.fielora.window.setTitlebarTheme(effectiveAppearance, resolveTitlebarCaption(preferences.appearance, effectiveAppearance), preferences.appearance.translucentSidebar && !preferences.appearance.highContrast);
     };
     apply();
     dark.addEventListener('change', apply);
@@ -162,6 +164,7 @@ export function App() {
   const supportingReference = supportingReferenceId?.kind === 'REFERENCE' ? references.find((reference) => reference.id === supportingReferenceId.object_id) : undefined;
   const continuation = resume ? continuationPresentation(resume, states, references) : undefined;
   const screen = screenFor(health, resume?.field.id, appView);
+  useEffect(() => {if(appView !== 'SETTINGS')setProviderSetupRequest(undefined);}, [appView]);
   const resetScreenSelection = useCallback(() => { selectedFieldRef.current = undefined; setResume(undefined); setInspectorOpen(false); }, []);
   const navigateTo = useCallback((next: AppView) => {
     resetScreenSelection();
@@ -242,6 +245,8 @@ export function App() {
     window.addEventListener('fielora:new-conversation', newConversation);
     window.addEventListener('fielora:add-project', addProject);
     window.addEventListener('fielora:open-workspace', workspace);
+    const openProvider = (event: Event) => {setProviderSetupRequest({id:(event as CustomEvent<string|undefined>).detail,nonce:Date.now()});setSettingsCategory('MODELS');navigateTo('SETTINGS');};
+    window.addEventListener('fielora:open-provider-setup', openProvider);
     window.addEventListener('fielora:open-settings', openSettings);
     return () => {
       window.removeEventListener('fielora:navigate', navigate);
@@ -250,6 +255,7 @@ export function App() {
       window.removeEventListener('fielora:new-conversation', newConversation);
       window.removeEventListener('fielora:add-project', addProject);
       window.removeEventListener('fielora:open-workspace', workspace);
+      window.removeEventListener('fielora:open-provider-setup', openProvider);
       window.removeEventListener('fielora:open-settings', openSettings);
     };
   }, [goBrowse, goNewConversation, moveNavigation, navigateTo, openWorkspaceTool, requestAddProject]);
@@ -263,7 +269,7 @@ export function App() {
 
   if (screen === 'library') return <LibraryScreen onProjects={goProjects} onNow={goNow} onBrowse={goBrowse} onFields={goFields} onNewConversation={goNewConversation} onSettings={goSettings} />;
 
-  if (screen === 'settings') return <SettingsScreen modelSelection={modelSelection} preferences={preferences} onChange={updatePreferences} onBack={() => navigationIndex.current > 0 ? moveNavigation(-1) : goProjects()} initialCategory={settingsCategory} fieldId={settingsFieldId} />;
+  if (screen === 'settings') return <SettingsScreen providerSetupRequest={providerSetupRequest} modelSelection={modelSelection} preferences={preferences} onChange={updatePreferences} onBack={() => navigationIndex.current > 0 ? moveNavigation(-1) : goProjects()} initialCategory={settingsCategory} fieldId={settingsFieldId} />;
 
   if (screen === 'fields') {
     return <div className="shell" data-testid="fields-screen"><PrimaryNav active="FIELDS" onProjects={goProjects} onNow={goNow} onBrowse={goBrowse} onFields={() => undefined} onNewConversation={goNewConversation} onSettings={goSettings} /><main className="content fields-content">

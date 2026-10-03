@@ -1,3 +1,4 @@
+import { ModelServicesSettings, type ProviderSetupRequest } from './ModelServicesSettings';
 import { shortcutLabel } from './platform';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { ModelInvocationEvent, ProviderConfigView } from '@fielora/contracts';
@@ -8,7 +9,7 @@ import { AgentBudgetSettings } from './AgentBudgetSettings';
 import { ModelUsageSettings } from './ModelUsageSettings';
 import type { SelectedUsageModel } from './model-usage';
 import { AppIcon, type AppIconName } from './ui';
-import { Button, SelectMenu, SettingsToggle } from './UiPrimitives';
+import { SelectMenu, SettingsToggle } from './UiPrimitives';
 import {
   persistWorkspaceNavigationWidth,
   readWorkspaceNavigationWidth,
@@ -24,6 +25,7 @@ import { useUiLocale, type UiTranslator } from './ui-locale';
 export type SettingsCategory = 'GENERAL' | 'APPEARANCE' | 'MODELS' | 'USAGE' | 'EXTENSIONS' | 'SKILLS' | 'MCP' | 'PLUGINS' | 'STORAGE_DATA' | 'SHORTCUTS' | 'ABOUT' | 'BROWSER';
 
 interface SettingsScreenProps {
+  providerSetupRequest?: ProviderSetupRequest;
   preferences: AppPreferences;
   onChange: (preferences: AppPreferences) => void;
   onBack: () => void;
@@ -56,17 +58,19 @@ function normalizedCategory(category: SettingsCategory): SettingsCategory {
 function probeFailureLabel(provider: ProviderConfigView, t: UiTranslator, code?: string | null): string {
   if (provider.provider_kind === 'OPENAI' && /^qwen/i.test(provider.default_model)) return t('连接失败 · 当前是 OpenAI 官方协议，但模型像兼容服务；请检查协议与 Base URL', 'Connection failed · The selected protocol is official OpenAI, but the model appears to use a compatible service. Check the protocol and Base URL.');
   const labels: Record<string, string> = {
+    PROVIDER_MODEL_MISMATCH: t('模型与协议不匹配，请编辑连接并选择对应服务商和套餐', 'The model and protocol do not match. Edit the connection and choose the provider and plan.'),
     CREDENTIAL_REJECTED: t('API Key 无效或已失效', 'The API key is invalid or expired'),
     MODEL_NOT_AVAILABLE: t('模型不可用，请检查 Model ID', 'The model is unavailable. Check the Model ID'),
     PROVIDER_RATE_LIMITED: t('服务限流，请稍后重试', 'The service is rate limited. Try again later'),
     PROVIDER_UNAVAILABLE: t('服务不可达，请检查网络与 Base URL', 'The service is unavailable. Check the network and Base URL'),
+    MODEL_CONFIGURATION_UNSUPPORTED: t('此服务与模型不支持所选配置，请检查推理设置', 'This configuration is not available for the endpoint and model. Check reasoning settings.'),
     PROVIDER_PROTOCOL_ERROR: t('服务响应与所选协议不兼容', 'The service response is incompatible with the selected protocol'),
     CUSTOM_ENDPOINT_REJECTED: t('自定义地址未通过安全检查', 'The custom endpoint did not pass security checks'),
   };
   return `${t('连接失败', 'Connection failed')} · ${labels[code ?? ''] ?? code ?? t('服务异常', 'Service error')}`;
 }
 
-export function SettingsScreen({ preferences, onChange, onBack, initialCategory = 'GENERAL', fieldId = null, modelSelection = null }: SettingsScreenProps) {
+export function SettingsScreen({ providerSetupRequest, preferences, onChange, onBack, initialCategory = 'GENERAL', fieldId = null, modelSelection = null }: SettingsScreenProps) {
   const { t } = useUiLocale();
   const [category, setCategory] = useState<SettingsCategory>(() => normalizedCategory(initialCategory));
   const [extensionTab, setExtensionTab] = useState<CapabilityExtensionTab>(() => extensionTabFor(initialCategory));
@@ -76,7 +80,13 @@ export function SettingsScreen({ preferences, onChange, onBack, initialCategory 
   const [providerError, setProviderError] = useState('');
   const [providerProbe, setProviderProbe] = useState<Record<string, string>>({});
   const [navigationWidth, setNavigationWidth] = useState(() => readWorkspaceNavigationWidth(WORKSPACE_NAVIGATION_DEFAULT_WIDTH, 'fielora:settings-navigation-width'));
-  const probeInvocations = useRef(new Map<string, string>());
+  const probeInvocations = useRef(new Map<string, {id:string;revision:number}>());
+  const earlyProbeResults = useRef(new Map<string, ModelInvocationEvent>());
+  const pendingProbeStarts = useRef(0);
+  const probedRevisions=useRef(new Map<string,number>());
+  useEffect(()=>{
+    setProviderProbe(current=>Object.fromEntries(Object.entries(current).filter(([id])=>providers.some(p=>p.id===id && p.revision===probedRevisions.current.get(id)))));
+  },[providers]);
 
   const refreshProviders = useCallback(async () => {
     try { setProviders(await window.fielora.provider.list()); setProviderError(''); }
@@ -98,19 +108,27 @@ export function SettingsScreen({ preferences, onChange, onBack, initialCategory 
     if (['EXTENSIONS', 'SKILLS', 'MCP', 'PLUGINS'].includes(initialCategory)) setExtensionTab(extensionTabFor(initialCategory));
   }, [initialCategory]);
 
-  useEffect(() => window.fielora.core.subscribe((event) => {
-    if (event.event !== 'event.model.invocation') return;
-    const model = event as ModelInvocationEvent;
-    const providerId = probeInvocations.current.get(model.invocation_id);
-    if (!providerId) return;
-    if (model.kind === 'COMPLETED') setProviderProbe((current) => ({ ...current, [providerId]: '连接正常' }));
-    if (model.kind === 'FAILED') {
-      const provider = providers.find((item) => item.id === providerId);
-      setProviderProbe((current) => ({ ...current, [providerId]: provider ? probeFailureLabel(provider, t, model.error_code) : `${t('连接失败', 'Connection failed')} · ${model.error_code ?? t('服务异常', 'Service error')}` }));
+  useEffect(() => { if(providerSetupRequest) {setCategory('MODELS');setModelTab('SERVICES');} }, [providerSetupRequest]);
+
+  const finishProbe = useCallback((model: ModelInvocationEvent) => {
+    if (!['COMPLETED','FAILED','CANCELLED'].includes(model.kind)) return;
+    const reference = probeInvocations.current.get(model.invocation_id);
+    if (!reference) {
+      if(pendingProbeStarts.current > 0) {
+        if(earlyProbeResults.current.size>=32)earlyProbeResults.current.delete(earlyProbeResults.current.keys().next().value!);
+        earlyProbeResults.current.set(model.invocation_id,model);
+      }
+      return;
     }
-    if (model.kind === 'CANCELLED') setProviderProbe((current) => ({ ...current, [providerId]: '测试已取消' }));
-    if (['COMPLETED', 'FAILED', 'CANCELLED'].includes(model.kind)) probeInvocations.current.delete(model.invocation_id);
-  }), [providers, t]);
+    probeInvocations.current.delete(model.invocation_id);
+    const provider = providers.find(item=>item.id===reference.id);
+    if(!provider || provider.revision!==reference.revision)return;
+    const label = model.kind==='COMPLETED' ? t('连接正常','Connected') : model.kind==='CANCELLED' ? t('测试已取消','Test cancelled') : probeFailureLabel(provider,t,model.error_code);
+    setProviderProbe(current=>({...current,[provider.id]:label}));
+  }, [providers,t]);
+  useEffect(() => window.fielora.core.subscribe(event=>{
+    if(event.event==='event.model.invocation')finishProbe(event as ModelInvocationEvent);
+  }), [finishProbe]);
 
   const categories = useMemo(() => settingsCategories(t), [t]);
   const visibleCategories = useMemo(() => {
@@ -118,16 +136,20 @@ export function SettingsScreen({ preferences, onChange, onBack, initialCategory 
     return needle ? categories.filter((item) => `${item.label} ${item.keywords}`.toLocaleLowerCase().includes(needle)) : categories;
   }, [categories, query]);
   const update = (patch: Partial<AppPreferences>) => onChange({ ...preferences, ...patch });
-  const activeProviders = providers.filter((provider) => provider.lifecycle_status !== 'REMOVED');
+
 
   async function probe(provider: ProviderConfigView) {
+    probedRevisions.current.set(provider.id,provider.revision);
     setProviderProbe((current) => ({ ...current, [provider.id]: '正在测试…' }));
+    pendingProbeStarts.current += 1;
     try {
       const result = await window.fielora.provider.probe({ provider_config_id: provider.id });
-      probeInvocations.current.set(result.invocation_id, provider.id);
+      probeInvocations.current.set(result.invocation_id, {id:provider.id,revision:provider.revision});
+      const early=earlyProbeResults.current.get(result.invocation_id);
+      if(early){earlyProbeResults.current.delete(result.invocation_id);finishProbe(early);}
     } catch (reason) {
       setProviderProbe((current) => ({ ...current, [provider.id]: `连接失败 · ${reason instanceof Error ? reason.message : String(reason)}` }));
-    }
+    } finally {pendingProbeStarts.current-=1;if(pendingProbeStarts.current===0)earlyProbeResults.current.clear();}
   }
 
   function updateNavigationWidth(next: number) {
@@ -169,14 +191,7 @@ export function SettingsScreen({ preferences, onChange, onBack, initialCategory 
         <section id="settings-model-panel" role="tabpanel" aria-labelledby={`settings-model-tab-${modelTab.toLowerCase()}`}>
         {modelTab === 'USAGE' && <ModelUsageSettings providers={providers} selection={modelSelection} embedded/>}
         {modelTab === 'BUDGET' && <AgentBudgetSettings value={preferences.agentResourceBudget} onChange={agentResourceBudget => update({ agentResourceBudget })}/>}
-        {modelTab === 'SERVICES' && <section className="settings-card settings-provider-card">
-          <div className="settings-card-heading"><span><strong>已配置服务</strong><small>API Key 继续存放在 Windows Credential Manager。</small></span><Button variant="secondary" onClick={() => window.dispatchEvent(new CustomEvent('fielora:open-provider-setup'))} data-testid="manage-providers">添加模型服务</Button></div>
-          {providerError && <p className="error">{providerError}</p>}
-          {activeProviders.length === 0 ? <p className="settings-empty">尚未配置模型服务。点击“添加模型服务”填写协议、Base URL、API Key 和 Model ID。</p> : <div className="settings-provider-list">{activeProviders.map((provider) => <article key={provider.id}>
-            <span><strong>{provider.display_name}</strong><small>{provider.provider_kind} · {provider.default_model}</small><small>{provider.base_url ?? '官方服务地址'}</small></span>
-            <div><em className={providerProbe[provider.id] === '连接正常' ? 'pass' : provider.credential_present ? 'ready' : 'warning'}>{providerProbe[provider.id] ?? (provider.credential_present ? '凭据已保存 · 未测试' : '需要凭据')}</em><button type="button" onClick={() => window.dispatchEvent(new CustomEvent('fielora:open-provider-setup', { detail: provider.id }))} data-testid={`settings-edit-${provider.id}`}>编辑</button><button type="button" disabled={!provider.credential_present || providerProbe[provider.id] === '正在测试…'} onClick={() => void probe(provider)} data-testid={`settings-probe-${provider.id}`}>测试连接</button></div>
-          </article>)}</div>}
-        </section>}
+        {modelTab === 'SERVICES' && <ModelServicesSettings providers={providers} error={providerError} probeStatus={providerProbe} onProbe={probe} onRefresh={refreshProviders} setupRequest={providerSetupRequest}/>}
         </section>
       </div>}
       {category === 'EXTENSIONS' && <CapabilityExtensionsSettings activeTab={extensionTab} fieldId={fieldId} onTabChange={setExtensionTab}/>}

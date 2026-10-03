@@ -1,3 +1,4 @@
+pub mod fonts;
 use fielora_contracts::DeviceId;
 use std::ffi::OsString;
 use std::fs;

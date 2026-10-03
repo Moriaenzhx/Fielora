@@ -1,76 +1,20 @@
-import type { ProviderConfigView } from '@fielora/contracts';
-
-export interface CapabilitySet {
-  textInput: boolean;
-  imageInput: boolean;
-  videoInput: boolean;
-  fileInput: boolean;
-  toolCalling: boolean;
-}
-
+import type { ModelSupport, ProviderConfigView } from '@fielora/contracts';
+export interface CapabilitySet { textInput: boolean; imageInput: boolean; videoInput: boolean; fileInput: boolean; toolCalling: boolean }
 export interface ResolvedModelCapabilities extends CapabilitySet {
-  model: CapabilitySet;
-  provider: CapabilitySet;
-  transport: CapabilitySet;
-  imageInputReason: string | null;
+  model: CapabilitySet; provider: CapabilitySet; transport: CapabilitySet;
+  imageInputReason: string | null; imageSupport: ModelSupport; toolSupport: ModelSupport;
 }
-
 export type ModelCapabilities = ResolvedModelCapabilities;
-
-const textModel: CapabilitySet = { textInput: true, imageInput: false, videoInput: false, fileInput: true, toolCalling: true };
-const multimodalQwen: CapabilitySet = { textInput: true, imageInput: true, videoInput: true, fileInput: true, toolCalling: true };
-
-/** Exact registry entries follow provider model IDs; Composer never branches on a model string. */
-export const modelCapabilityRegistry: Readonly<Record<string, CapabilitySet>> = {
-  // Deterministic desktop regression model; Core substitutes it only under FIELORA_E2E.
-  '__fielora_agent_fixture_images__': { ...multimodalQwen, videoInput: false },
-  'qwen3.7-plus': multimodalQwen,
-  'qwen3.7-plus-2026-05-26': multimodalQwen,
-  'qwen3.6-plus': multimodalQwen,
-  'qwen3.5-plus': multimodalQwen,
-  'kimi-k2.5': { ...multimodalQwen, videoInput: false },
-};
-
-function endpointHost(provider: ProviderConfigView | null | undefined): string {
-  try { return provider?.base_url ? new URL(provider.base_url).hostname.toLowerCase() : ''; }
-  catch { return ''; }
-}
-
-function intersect(left: CapabilitySet, middle: CapabilitySet, right: CapabilitySet): CapabilitySet {
-  return {
-    textInput: left.textInput && middle.textInput && right.textInput,
-    imageInput: left.imageInput && middle.imageInput && right.imageInput,
-    videoInput: left.videoInput && middle.videoInput && right.videoInput,
-    fileInput: left.fileInput && middle.fileInput && right.fileInput,
-    toolCalling: left.toolCalling && middle.toolCalling && right.toolCalling,
-  };
-}
-
-function providerCapabilities(provider: ProviderConfigView | null | undefined): CapabilitySet {
-  const host = endpointHost(provider);
-  const codingPlan = host === 'coding.dashscope.aliyuncs.com' || host === 'coding-intl.dashscope.aliyuncs.com';
-  if (codingPlan) return { textInput: true, imageInput: true, videoInput: true, fileInput: true, toolCalling: true };
-  return { textInput: true, imageInput: true, videoInput: true, fileInput: true, toolCalling: true };
-}
-
-function transportCapabilities(provider: ProviderConfigView | null | undefined): CapabilitySet {
-  if (!provider) return { textInput: true, imageInput: false, videoInput: false, fileInput: true, toolCalling: true };
-  // All three implemented Provider adapters serialize native image content parts.
-  return { textInput: true, imageInput: true, videoInput: false, fileInput: true, toolCalling: true };
-}
-
+/** Core owns endpoint/model declarations. Unknown is distinct from unsupported. */
 export function modelCapabilities(provider: ProviderConfigView | null | undefined): ResolvedModelCapabilities {
-  const model = provider ? (modelCapabilityRegistry[provider.default_model] ?? textModel) : textModel;
-  const providerProfile = providerCapabilities(provider);
-  const transport = transportCapabilities(provider);
-  const resolved = intersect(model, providerProfile, transport);
-  const imageInputReason = resolved.imageInput ? null
-    : !model.imageInput ? '当前模型不支持图片输入'
-      : !providerProfile.imageInput ? '当前模型服务方案未启用图片输入'
-        : '当前连接方式尚未启用图片输入';
-  return { ...resolved, model, provider: providerProfile, transport, imageInputReason };
+  const runtime = provider?.model_runtime;
+  const profile = runtime?.profile.model_id === provider?.default_model ? runtime?.profile : undefined;
+  const imageSupport = profile?.images ?? 'UNKNOWN';
+  const toolSupport = profile?.tools ?? 'UNKNOWN';
+  const toolVerified = !!profile && !!runtime?.validation?.checks.some(c => c.name === 'TOOL_CALL' && c.status === 'PASSED');
+  const model: CapabilitySet = { textInput: true, imageInput: imageSupport === 'SUPPORTED', videoInput: false, fileInput: true, toolCalling: toolSupport === 'SUPPORTED' || toolVerified };
+  const transport: CapabilitySet = {textInput:true,imageInput:!!provider,videoInput:false,fileInput:true,toolCalling:true};
+  return { ...model, imageInput:model.imageInput && transport.imageInput, model, provider:transport, transport, imageSupport, toolSupport,
+    imageInputReason: imageSupport === 'SUPPORTED' && provider ? null : imageSupport === 'UNSUPPORTED' ? '当前模型不支持图片输入' : '当前服务与模型的图片能力尚未确认' };
 }
-
-export function attachmentAllowed(capabilities: ResolvedModelCapabilities, kind: 'TEXT' | 'IMAGE'): boolean {
-  return kind === 'IMAGE' ? capabilities.imageInput : capabilities.fileInput;
-}
+export function attachmentAllowed(capabilities: ResolvedModelCapabilities, kind: 'TEXT' | 'IMAGE'): boolean { return kind === 'IMAGE' ? capabilities.imageInput : capabilities.fileInput; }

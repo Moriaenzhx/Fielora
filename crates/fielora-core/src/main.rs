@@ -16,6 +16,7 @@ pub mod idr_acquisition;
 pub mod idr_eval;
 pub mod idr_integration;
 pub mod idr_resolver;
+mod model_runtime;
 
 use agent_runtime::AgentCoordinator;
 use fielora_contracts::*;
@@ -50,8 +51,10 @@ use uuid::Uuid;
 
 const MAX_FRAME_BYTES: usize = 8 * 1024 * 1024;
 const PROTOCOL: ProtocolVersion = ProtocolVersion { major: 1, minor: 0 };
-const CAPABILITIES: [&str; 92] = [
+const CAPABILITIES: [&str; 97] = [
     "system.build_provenance",
+    "provider.update_model_runtime",
+    "provider.validate_model",
     "field.create",
     "field.list",
     "field.get",
@@ -83,6 +86,7 @@ const CAPABILITIES: [&str; 92] = [
     "provider.store_credential",
     "provider.delete_credential",
     "provider.remove_config",
+    "provider.catalog",
     "provider.list_configs",
     "provider.get_config",
     "model.start",
@@ -95,6 +99,8 @@ const CAPABILITIES: [&str; 92] = [
     "capture.list",
     "capture.get",
     "profile.get",
+    "fonts.list",
+    "fonts.import",
     "library.create_file",
     "library.save_web",
     "library.get",
@@ -1145,6 +1151,7 @@ fn dispatch_request(
                     .remove_provider_config(record.view.id, now_ms())?,
             )?)
         }
+        "query.provider.catalog" => serialize(fielora_model::provider_catalog()),
         "query.provider.list_configs" => serialize(
             runtime
                 .storage
@@ -1162,6 +1169,38 @@ fn dispatch_request(
                     .get_provider_config(params.provider_config_id)?,
             )?)
         }
+        "command.provider.update_model_runtime" => {
+            let params: UpdateModelRuntimeRequest = parse_params(&request.params)?;
+            let record = runtime
+                .storage
+                .get_provider_config(params.provider_config_id.clone())?;
+            if record.view.lifecycle_status == ProviderLifecycle::Removed {
+                return Err(DomainError::TerminalResource);
+            }
+            if record.view.revision != params.expected_provider_revision {
+                return Err(DomainError::RevisionConflict);
+            }
+            let endpoint = model_runtime::endpoint(&record.view);
+            fielora_model::effective_parameters(
+                &endpoint,
+                &record.view.default_model,
+                &params.settings,
+            )
+            .map_err(|e| DomainError::Validation(e.code().into()))?;
+            runtime.storage.save_model_runtime(
+                record.view.id.clone(),
+                fielora_model::endpoint_identity(&endpoint),
+                record.view.default_model.clone(),
+                record.view.revision,
+                params.expected_revision,
+                params.settings,
+            )?;
+            serialize(provider_reconciled(runtime, record)?)
+        }
+        "command.provider.validate_model" => serialize(model_runtime::start_validation(
+            runtime,
+            parse_params(&request.params)?,
+        )?),
         "command.provider.probe" => {
             let params: ProviderConfigRequest = parse_params(&request.params)?;
             let record = runtime
@@ -1244,6 +1283,21 @@ fn dispatch_request(
             let params: CaptureRequest = parse_params(&request.params)?;
             serialize(runtime.storage.get_capture(params.capture_id)?)
         }
+        "query.fonts.list" => serialize(
+            fielora_platform::fonts::list().map_err(|e| DomainError::Validation(e.to_string()))?,
+        ),
+        "command.fonts.import" => {
+            #[derive(Deserialize)]
+            #[serde(deny_unknown_fields)]
+            struct FontImport {
+                path: String,
+            }
+            let params: FontImport = parse_params(&request.params)?;
+            serialize(
+                fielora_platform::fonts::import_file(std::path::Path::new(&params.path))
+                    .map_err(|e| DomainError::Validation(e.to_string()))?,
+            )
+        }
         "query.profile.get" => serialize(runtime.storage.profile()?),
         "command.library.create_file" => {
             let params: CreateLibraryFileRequest = parse_params(&request.params)?;
@@ -1291,15 +1345,20 @@ fn provider_reconciled(
     record: ProviderConfigRecord,
 ) -> Result<ProviderConfigView, DomainError> {
     let present = runtime.credentials.exists(&record.credential_ref);
-    if !present && record.view.lifecycle_status == ProviderLifecycle::Active {
-        return Ok(provider_public(
-            runtime
-                .storage
-                .set_provider_credential_present(record.view.id, false, now_ms())?,
-            runtime.credentials.as_ref(),
-        ));
-    }
-    Ok(provider_public(record, runtime.credentials.as_ref()))
+    let record = if !present && record.view.lifecycle_status == ProviderLifecycle::Active {
+        runtime
+            .storage
+            .set_provider_credential_present(record.view.id, false, now_ms())?
+    } else {
+        record
+    };
+    let mut view = provider_public(record, runtime.credentials.as_ref());
+    view.model_runtime = Some(model_runtime::view(
+        &runtime.storage,
+        &view,
+        &view.default_model,
+    )?);
+    Ok(view)
 }
 
 fn validate_text(label: &str, value: &str, max: usize) -> Result<(), DomainError> {
@@ -1437,6 +1496,8 @@ fn valid_capture_uri(value: &str) -> bool {
 fn validate_provider_create(request: &CreateProviderConfigRequest) -> Result<(), DomainError> {
     validate_text("display_name", &request.display_name, 120)?;
     validate_text("default_model", &request.default_model, 256)?;
+    fielora_model::validate_provider_model(request.provider_kind, &request.default_model)
+        .map_err(|error| DomainError::Validation(error.code().into()))?;
     match request.provider_kind {
         ProviderKind::Openai | ProviderKind::Anthropic
             if request.base_url.is_none() && !request.custom_endpoint_acknowledged =>
@@ -1462,7 +1523,12 @@ fn validate_provider_update(
 ) -> Result<(), DomainError> {
     validate_text("display_name", &request.display_name, 120)?;
     validate_text("default_model", &request.default_model, 256)?;
-    match current.view.provider_kind {
+    fielora_model::validate_provider_model(
+        request.provider_kind.unwrap_or(current.view.provider_kind),
+        &request.default_model,
+    )
+    .map_err(|error| DomainError::Validation(error.code().into()))?;
+    match request.provider_kind.unwrap_or(current.view.provider_kind) {
         ProviderKind::Openai | ProviderKind::Anthropic
             if request.base_url.is_none() && !request.custom_endpoint_acknowledged =>
         {
@@ -1680,6 +1746,8 @@ fn start_model(
         context_package: normalize_context(runtime, params.context_package)?,
         response_mode: params.response_mode,
     };
+    let model_settings =
+        model_runtime::view(&runtime.storage, &record.view, &request.model_id)?.settings;
     let cancellation = CancellationToken::new();
     runtime
         .cancellations
@@ -1714,7 +1782,7 @@ fn start_model(
                 else { send_model_event(&sender,ModelInvocationEvent{event:"event.model.invocation".into(),invocation_id:request.invocation_id.clone(),kind:ModelInvocationEventKind::OutputTextDelta,text_delta:Some("Fielora fixture response".into()),tool_proposal:None,usage:None,error_code:None});
                 send_model_event(&sender,ModelInvocationEvent{event:"event.model.invocation".into(),invocation_id:request.invocation_id.clone(),kind:ModelInvocationEventKind::Usage,text_delta:None,tool_proposal:None,usage:Some(ModelUsage{input_tokens:Some(3),output_tokens:Some(3)}),error_code:None});completed.lock().unwrap().insert(id.clone());send_terminal(&sender,&request.invocation_id,ModelInvocationEventKind::Completed,None); }}}
         } else {
-            let result=match ModelClient::new(){Ok(client)=>client.invoke(ProviderEndpoint{kind:record.view.provider_kind,base_url:record.view.base_url},request.clone(),secret.expose(),cancellation.clone(),|event|send_model_event(&sender,event)).await,Err(error)=>Err(error)};
+            let result=match ModelClient::new(){Ok(client)=>client.with_settings(model_settings).invoke(ProviderEndpoint{model_optimization:record.view.model_optimization,kind:record.view.provider_kind,base_url:record.view.base_url},request.clone(),secret.expose(),cancellation.clone(),|event|send_model_event(&sender,event)).await,Err(error)=>Err(error)};
             match result {Ok(())=>{completed.lock().unwrap().insert(id.clone());send_terminal(&sender,&request.invocation_id,ModelInvocationEventKind::Completed,None);},Err(ModelError::InvocationCancelled)=>send_terminal(&sender,&request.invocation_id,ModelInvocationEventKind::Cancelled,Some("INVOCATION_CANCELLED")),Err(error)=>send_terminal(&sender,&request.invocation_id,ModelInvocationEventKind::Failed,Some(error.code()))}
         }
         let was_completed=completed.lock().unwrap().contains(&id);let _=terminal_storage.record_model_terminal(field_scope,terminal_provider,terminal_model,was_completed,now_ms());cancellations.lock().unwrap().remove(&id);

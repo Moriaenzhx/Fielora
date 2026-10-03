@@ -70,7 +70,8 @@ test('General Agent preserves work across budget pause and restart, recovers gua
     assert.fail('General Agent did not reach a bounded state');
   }
   provider = await call('command.provider.create_config', { provider_kind: 'OPENAI_COMPATIBLE', display_name: 'Continuity fixture', base_url: 'https://example.com/v1', default_model: '__fielora_agent_fixture__', custom_endpoint_acknowledged: true });
-  await call('command.provider.store_credential', { provider_config_id: provider.id, secret: `fixture-${randomUUID()}` });
+  provider = await call('command.provider.store_credential', { provider_config_id: provider.id, secret: `fixture-${randomUUID()}` });
+  provider = await call('command.provider.update_model_runtime', {provider_config_id:provider.id,expected_provider_revision:provider.revision,expected_revision:0,settings:{reasoning:'PROVIDER_DEFAULT',max_output_tokens:2048}});
   const project = await call('command.project.create', { title: 'General Agent continuity', root_path: projectRoot, goal: null });
   async function start(task, maxSteps) {
     const conversation = await call('command.conversation.create', { field_id: project.field_id, title: task, provider_config_id: provider.id, model_id: provider.default_model });
@@ -82,6 +83,8 @@ test('General Agent preserves work across budget pause and restart, recovers gua
   assert.equal(paused.error_code, 'AGENT_BUDGET_EXHAUSTED');
   assert.equal(paused.current_step, 2);
   const before = await call('query.agent.events', { run_id: run.id, limit: 500 });
+  assert.equal(before.find(event => event.payload.kind === 'MODEL_RUNTIME_SETTINGS_V1').payload.settings.max_output_tokens,2048);
+  provider = await call('command.provider.update_model_runtime', {provider_config_id:provider.id,expected_provider_revision:provider.revision,expected_revision:provider.model_runtime.revision,settings:{reasoning:'PROVIDER_DEFAULT',max_output_tokens:4096}});
   const checkpoint = before.findLast((event) => event.payload.kind === 'GENERAL_WORK_STATE_V1');
   assert.equal(checkpoint.payload.workspace_changed, false);
   assert.ok(checkpoint.payload.recent_tool_facts.some((fact) => fact.error_code === 'AGENT_TEXT_MATCH_FAILED' && fact.recovery.includes('line_edits')));
@@ -105,6 +108,8 @@ test('General Agent preserves work across budget pause and restart, recovers gua
   const runs = await call('query.agent.list', { conversation_id: run.conversation_id });
   assert.equal(runs.length, 1);
   const doneEvents = await call('query.agent.events', { run_id: run.id, limit: 500 });
+  assert.equal(doneEvents.filter(event => event.payload.kind === 'MODEL_RUNTIME_SETTINGS_V1').length,1);
+  assert.equal(doneEvents.find(event => event.payload.kind === 'MODEL_RUNTIME_SETTINGS_V1').payload.settings.max_output_tokens,2048);
   assert.equal(doneEvents.find((event) => event.kind === 'RUN_RESUMED').payload.budget_grant.additional_steps, 24);
   assert.equal(doneEvents.find((event) => event.kind === 'RUN_COMPLETED').payload.verification_passed, true);
 
@@ -114,6 +119,7 @@ test('General Agent preserves work across budget pause and restart, recovers gua
   assert.ok(stalledResult.current_step < 24);
   const stallEvents = await call('query.agent.events', { run_id: stalled.id, limit: 500 });
   assert.ok(stallEvents.some((event) => event.payload.kind === 'GENERAL_REPLAN_REQUESTED'));
+  assert.equal(stallEvents.find(event => event.payload.kind === 'MODEL_RUNTIME_SETTINGS_V1').payload.settings.max_output_tokens,4096);
 
   const escaped = await start('FIELORA_AGENT_FIXTURE_STALL_ESCAPE 分析证据', null);
   const escapedResult = await settled(escaped.id);
@@ -249,7 +255,7 @@ test('real Core persists create/focus/snapshot through close and restart', async
   const dataDir = await mkdtemp(path.join(tmpdir(), 'fielora-core-integration-'));
   t.after(() => rm(dataDir, { recursive: true, force: true }));
   const first = harness(dataDir);
-  assert.equal((await hello(first)).result.schema_version, 16);
+  assert.equal((await hello(first)).result.schema_version, 18);
   first.send('create', 'command.field.create', { title: 'Phase 01 Test', goal: 'Persistence' });
   const created = await first.next();
   const event = await first.next();
@@ -291,7 +297,7 @@ test('parent-pipe EOF exits within two seconds without explicit shutdown', async
 test('Desktop Foundation persists Project, Conversation, provider selection, and messages', async (t) => {
   const dataDir=await mkdtemp(path.join(tmpdir(),'fielora-desktop-foundation-'));t.after(()=>rm(dataDir,{recursive:true,force:true}));
   const projectRoot=path.join(dataDir,'local-project');
-  const first=harness(dataDir);const greeting=await hello(first);assert.equal(greeting.result.schema_version,16);
+  const first=harness(dataDir);const greeting=await hello(first);assert.equal(greeting.result.schema_version,18);
   for(const capability of ['project.create','project.update','project.archive','conversation.create','conversation.message.create'])assert.ok(greeting.result.capabilities.includes(capability));
   first.send('provider','command.provider.create_config',{provider_kind:'OPENAI_COMPATIBLE',display_name:'Desktop fixture',base_url:'https://example.com/v1',default_model:'__fielora_fixture__',custom_endpoint_acknowledged:true});const provider=(await first.next()).result;
   first.send('project','command.project.create',{title:'Local Project',goal:'Persist the coding loop',root_path:projectRoot});const project=(await first.next()).result;assert.equal(project.root_path,projectRoot);
@@ -317,7 +323,7 @@ test('Desktop Foundation persists Project, Conversation, provider selection, and
 test('Phase 02 FIPC reality workflow persists, resumes, and preserves atomic revisions', async (t) => {
   const dataDir=await mkdtemp(path.join(tmpdir(),'fielora-phase02-integration-'));t.after(()=>rm(dataDir,{recursive:true,force:true}));
   const h=harness(dataDir);const helloResponse=await hello(h);
-  assert.equal(helloResponse.result.schema_version,16);
+  assert.equal(helloResponse.result.schema_version,18);
   for(const capability of ['state.supersede','reference.archive','relation.attach_reference_source','surface.save_snapshot_v1','field.resume_v1'])assert.ok(helloResponse.result.capabilities.includes(capability));
   const field=await mutation(h,'p2-field','command.field.create',{title:'Phase 02 Reality',goal:'Prove durable truth'});
   const task=await mutation(h,'p2-task','command.state.create',{field_id:field.id,kind:'TASK',content:'Ship Phase 02',confidence:0.8});
@@ -385,7 +391,7 @@ test('protocol failures recover without crashing and conflict remains conflict',
 
 test('Phase 04 fixture proves provider-neutral stream, capture lifecycle, and no secret echo', async (t) => {
   const dataDir=await mkdtemp(path.join(tmpdir(),'fielora-phase04-integration-'));t.after(()=>rm(dataDir,{recursive:true,force:true}));
-  const h=harness(dataDir);assert.equal((await hello(h)).result.schema_version,16);const notifications=[];
+  const h=harness(dataDir);assert.equal((await hello(h)).result.schema_version,18);const notifications=[];
   async function response(id){for(;;){const value=await h.next();if(value.id===id)return value;notifications.push(value);}}
   h.send('provider','command.provider.create_config',{provider_kind:'OPENAI_COMPATIBLE',display_name:'Fixture provider',base_url:'https://example.com/v1',default_model:'__fielora_fixture__',custom_endpoint_acknowledged:true});
   const provider=(await response('provider')).result;t.after(()=>deleteTestCredential(provider.id));assert.equal(provider.lifecycle_status,'DISABLED');assert.equal(JSON.stringify(provider).includes('credential_ref'),false);

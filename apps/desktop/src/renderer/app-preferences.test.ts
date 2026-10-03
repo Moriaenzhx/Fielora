@@ -71,7 +71,7 @@ test('legacy v1 preferences migrate into the unified appearance model', () => {
   assert.equal(preferences.startupDestination, 'BROWSE');
   assert.equal(preferences.appearance.density, 'COMPACT');
   assert.equal(preferences.appearance.reducedMotionPreference, 'REDUCE');
-  assert.equal(preferences.appearance.themePreference, 'SYSTEM');
+  assert.equal(preferences.appearance.themePreference, 'LIGHT');
 });
 
 test('v2 appearance preferences round-trip through the canonical storage key', () => {
@@ -91,13 +91,14 @@ test('v2 appearance preferences round-trip through the canonical storage key', (
   };
   writeAppPreferences(storage, preferences);
   assert.ok(storage.entries.has('fielora.ui.preferences.v2'));
-  assert.deepEqual(readAppPreferences(storage), preferences);
+  assert.deepEqual(readAppPreferences(storage), { ...preferences, appearance: { ...preferences.appearance, themePreference: 'LIGHT' } });
 });
 
-test('System appearance and motion resolve from the environment without becoming themes', () => {
+test('legacy appearance modes resolve to light while reduced motion follows the environment', () => {
   assert.equal(resolveAppearance('SYSTEM', false), 'LIGHT');
-  assert.equal(resolveAppearance('SYSTEM', true), 'DARK');
+  assert.equal(resolveAppearance('SYSTEM', true), 'LIGHT');
   assert.equal(resolveAppearance('LIGHT', true), 'LIGHT');
+  assert.equal(resolveAppearance('DARK', true), 'LIGHT');
   assert.equal(resolveMaterial(true), 'GLASS');
   assert.equal(resolveMaterial(false), 'SOLID');
   assert.equal(resolveReducedMotion('SYSTEM', true), true);
@@ -143,8 +144,8 @@ test('applying appearance fixes the official identity and resolves Glass materia
     effective: target.dataset.effectiveAppearance, material: target.dataset.material, density: target.dataset.uiDensity,
     contrast: target.dataset.uiContrast, radius: target.dataset.uiRadius,
     motion: target.dataset.reduceMotion, pointer: target.dataset.pointerCursor,
-  }, { theme: 'fielora', language: 'fielora-glass', mode: 'system', effective: 'dark', material: 'glass', density: 'standard', contrast: 'standard', radius: 'standard', motion: 'true', pointer: 'false' });
-  assert.equal(target.style.colorScheme, 'dark');
+  }, { theme: 'fielora', language: 'fielora-glass', mode: 'light', effective: 'light', material: 'glass', density: 'standard', contrast: 'standard', radius: 'standard', motion: 'true', pointer: 'false' });
+  assert.equal(target.style.colorScheme, 'light');
   assert.equal(properties.has('--fl-color-accent'), false);
   assert.equal(properties.has('--fl-color-canvas'), false);
   assert.match(properties.get('--fl-font-sans') ?? '', /Microsoft YaHei/);
@@ -256,6 +257,17 @@ test('resetting appearance can preserve non-appearance preferences', () => {
   };
   const reset = { ...configured, appearance: { ...defaultAppearancePreferences, advancedColorOverrides: {} } };
   assert.equal(reset.startupDestination, 'BROWSE');
-  assert.equal(reset.appearance.themePreference, 'SYSTEM');
+  assert.equal(reset.appearance.themePreference, 'LIGHT');
   assert.equal(reset.appearance.density, 'STANDARD');
+});
+
+test('installed font names persist safely and preserve legacy choices', () => {
+  const custom = normalizeAppPreferences({ appearance: { uiFont: 'LOCAL:示例 "Font"', codeFont: 'LOCAL:Fielora Mono' } });
+  assert.equal(custom.appearance.uiFont, 'LOCAL:示例 "Font"');
+  const storage = memoryStorage(); writeAppPreferences(storage, custom);
+  assert.equal(readAppPreferences(storage).appearance.codeFont, 'LOCAL:Fielora Mono');
+  for (const invalid of ['LOCAL:', 'LOCAL:a\ncolor:red', 'LOCAL:' + 'a'.repeat(300), 'UNKNOWN']) {
+    assert.equal(normalizeAppPreferences({ appearance: { uiFont: invalid } }).appearance.uiFont, 'SYSTEM');
+  }
+  assert.equal(normalizeAppPreferences({ appearance: { uiFont: 'PINGFANG_SC' } }).appearance.uiFont, 'PINGFANG_SC');
 });

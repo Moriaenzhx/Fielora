@@ -1,3 +1,4 @@
+import type { UpdateModelRuntimeRequest } from '@fielora/contracts';
 import type {
   ActivityCursor, ActivityView, ArchiveReferenceRequest, AttachReferenceSourceRequest,
   CreateFieldRequest,
@@ -78,7 +79,7 @@ export type DesktopCoreEvent = DomainEventDTO | ModelInvocationEvent | CaptureCh
 
 export interface FieloraBridge {
   window: {
-    setTitlebarTheme(theme: 'LIGHT' | 'DARK', background: string): Promise<null>;
+    setTitlebarTheme(theme: 'LIGHT' | 'DARK', background: string, translucentSidebar?: boolean): Promise<null>;
   };
   project: {
     pick(request: PickProjectRequest): Promise<ProjectView | null>;
@@ -196,6 +197,9 @@ export interface FieloraBridge {
     writeText(text: string): Promise<void>;
   };
   provider: {
+    catalog(): Promise<import('@fielora/contracts').ModelProviderPreset[]>;
+    updateRuntime(request: UpdateModelRuntimeRequest): Promise<ProviderConfigView>;
+    validate(request: ProviderConfigRequest): Promise<StartModelInvocationResult>;
     create(request: CreateProviderConfigRequest): Promise<ProviderConfigView>;
     update(request: UpdateProviderConfigRequest): Promise<ProviderConfigView>;
     storeCredential(request: StoreCredentialRequest): Promise<ProviderConfigView>;
@@ -241,6 +245,7 @@ export interface FieloraBridge {
     list(request: ListCapturesRequest): Promise<Page<CaptureView, CaptureCursor>>;
     get(request: CaptureRequest): Promise<CaptureView>;
   };
+  fonts: { list(): Promise<FontCatalog>; import(): Promise<FontImportResult> };
   library: {
     addFiles(): Promise<LibraryObjectView[]>;
     saveWeb(request: SaveWebLibraryRequest): Promise<LibraryObjectView>;
@@ -283,3 +288,8 @@ declare global {
     };
   }
 }
+
+export interface FontFamily { family: string; monospace: boolean }
+export interface FontCatalog { families: FontFamily[]; install_directory: string }
+export interface FontInstallation { success: boolean; already_installed: boolean; path: string; font: { families: FontFamily[]; sha256: string; bytes: number } }
+export interface FontImportResult { canceled: boolean; installed: FontInstallation[]; errors: Array<{ filename: string; message: string }> }

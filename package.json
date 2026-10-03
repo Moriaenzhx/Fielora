@@ -12,7 +12,7 @@
     "node:check": "node scripts/check-node-version.cjs",
     "agent:performance": "python scripts/report-agent-performance.py",
     "dev": "node scripts/check-node-version.cjs && pnpm build:core:debug && pnpm --filter @fielora/desktop start",
-    "build": "node scripts/check-node-version.cjs && pnpm typecheck && pnpm build:core:release && pnpm --filter @fielora/desktop package && node scripts/artifact-retention.mjs mark-development",
+    "build": "node scripts/check-node-version.cjs && pnpm typecheck && pnpm build:core:release && pnpm --filter @fielora/desktop package",
     "build:core:debug": "cargo build -p fielora-core",
     "build:core:release": "cargo build --release -p fielora-core",
     "contracts:generate": "cargo run -p fielora-contracts --example export_ts",
@@ -72,6 +72,8 @@
     "verify:phase03": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/verify-phase03.ps1",
     "verify:phase04": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/verify-phase04.ps1",
     "test:e2e:macos": "pnpm build:core:debug && node tests/e2e/macos-development-e2e.mjs dev",
-    "test:e2e:macos:packaged": "node tests/e2e/macos-development-e2e.mjs packaged"
+    "test:e2e:macos:packaged": "node tests/e2e/macos-development-e2e.mjs packaged",
+    "test:e2e:model-runtime": "pnpm build:core:debug && node tests/e2e/model-runtime-settings-e2e.mjs dev",
+    "test:e2e:model-runtime:packaged": "node tests/e2e/model-runtime-settings-e2e.mjs packaged"
   }
 }

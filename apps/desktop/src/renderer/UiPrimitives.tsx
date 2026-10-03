@@ -310,7 +310,7 @@ export function ChevronIcon({ open = false }: { open?: boolean }) {
   return <span className={`ui-chevron chevron-icon ${open ? 'open' : ''}`} aria-hidden="true"><AppIcon name="chevronDown" size="sm"/></span>;
 }
 
-export function SelectMenu<T extends string>({ value, options, onChange, ariaLabel, testId, className = '', placement = 'bottom', leading, hideChevron = false }: {
+export function SelectMenu<T extends string>({ value, options, onChange, ariaLabel, testId, className = '', placement = 'bottom', leading, hideChevron = false, searchLabel }: {
   value: T;
   options: SelectMenuOption<T>[];
   onChange: (value: T) => void;
@@ -320,10 +320,13 @@ export function SelectMenu<T extends string>({ value, options, onChange, ariaLab
   placement?: 'top' | 'bottom';
   leading?: ReactNode;
   hideChevron?: boolean;
+  searchLabel?: string;
 }) {
   const [open, setOpen] = useState(false);
   const rootRef = useRef<HTMLDivElement>(null);
   const selected = options.find((option) => option.value === value) ?? options[0];
+  const [search, setSearch] = useState('');
+  const visibleOptions = searchLabel ? options.filter(option => option.label.toLocaleLowerCase().includes(search.toLocaleLowerCase())) : options;
 
   useEffect(() => {
     if (!open) return;
@@ -334,7 +337,7 @@ export function SelectMenu<T extends string>({ value, options, onChange, ariaLab
       if (event.key === 'Escape') setOpen(false);
       if (event.key !== 'ArrowDown' && event.key !== 'ArrowUp') return;
       event.preventDefault();
-      const enabled = options.filter((option) => !option.disabled);
+      const enabled = visibleOptions.filter((option) => !option.disabled);
       const index = Math.max(0, enabled.findIndex((option) => option.value === value));
       const next = event.key === 'ArrowDown' ? Math.min(enabled.length - 1, index + 1) : Math.max(0, index - 1);
       if (enabled[next]) onChange(enabled[next]!.value);
@@ -345,14 +348,15 @@ export function SelectMenu<T extends string>({ value, options, onChange, ariaLab
       window.removeEventListener('pointerdown', pointer);
       window.removeEventListener('keydown', key);
     };
-  }, [onChange, open, options, value]);
+  }, [onChange, open, visibleOptions, value]);
 
   return <div ref={rootRef} className={`ui-select select-menu ${placement === 'top' ? 'place-top' : ''} ${open ? 'open' : ''} ${className}`.trim()} data-value={value}>
-    <button type="button" aria-label={ariaLabel} aria-haspopup="listbox" aria-expanded={open} onClick={() => setOpen((current) => !current)} data-testid={testId}>
+    <button type="button" aria-label={ariaLabel} aria-haspopup="listbox" aria-expanded={open} onClick={() => { setSearch(''); setOpen((current) => !current); }} data-testid={testId}>
       {leading}<span className="ui-select-value select-menu-value">{selected?.triggerLabel ?? selected?.label ?? ariaLabel}</span>{!hideChevron && <ChevronIcon open={open} />}
     </button>
     {open && <div className="ui-select-popover select-menu-popover" role="listbox" aria-label={ariaLabel} data-surface="overlay" data-testid={testId ? `${testId}-menu` : undefined}>
-      {options.map((option) => <button key={option.value || 'empty'} className={option.tone ? `is-${option.tone}` : undefined} type="button" role="option" aria-selected={option.value === value} disabled={option.disabled} onClick={() => { onChange(option.value); setOpen(false); }} data-testid={testId ? `${testId}-option-${option.value || 'empty'}` : undefined}>
+      {searchLabel && <input className="font-menu-search" aria-label={searchLabel} placeholder={searchLabel} value={search} onChange={event => setSearch(event.target.value)}/> }
+      {visibleOptions.map((option) => <button key={option.value || 'empty'} className={option.tone ? `is-${option.tone}` : undefined} type="button" role="option" aria-selected={option.value === value} disabled={option.disabled} onClick={() => { onChange(option.value); setOpen(false); }} data-testid={testId ? `${testId}-option-${option.value || 'empty'}` : undefined}>
         <span className="ui-select-option-content">{option.icon && <span className="ui-select-option-icon">{option.icon}</span>}<span className="ui-select-option-copy"><strong>{option.label}</strong>{option.description && <small>{option.description}</small>}</span></span>{option.value === value && <span className="ui-select-check" aria-hidden="true"><AppIcon name="check" size="sm"/></span>}
       </button>)}
     </div>}

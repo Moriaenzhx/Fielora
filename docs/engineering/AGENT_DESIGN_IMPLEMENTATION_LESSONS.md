@@ -41,6 +41,8 @@
 | AE-019 | 简单状态查询展示繁杂、上下文重复且漏报内置 Skill | Product UI / Model / Harness L2/L3/L9 | 展示已迭代并桌面验证；模型漏报与成本另行验证 |
 | AE-020 | Skill 使用中丢失说明、命令失败标记错误、重试不收敛 | Model；Harness L2/L4/L5/L6/L8 | 新生产 Run 已使用 Node24，仍循环308轮；机制局部通过不代表真实任务成功，见2026-09-26诊断 |
 | AE-021 | 非 Windows 进程取消为空实现，父进程结束后管道仍被后代持有 | Capability backend；Harness L5 | macOS 真实进程取消、超时、清理已验证；非安全沙箱 |
+| AE-022 | 推理覆盖在文本/Agent间不一致，能力声明与工具验证脱节 | Model；Harness L3/L6/L9 | 统一配置、声明/证据分离、私有续接；真实模型可靠性仍待显式验收 |
+| AE-023 | 固定字体名称静默回退，缺少共用安装与结果检查 | Capability；Harness Governance / Continuity；UI | macOS 导入、渲染、重启及替身安装链路通过；真实模型来源选择、Windows 宿主待验 |
 
 ### AE-015 — 原因追问偏成修改，解释未结束且补丁错误提示不精确（2026-09-16）
 
@@ -551,3 +553,35 @@ AE-020 / AE-019 用户授权后的修复（2026-09-29）：Capability诊断增�
 - **其他平台前提：** Provider/static credentials 在 macOS 使用原有 CredentialStore 的 Keychain 实现，保持命名空间、2048 bytes 限制及脱敏；存在性只读 metadata。命令白名单增加 macOS 所需 HOME/TMPDIR/LANG；环境发现包含 HOME/nvm/Homebrew 的有界候选，不自动选版本。相对工作区路径对 drive/URL 的拒绝跨平台保持，路径 containment 不放宽。Windows junction 的测试清理与 Unix symlink 分开，macOS /var → /private/var 的预期使用 canonical receipt。
 - **验证：** 真实 Keychain 新增/覆盖/读取/删除；真实命令 cancel/timeout/父进程先退出；ManagedChild 后代持有 stdout 时 shutdown 必须按时收到 EOF；Desktop cancel/server stop/dispose 杀后代；13 项真实 Core 集成通过（本地 Provider fixture、重启、凭据、修复和验证）。完整 Rust 与 TS 结果见 Mac 开发说明。
 - **原任务边界：** 本次为开发主机准备，未调用外部真实模型，不能据此宣称原有业务任务或模型解题质量已验收。原则：每个平台都必须以真实 OS 行为验证共享生命周期契约，不能把可编译的空实现当作支持。
+
+
+### AE-022 — 模型参数与真实工具兼容性的证据边界（2026-10-02）
+
+用户要求查看“确认参数激活状态”讨论并授权实现。源码确认Qwen文本请求注入enable_thinking=true、Agent注入false，UI另有模型名能力表；兼容适配器忽略DeepSeek reasoning_content。不能由请求成功证明推理强度执行，也不能由品牌推断Agent可靠性。
+
+本轮将声明和参数映射集中于Model，按完整端点和精确Model ID隔离，未知独立表达；schema17保存非敏感设置/有限测试，CAS和Provider revision避免过期结果。L3/L6在既有Run事件中固定首次调用参数；opaque continuation沿内存对话传递，只向原协议回传，Debug脱敏、不落库，重启用既有历史事实恢复。无副作用回声工具验证文本流、调用、错误重试、结果续接；取消保留实际取消状态，不声称已停止服务端计费。Schema、协议HTTP替身和桌面证据见MODEL_RUNTIME_VALIDATION.md。原Archify长任务没有因此自动通过；无付费真实模型调用或自动Max升级。
+
+### AE-022 follow-up — setup must match wire behavior
+
+User observed the old configuration modal and requested ten domestic families. A split settings/modal workflow kept wrong-protocol configurations unfixable. Centralize the catalog and runtime declarations in Model/Core, let the existing Provider CAS update protocol and endpoint classification together, and preserve its credential identity. Treat Kimi/GLM/MiniMax forced reasoning, Spark built-in web search, and vendor-specific continuation as real adapter differences. Test fragmented HTTP streams and tool round trips for all ten families; a preset list or documentation declaration alone is not real-provider validation. One Settings surface now covers selection, editing, capability settings and bounded checks. No new runtime or authority is introduced.
+
+AE-022 追加：模型名称识别不能表达用户是否需要厂商优化，必须持久化明确模式并与参数、提示词、续传共用同一判定。星火同model ID对应不同版本端点，版本目录需同时描述地址；web_search和function不可混传。以同名同址的自定义HTTP回归、schema17→18凭据引用保留、桌面重启验证这些边界。
+
+
+### AE-022 follow-up — Saving a key did not repair the old protocol (2026-10-02)
+
+Production metadata confirmed OPENAI + no base_url + Qwen3.7-Plus, despite a saved key. After the user identified Coding Plan, the existing editor saved its dedicated endpoint and exact model ID under the compatible protocol, preserving Provider ID and key. No secret was read or printed; credential validity remains unproven.
+
+The previous UI fix exposed editing and a warning but still allowed saving the wrong protocol. This is a UI/Core validation omission, not evidence of poor model reasoning. Model could also send the wrong configuration to an official service. The repair uses one catalog rule for Core create/update and Model text/Agent calls before network access; UI blocks saving and offers the matching vendor. Legacy records remain editable, and custom compatible names are not restricted.
+
+New checks cover every catalog ID, zero network/credential transmission, isolated legacy repair, IPC save rejection, identity/credential preservation and restart. Configuration repair, engineering validation and real provider task success must be reported separately. Restricted Coding Plan credentials are not used for automatic Acceptance.
+
+### AE-023 — 字体名称、安装动作与可用结果（2026-10-03）
+
+已确认：旧 UI 只提供固定 CSS 家族名，缺失的 Inter、Windows 字体等会静默回退；本机没有对应名称并不等于字体切换生效。原工具目录没有专用字体安装能力。此处是新能力与可用性修正，没有证据表明某个真实模型已执行失败。
+
+Capability 负责格式检查、完整字节获取、固定当前用户目录发布、原生注册和结果核对；Harness 的 Governance 复用一次审批，Continuity/Observability 复用同 Run 的准备 ToolCall/checkpoint/回执。Model 负责来源选择和语义解释，字体内容不授予执行权。系统安装是 Process effect，其成功回执只能证明该字体字节/注册，不提升为工作区验证。桌面导入共用同一实现，避免 UI 和 Agent 各自维护安装逻辑。
+
+验证分别记录：非法格式/大小、内容摘要、不可覆盖、链接拒绝、注册失败回滚、准备来源和同 Run 回执、所有权限档位的系统安装确认；真实 macOS 桌面导入、渲染和替身 Agent 链路另验。真实模型搜索来源和 Windows 原生字体安装未验证，不以机制 PASS 替代。最终结果见 FONT_INSTALLATION_CHANGE_IMPACT.md。
+
+AE-023 validation: Cross PASS (278 TS, 442 Rust, 13 integration); final font tests, Clippy and UI Gate PASS. Development and final packaged macOS smoke verified real native registration, Chromium glyph usage, preference persistence across normal process restart, invalid-file handling and the fixture Agent approval/install/query/completion flow. Final packaged appearance regression PASS. Initial test failures were paint/exit timing, corrected without removing glyph/persistence assertions. Fixture fonts and credentials cleaned up. Real-provider source selection and Windows native registration remain unverified; see FONT_INSTALLATION_CHANGE_IMPACT.md.

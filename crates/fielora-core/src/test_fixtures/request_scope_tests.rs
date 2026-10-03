@@ -29,6 +29,7 @@ async fn access_scope_blocks_approved_and_observe_dispatch_bypasses_and_finishes
     let provider = storage
         .create_provider_config(
             CreateProviderConfigRequest {
+                model_optimization: None,
                 provider_kind: ProviderKind::Openai,
                 display_name: "fixture".into(),
                 base_url: None,
@@ -112,6 +113,7 @@ async fn access_scope_blocks_approved_and_observe_dispatch_bypasses_and_finishes
     let prepared = PreparedRun {
         run,
         endpoint: ProviderEndpoint {
+            model_optimization: true,
             kind: ProviderKind::Openai,
             base_url: None,
         },

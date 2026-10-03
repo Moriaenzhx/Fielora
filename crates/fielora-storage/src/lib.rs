@@ -6,7 +6,9 @@
 //! Agent layer or an independent source of execution authority.
 
 pub mod idr;
+mod model_runtime;
 mod model_usage;
+pub use model_runtime::StoredModelRuntime;
 pub mod sync;
 
 use fielora_contracts::*;
@@ -61,7 +63,9 @@ const MIGRATION_0005_FROZEN_SHA256: &str =
     "b7e1e586b47e50389502677e172741d69463e9518ed32211dfafe0dc910c1547";
 const MIGRATION_0006_FROZEN_SHA256: &str =
     "5257959801424a13426259ce10c9ed2d5037795ec7a3a207171c568bc80dbaae";
-const SCHEMA_VERSION: u32 = 16;
+const SCHEMA_VERSION: u32 = 18;
+const MIGRATION_0018: &str = include_str!("../migrations/0018_provider_optimization.sql");
+const MIGRATION_0017: &str = include_str!("../migrations/0017_model_runtime.sql");
 const MIGRATION_0016: &str = include_str!("../migrations/0016_agent_continuation_budget.sql");
 const MIGRATION_0016_NAME: &str = "agent_continuation_budget";
 pub const AGENT_CONTINUATION_STEPS: u32 = 24;
@@ -2072,8 +2076,8 @@ impl StorageHandle {
             };
             let tx = connection.transaction().map_err(storage_domain)?;
             tx.execute(
-                "INSERT INTO provider_configs(id,owner_principal_id,provider_kind,display_name,endpoint_class,base_url,default_model,credential_ref,lifecycle_status,custom_endpoint_acknowledged_at,revision,created_at,updated_at) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,'DISABLED',?9,1,?10,?10)",
-                params![id.0, owner.0, wire(&request.provider_kind), request.display_name, wire(&endpoint), request.base_url, request.default_model, credential_ref, if request.custom_endpoint_acknowledged { Some(now) } else { None }, now]
+                "INSERT INTO provider_configs(id,owner_principal_id,provider_kind,display_name,endpoint_class,base_url,default_model,credential_ref,lifecycle_status,custom_endpoint_acknowledged_at,revision,created_at,updated_at,model_optimization) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,'DISABLED',?9,1,?10,?10,?11)",
+                params![id.0, owner.0, wire(&request.provider_kind), request.display_name, wire(&endpoint), request.base_url, request.default_model, credential_ref, if request.custom_endpoint_acknowledged { Some(now) } else { None }, now, request.model_optimization.unwrap_or(true)]
             ).map_err(storage_domain)?;
             insert_simple_activity(
                 &tx,
@@ -2092,7 +2096,7 @@ impl StorageHandle {
     pub fn list_provider_configs(&self) -> Result<Vec<ProviderConfigRecord>, DomainError> {
         let owner = self.local_user.clone();
         request_task(&self.sender, move |connection| {
-            let mut statement=connection.prepare("SELECT id,provider_kind,display_name,endpoint_class,base_url,default_model,credential_ref,lifecycle_status,revision,created_at,updated_at FROM provider_configs WHERE owner_principal_id=?1 AND lifecycle_status!='REMOVED' ORDER BY updated_at DESC,id DESC").map_err(storage_domain)?;
+            let mut statement=connection.prepare("SELECT id,provider_kind,display_name,endpoint_class,base_url,default_model,credential_ref,lifecycle_status,revision,created_at,updated_at,model_optimization FROM provider_configs WHERE owner_principal_id=?1 AND lifecycle_status!='REMOVED' ORDER BY updated_at DESC,id DESC").map_err(storage_domain)?;
             let rows = statement
                 .query_map([&owner.0], provider_record_from_row)
                 .map_err(storage_domain)?;
@@ -2123,7 +2127,14 @@ impl StorageHandle {
                 None
             };
             let tx = connection.transaction().map_err(storage_domain)?;
-            let changed=tx.execute("UPDATE provider_configs SET display_name=?1,base_url=?2,default_model=?3,custom_endpoint_acknowledged_at=?4,revision=revision+1,updated_at=?5 WHERE id=?6 AND owner_principal_id=?7 AND revision=?8 AND lifecycle_status!='REMOVED'",params![request.display_name,request.base_url,request.default_model,acknowledged,now,request.provider_config_id.0,owner.0,revision_to_domain(request.expected_revision)?]).map_err(storage_domain)?;
+            let current = get_provider_record(&tx, &owner, &request.provider_config_id)?;
+            let kind = request.provider_kind.unwrap_or(current.view.provider_kind);
+            let endpoint = if kind == ProviderKind::OpenaiCompatible {
+                EndpointClass::Custom
+            } else {
+                EndpointClass::Official
+            };
+            let changed=tx.execute("UPDATE provider_configs SET display_name=?1,base_url=?2,default_model=?3,custom_endpoint_acknowledged_at=?4,revision=revision+1,updated_at=?5,provider_kind=?9,endpoint_class=?10,model_optimization=?11 WHERE id=?6 AND owner_principal_id=?7 AND revision=?8 AND lifecycle_status!='REMOVED'",params![request.display_name,request.base_url,request.default_model,acknowledged,now,request.provider_config_id.0,owner.0,revision_to_domain(request.expected_revision)?,wire(&kind),wire(&endpoint),request.model_optimization.unwrap_or(current.view.model_optimization)]).map_err(storage_domain)?;
             if changed == 0 {
                 return provider_revision_or_not_found(
                     &tx,
@@ -4285,6 +4296,8 @@ fn ensure_provider_available(
 fn provider_record_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<ProviderConfigRecord> {
     Ok(ProviderConfigRecord {
         view: ProviderConfigView {
+            model_optimization: row.get(11)?,
+            model_runtime: None,
             id: ProviderConfigId::new(row.get::<_, String>(0)?),
             provider_kind: parse_wire(row.get(1)?)?,
             display_name: row.get(2)?,
@@ -4306,7 +4319,13 @@ fn get_provider_record(
     owner: &PrincipalId,
     id: &ProviderConfigId,
 ) -> Result<ProviderConfigRecord, DomainError> {
-    connection.query_row("SELECT id,provider_kind,display_name,endpoint_class,base_url,default_model,credential_ref,lifecycle_status,revision,created_at,updated_at FROM provider_configs WHERE id=?1 AND owner_principal_id=?2",params![id.0,owner.0],provider_record_from_row).optional().map_err(storage_domain)?.ok_or(DomainError::NotFound)
+    // Historical migration fixtures use current artifact helpers against old provider rows.
+    // This compatibility projection is test-only; production opens always migrate first.
+    #[cfg(test)]
+    if !migration_exists(connection, 18).map_err(|e| DomainError::Storage(e.to_string()))? {
+        return connection.query_row("SELECT id,provider_kind,display_name,endpoint_class,base_url,default_model,credential_ref,lifecycle_status,revision,created_at,updated_at,1 AS model_optimization FROM provider_configs WHERE id=?1 AND owner_principal_id=?2",params![id.0,owner.0],provider_record_from_row).optional().map_err(storage_domain)?.ok_or(DomainError::NotFound);
+    }
+    connection.query_row("SELECT id,provider_kind,display_name,endpoint_class,base_url,default_model,credential_ref,lifecycle_status,revision,created_at,updated_at,model_optimization FROM provider_configs WHERE id=?1 AND owner_principal_id=?2",params![id.0,owner.0],provider_record_from_row).optional().map_err(storage_domain)?.ok_or(DomainError::NotFound)
 }
 
 fn provider_revision_or_not_found(
@@ -4806,6 +4825,22 @@ pub fn apply_migrations(connection: &mut Connection, now: i64) -> Result<(), Sto
     if !migration_exists(connection, 16)? {
         apply_agent_continuation_migration(connection, now, MIGRATION_0016, &checksum_0016)?;
     }
+    let checksum = migration_checksum(MIGRATION_0017);
+    verify_applied_migration(connection, 17, "model_runtime", &checksum)?;
+    if !migration_exists(connection, 17)? {
+        let tx = connection.transaction()?;
+        tx.execute_batch(MIGRATION_0017)?;
+        tx.execute("INSERT INTO schema_migrations(version,name,checksum,applied_at) VALUES(17,'model_runtime',?1,?2)", params![checksum,now])?;
+        tx.commit()?;
+    }
+    let checksum = migration_checksum(MIGRATION_0018);
+    verify_applied_migration(connection, 18, "provider_optimization", &checksum)?;
+    if !migration_exists(connection, 18)? {
+        let tx = connection.transaction()?;
+        tx.execute_batch(MIGRATION_0018)?;
+        tx.execute("INSERT INTO schema_migrations(version,name,checksum,applied_at) VALUES(18,'provider_optimization',?1,?2)", params![checksum,now])?;
+        tx.commit()?;
+    }
     validate_schema(connection)?;
     Ok(())
 }
@@ -5106,6 +5141,15 @@ fn validate_base_schema(connection: &Connection) -> Result<(), StorageError> {
 }
 
 fn validate_schema(connection: &Connection) -> Result<(), StorageError> {
+    // Older migration checkpoints validate their own schema before column 18 exists.
+    if migration_exists(connection, 18)? {
+        let count: i64 = connection.query_row("SELECT count(*) FROM pragma_table_info('provider_configs') WHERE name='model_optimization' AND \"notnull\"=1", [], |row| row.get(0))?;
+        if count != 1 {
+            return Err(StorageError::OpenGate(
+                "missing provider optimization column".into(),
+            ));
+        }
+    }
     validate_base_schema(connection)?;
     const REQUIRED_COLUMNS: [(&str, &str); 10] = [
         ("field_state_entries", "status"),
@@ -8113,27 +8157,20 @@ mod tests {
                 now,
             )
             .unwrap();
-        let provider = handle
-            .create_provider_config(
-                CreateProviderConfigRequest {
-                    provider_kind: ProviderKind::Openai,
-                    display_name: "Artifact fixture".into(),
-                    base_url: None,
-                    default_model: "fixture-model".into(),
-                    custom_endpoint_acknowledged: false,
-                },
-                now + 1,
-            )
-            .unwrap();
-        handle
-            .set_provider_credential_present(provider.view.id.clone(), true, now + 2)
-            .unwrap();
+        // This helper also populates pre-18 migration fixtures; write the historical
+        // columns directly rather than calling the current-schema provider API.
+        let owner = handle.local_user.clone();
+        let provider_id = request_task(&handle.sender, move |connection| {
+            let id = ProviderConfigId::new(Uuid::now_v7().to_string());
+            connection.execute("INSERT INTO provider_configs(id,owner_principal_id,provider_kind,display_name,endpoint_class,base_url,default_model,credential_ref,lifecycle_status,revision,created_at,updated_at) VALUES(?1,?2,'OPENAI','Artifact fixture','OFFICIAL',NULL,'fixture-model',?3,'ACTIVE',2,?4,?5)",params![id.0,owner.0,format!("Fielora/provider/{}",id.0),now+1,now+2]).map_err(storage_domain)?;
+            Ok(id)
+        }).unwrap();
         let conversation = handle
             .create_conversation(
                 CreateConversationRequest {
                     field_id: project.field_id.clone(),
                     title: "Artifact work".into(),
-                    provider_config_id: Some(provider.view.id.clone()),
+                    provider_config_id: Some(provider_id.clone()),
                     model_id: Some("fixture-model".into()),
                 },
                 now + 3,
@@ -8146,7 +8183,7 @@ mod tests {
                     field_id: project.field_id.clone(),
                     conversation_id: conversation.id.clone(),
                     user_message_id: None,
-                    provider_config_id: provider.view.id,
+                    provider_config_id: provider_id,
                     model_id: None,
                     task: "Create a durable artifact".into(),
                     permission: AgentPermission::ReviewChanges,
@@ -8773,7 +8810,7 @@ mod tests {
             frozen_migration_checksum(MIGRATION_0006),
             MIGRATION_0006_FROZEN_SHA256
         );
-        assert_eq!(schema_version(), 16);
+        assert_eq!(schema_version(), 18);
     }
 
     #[test]
@@ -8804,7 +8841,7 @@ mod tests {
                 row.get(0)
             })
             .unwrap();
-        assert_eq!((profile_before, version), (profile_after, 16));
+        assert_eq!((profile_before, version), (profile_after, 18));
         drop(connection);
         fs::remove_dir_all(&root).unwrap();
 
@@ -8961,7 +8998,7 @@ mod tests {
             .unwrap();
         assert_eq!(
             (version, migration_name.as_str()),
-            (16, MIGRATION_0009_NAME)
+            (18, MIGRATION_0009_NAME)
         );
         assert_eq!(
             artifacts_before,
@@ -9256,7 +9293,7 @@ mod tests {
                 |row| row.get(0),
             )
             .unwrap();
-        assert_eq!((max_version, assets_table), (16, 1));
+        assert_eq!((max_version, assets_table), (18, 1));
         assert_eq!(
             artifacts_before,
             query_json_rows(
@@ -9480,7 +9517,7 @@ mod tests {
             [&message_id],
             |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
         ).unwrap();
-        assert_eq!(migrated, (16, "# Existing Markdown".into(), "[]".into()));
+        assert_eq!(migrated, (18, "# Existing Markdown".into(), "[]".into()));
         apply_migrations(&mut connection, 21).unwrap();
         validate_schema(&connection).unwrap();
         drop(connection);
@@ -9527,7 +9564,7 @@ mod tests {
                 |row| Ok((row.get(0)?, row.get(1)?)),
             )
             .unwrap();
-        assert_eq!(migrated, (16, 1));
+        assert_eq!(migrated, (18, 1));
         apply_migrations(&mut connection, 21).unwrap();
         validate_schema(&connection).unwrap();
         drop(connection);
@@ -9754,7 +9791,7 @@ mod tests {
             [],
             |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
         ).unwrap();
-        assert_eq!(migrated, (16, 1, 1));
+        assert_eq!(migrated, (18, 1, 1));
         assert_eq!(
             revisions_before,
             query_json_rows(
@@ -12174,6 +12211,7 @@ mod tests {
             let provider = handle
                 .create_provider_config(
                     CreateProviderConfigRequest {
+                        model_optimization: None,
                         provider_kind: ProviderKind::Openai,
                         display_name: "Fixture".into(),
                         base_url: None,
@@ -12376,6 +12414,7 @@ mod tests {
             let provider = handle
                 .create_provider_config(
                     CreateProviderConfigRequest {
+                        model_optimization: None,
                         provider_kind: ProviderKind::Openai,
                         display_name: "Fixture".into(),
                         base_url: None,
@@ -12725,6 +12764,7 @@ mod tests {
             let provider = handle
                 .create_provider_config(
                     CreateProviderConfigRequest {
+                        model_optimization: None,
                         provider_kind: ProviderKind::Openai,
                         display_name: "Portable provider metadata".into(),
                         base_url: None,

@@ -34,6 +34,29 @@ pub fn turn(
     };
     let mut text = "协议回归进行中。".to_owned();
     let calls: Vec<(&str, Value)> = match run.task.as_str() {
+        "字体安装审批回归" => match step {
+            1 => vec![("fonts.prepare", json!({"path":"font.ttf"}))],
+            2 => {
+                let id = facts
+                    .iter()
+                    .find(|t| t.name == "fonts.prepare" && t.status == AgentToolStatus::Completed)
+                    .ok_or(ModelError::ProviderProtocolError)?
+                    .id
+                    .0
+                    .clone();
+                vec![(
+                    "fonts.install",
+                    json!({"prepared_tool_call_id":id,"_installation_preview":{"install_directory":"forged"}}),
+                )]
+            }
+            3 => vec![("fonts.list", json!({}))],
+            _ => vec![finish(
+                "completed",
+                "action",
+                "字体安装和字体列表检查已完成。",
+                completed_ids(),
+            )],
+        },
         "便携工具安装审批回归" => match step {
             1 => vec![(
                 "tools.prepare",
@@ -426,6 +449,7 @@ pub fn turn(
         _ => return Err(ModelError::ProviderProtocolError),
     };
     Ok(AgentModelTurn {
+        continuation: None,
         text,
         tool_calls: calls
             .into_iter()

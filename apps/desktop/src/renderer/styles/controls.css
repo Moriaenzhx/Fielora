@@ -815,6 +815,19 @@
 .utility-control-dock { z-index: var(--fl-layer-dock); height: var(--fl-control-md); gap: var(--fl-space-1); }
 .utility-control-dock .environment-menu { position: relative; height: var(--fl-control-md); }
 
+/* Keep the hit area and keyboard navigation while the window corner is quiet. */
+.utility-control-dock,
+.project-context-controls {
+  opacity: 0;
+  transition: opacity var(--fl-duration-control) var(--fl-ease-standard);
+}
+.utility-control-dock:hover,
+.utility-control-dock:focus-within,
+.utility-control-dock:has([aria-expanded="true"]),
+.project-context-controls:hover,
+.project-context-controls:focus-within,
+.project-context-controls:has([aria-expanded="true"]) { opacity: 1; }
+
 @media (prefers-reduced-motion: reduce) {
   .ui-icon-button:hover:not(:disabled),
   .ui-toolbar-action:hover:not(:disabled),

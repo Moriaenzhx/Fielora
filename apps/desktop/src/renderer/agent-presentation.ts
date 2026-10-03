@@ -203,6 +203,9 @@ export function toolTitle(name: string): string {
   if (name === 'skills.install') return '安装 Skill 资源';
   if (name === 'environment.inspect') return '查找本机工具版本';
   if (name === 'tools.prepare') return '准备便携工具';
+  if (name === 'fonts.list') return '检查本机字体';
+  if (name === 'fonts.prepare') return '准备字体文件';
+  if (name === 'fonts.install') return '安装字体到当前用户';
   if (name === 'tools.install') return '安装便携工具';
   const labels: Record<string, string> = {
     list_files: '查看项目文件', read_file: '读取文件', search_text: '搜索代码', stat_path: '检查文件信息', run_command: '运行验证',
@@ -302,6 +305,8 @@ function phaseDetail(tools: AgentToolCallView[]): string {
 
 function failureNarrative(errorCode: string | null, changedFiles: number): string {
   const cause = ({
+    PROVIDER_MODEL_MISMATCH: '模型与协议不匹配。请在模型配置中编辑连接，选择对应服务商和套餐后重试。',
+    MODEL_CONFIGURATION_UNSUPPORTED: '模型服务或推理设置已变化，无法沿用此任务的配置。请检查模型设置后创建新任务。',
     PROVIDER_PROTOCOL_ERROR: '模型服务没有接受或没有正确返回本次请求。',
     PROVIDER_RATE_LIMITED: '模型服务暂时繁忙。',
     CREDENTIAL_REJECTED: '当前模型凭据没有通过验证，请更新模型设置后重试。',
@@ -616,6 +621,8 @@ export function agentPausePresentation(run: AgentRunView): { reason: string; act
   const extra = Math.min(24, 4096 - run.max_steps);
   if (exhausted && extra <= 0) return { reason: '已达到本任务的累计执行上限。进展已保存，请查看执行记录后新建任务继续。', action: '', canResume: false };
   const reasons: Record<string, string> = {
+    PROVIDER_MODEL_MISMATCH: '模型与协议不匹配。请在模型配置中编辑连接，选择对应服务商和套餐后重试。',
+    MODEL_CONFIGURATION_UNSUPPORTED: '模型服务或推理设置已变化，无法沿用此任务的配置。请检查模型设置后创建新任务。',
     PROVIDER_PROTOCOL_ERROR: '模型响应异常，自动重试后仍未恢复。已有修改和执行记录已保存，可从中断处继续。',
     PROVIDER_REQUEST_REJECTED: '模型服务拒绝了请求，具体原因尚未确认。进展已保存，可继续当前步骤；错误状态见执行记录。',
     PROVIDER_INVALID_MESSAGES: '模型服务拒绝了消息或工具调用的格式。进展已保存，请使用新版客户端继续；持续失败时检查服务兼容性。',

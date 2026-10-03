@@ -5,7 +5,7 @@ import type { DesktopCoreEvent } from './types';
 
 const bridge: FieloraBridge = {
   window: {
-    setTitlebarTheme: (theme, background) => ipcRenderer.invoke(channels.windowTitlebarTheme, { theme, background }),
+    setTitlebarTheme: (theme, background, translucentSidebar = false) => ipcRenderer.invoke(channels.windowTitlebarTheme, { theme, background, translucentSidebar }),
   },
   project: {
     pick: (request) => ipcRenderer.invoke(channels.projectPick, request),
@@ -131,6 +131,9 @@ const bridge: FieloraBridge = {
     writeText: (text) => ipcRenderer.invoke(channels.clipboardWriteText, text),
   },
   provider: {
+    catalog: () => ipcRenderer.invoke(channels.providerCatalog),
+    updateRuntime: (request) => ipcRenderer.invoke(channels.providerRuntimeUpdate, request),
+    validate: (request) => ipcRenderer.invoke(channels.providerValidate, request),
     create: (request) => ipcRenderer.invoke(channels.providerCreate, request),
     update: (request) => ipcRenderer.invoke(channels.providerUpdate, request),
     storeCredential: (request) => ipcRenderer.invoke(channels.providerStoreCredential, request),
@@ -176,6 +179,7 @@ const bridge: FieloraBridge = {
     list: (request) => ipcRenderer.invoke(channels.captureList, request),
     get: (request) => ipcRenderer.invoke(channels.captureGet, request),
   },
+  fonts: { list: () => ipcRenderer.invoke(channels.fontsList), import: () => ipcRenderer.invoke(channels.fontsImport) },
   library: {
     addFiles: () => ipcRenderer.invoke(channels.libraryAddFiles),
     saveWeb: (request) => ipcRenderer.invoke(channels.librarySaveWeb, request),

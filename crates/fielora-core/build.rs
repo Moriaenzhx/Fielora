@@ -60,6 +60,8 @@ fn main() {
         "crates/fielora-core/src/agent_recovery.rs",
         "crates/fielora-agent/src/command_diagnostics.rs",
         "crates/fielora-agent/src/tool_acquisition.rs",
+        "crates/fielora-agent/src/fonts.rs",
+        "crates/fielora-platform/src/fonts.rs",
         "crates/fielora-core/src/agent_browser.rs",
         "crates/fielora-agent/src/lib.rs",
         "crates/fielora-model/src/lib.rs",

@@ -5,6 +5,14 @@
 //! tool authority, approvals, execution, or verification; those are Harness
 //! responsibilities.
 
+mod compatibility;
+mod profile;
+use fielora_contracts::ModelRuntimeSettings;
+pub use profile::{
+    effective_parameters, endpoint_identity, provider_catalog, resolve_profile,
+    validate_provider_model,
+};
+
 use fielora_contracts::{
     ContextSensitivity, ModelCapabilityProfile, ModelInvocationEvent, ModelInvocationEventKind,
     ModelInvocationRequest, ModelToolDefinition, ModelUsage, ProviderKind, ToolProposal,
@@ -41,6 +49,7 @@ const FIELORA_PROVIDER_USER_AGENT: &str = concat!(
 
 #[derive(Debug, Clone)]
 pub struct ProviderEndpoint {
+    pub model_optimization: bool,
     pub kind: ProviderKind,
     pub base_url: Option<String>,
 }
@@ -54,6 +63,10 @@ pub enum CodingModelFamily {
     Glm,
     MiniMax,
     Doubao,
+    Hunyuan,
+    Ernie,
+    Spark,
+    Step,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -86,30 +99,18 @@ pub fn coding_behavior_profile(
     endpoint: &ProviderEndpoint,
     model_id: &str,
 ) -> CodingBehaviorProfile {
-    let model = model_id.trim().to_ascii_lowercase();
-    let host = endpoint
-        .base_url
-        .as_deref()
-        .and_then(|value| Url::parse(value).ok())
-        .and_then(|url| url.host_str().map(str::to_ascii_lowercase))
-        .unwrap_or_default();
-    let family = if model.starts_with("qwen") || host.ends_with("dashscope.aliyuncs.com") {
-        CodingModelFamily::Qwen
-    } else if model.starts_with("deepseek") || host.ends_with("deepseek.com") {
-        CodingModelFamily::DeepSeek
-    } else if model.starts_with("kimi")
-        || model.starts_with("moonshot")
-        || host.ends_with("moonshot.cn")
-    {
-        CodingModelFamily::Kimi
-    } else if model.starts_with("glm-") || host.ends_with("bigmodel.cn") {
-        CodingModelFamily::Glm
-    } else if model.starts_with("minimax-") || host.ends_with("minimax.io") {
-        CodingModelFamily::MiniMax
-    } else if model.starts_with("doubao-") || model.starts_with("doubao_") {
-        CodingModelFamily::Doubao
-    } else {
-        CodingModelFamily::Generic
+    let family = match profile::optimized_family(endpoint, model_id) {
+        Some("QWEN") => CodingModelFamily::Qwen,
+        Some("DEEPSEEK") => CodingModelFamily::DeepSeek,
+        Some("KIMI") => CodingModelFamily::Kimi,
+        Some("GLM") => CodingModelFamily::Glm,
+        Some("MINIMAX") => CodingModelFamily::MiniMax,
+        Some("DOUBAO") => CodingModelFamily::Doubao,
+        Some("HUNYUAN") => CodingModelFamily::Hunyuan,
+        Some("ERNIE") => CodingModelFamily::Ernie,
+        Some("SPARK") => CodingModelFamily::Spark,
+        Some("STEP") => CodingModelFamily::Step,
+        _ => CodingModelFamily::Generic,
     };
     if family == CodingModelFamily::Generic {
         CodingBehaviorProfile {
@@ -128,22 +129,6 @@ pub fn coding_behavior_profile(
             nudge_action_tasks: true,
         }
     }
-}
-
-fn uses_qwen_plan_thinking(endpoint: &ProviderEndpoint, model_id: &str) -> bool {
-    if !model_id.trim().to_ascii_lowercase().starts_with("qwen") {
-        return false;
-    }
-    endpoint
-        .base_url
-        .as_deref()
-        .and_then(|value| Url::parse(value).ok())
-        .and_then(|url| url.host_str().map(str::to_ascii_lowercase))
-        .is_some_and(|host| {
-            host == "coding.dashscope.aliyuncs.com"
-                || host == "coding-intl.dashscope.aliyuncs.com"
-                || host == "token-plan.cn-beijing.maas.aliyuncs.com"
-        })
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -171,6 +156,7 @@ pub enum AgentModelMessage {
     Assistant {
         text: String,
         tool_calls: Vec<AgentModelToolCall>,
+        continuation: Option<ProviderContinuation>,
     },
     ToolResult {
         call_id: String,
@@ -189,8 +175,21 @@ pub struct AgentModelRequest {
     pub max_output_tokens: u32,
 }
 
+/// Opaque, bounded provider protocol state. No Serialize implementation: never persist or emit.
+#[derive(Clone, PartialEq)]
+pub struct ProviderContinuation {
+    fields: serde_json::Map<String, Value>,
+    endpoint_key: String,
+}
+impl std::fmt::Debug for ProviderContinuation {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("ProviderContinuation([REDACTED])")
+    }
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct AgentModelTurn {
+    pub continuation: Option<ProviderContinuation>,
     pub text: String,
     pub tool_calls: Vec<AgentModelToolCall>,
     pub usage: Option<ModelUsage>,
@@ -299,6 +298,10 @@ pub enum ModelError {
     ContextBlocked,
     #[error("CUSTOM_ENDPOINT_REJECTED")]
     CustomEndpointRejected,
+    #[error("MODEL_CONFIGURATION_UNSUPPORTED")]
+    ConfigurationUnsupported,
+    #[error("PROVIDER_MODEL_MISMATCH")]
+    ProviderModelMismatch,
     #[error("INVOCATION_CANCELLED")]
     InvocationCancelled,
 }
@@ -326,6 +329,8 @@ impl ModelError {
             Self::ContextTooLarge => "CONTEXT_TOO_LARGE",
             Self::ContextBlocked => "CONTEXT_BLOCKED",
             Self::CustomEndpointRejected => "CUSTOM_ENDPOINT_REJECTED",
+            Self::ConfigurationUnsupported => "MODEL_CONFIGURATION_UNSUPPORTED",
+            Self::ProviderModelMismatch => "PROVIDER_MODEL_MISMATCH",
             Self::InvocationCancelled => "INVOCATION_CANCELLED",
         }
     }
@@ -365,8 +370,12 @@ impl SseDecoder {
     }
 }
 
+#[derive(Clone)]
 pub struct ModelClient {
     client: Client,
+    settings: Option<ModelRuntimeSettings>,
+    #[cfg(test)]
+    test_url: Option<Url>,
 }
 
 impl ModelClient {
@@ -379,7 +388,34 @@ impl ModelClient {
             .timeout(Duration::from_secs(90))
             .build()
             .map_err(|_| ModelError::ProviderUnavailable)?;
-        Ok(Self { client })
+        Ok(Self {
+            client,
+            settings: None,
+            #[cfg(test)]
+            test_url: None,
+        })
+    }
+
+    async fn target(
+        &self,
+        endpoint: &ProviderEndpoint,
+        cancellation: &CancellationToken,
+    ) -> Result<(Url, Option<(String, Vec<SocketAddr>)>), ModelError> {
+        #[cfg(test)]
+        if let Some(url) = &self.test_url {
+            return Ok((url.clone(), None));
+        }
+        // DNS and endpoint checks are part of the cancellable invocation too.
+        tokio::select! {
+            biased;
+            _ = cancellation.cancelled() => Err(ModelError::InvocationCancelled),
+            value = endpoint_url(endpoint) => value,
+        }
+    }
+
+    pub fn with_settings(mut self, settings: ModelRuntimeSettings) -> Self {
+        self.settings = Some(settings);
+        self
     }
 
     pub async fn invoke<F>(
@@ -394,8 +430,9 @@ impl ModelClient {
         F: FnMut(ModelInvocationEvent) + Send,
     {
         validate_request(&request)?;
+        validate_provider_model(endpoint.kind, &request.model_id)?;
         emit(event(&request, ModelInvocationEventKind::Started));
-        let (url, pinned) = endpoint_url(&endpoint).await?;
+        let (url, pinned) = self.target(&endpoint, &cancellation).await?;
         let client = if let Some((host, addresses)) = pinned {
             Client::builder()
                 .user_agent(FIELORA_PROVIDER_USER_AGENT)
@@ -411,7 +448,13 @@ impl ModelClient {
         };
         let response = match endpoint.kind {
             ProviderKind::Openai | ProviderKind::OpenaiCompatible => {
-                let body = provider_body(&endpoint, &request);
+                let mut body = provider_body(&endpoint, &request);
+                profile::apply_settings(
+                    &mut body,
+                    &endpoint,
+                    &request.model_id,
+                    &self.settings.clone().unwrap_or_default(),
+                )?;
                 client
                     .post(url)
                     .bearer_auth(String::from_utf8_lossy(secret))
@@ -419,7 +462,13 @@ impl ModelClient {
                     .send()
             }
             ProviderKind::Anthropic => {
-                let body = provider_body(&endpoint, &request);
+                let mut body = provider_body(&endpoint, &request);
+                profile::apply_settings(
+                    &mut body,
+                    &endpoint,
+                    &request.model_id,
+                    &self.settings.clone().unwrap_or_default(),
+                )?;
                 client
                     .post(url)
                     .header("x-api-key", String::from_utf8_lossy(secret).as_ref())
@@ -482,7 +531,8 @@ impl ModelClient {
         F: FnMut(&str) + Send,
     {
         validate_agent_request(&request)?;
-        let (url, pinned) = endpoint_url(&endpoint).await?;
+        validate_provider_model(endpoint.kind, &request.model_id)?;
+        let (url, pinned) = self.target(&endpoint, &cancellation).await?;
         let client = if let Some((host, addresses)) = pinned {
             Client::builder()
                 .user_agent(FIELORA_PROVIDER_USER_AGENT)
@@ -496,7 +546,24 @@ impl ModelClient {
         } else {
             self.client.clone()
         };
-        let body = agent_provider_body(&endpoint, &request);
+        let mut request = request;
+        if profile::preserves_reasoning(&endpoint, &request.model_id)
+            && self
+                .settings
+                .as_ref()
+                .is_none_or(|s| s.reasoning != fielora_contracts::ReasoningMode::Off)
+        {
+            recover_missing_continuation(
+                &mut request.messages,
+                profile::optimized_family(&endpoint, &request.model_id) == Some("KIMI"),
+            );
+        }
+        let mut body = agent_provider_body(&endpoint, &request);
+        let settings = self.settings.clone().unwrap_or(ModelRuntimeSettings {
+            max_output_tokens: request.max_output_tokens,
+            ..Default::default()
+        });
+        profile::apply_settings(&mut body, &endpoint, &request.model_id, &settings)?;
         let response = match endpoint.kind {
             ProviderKind::Openai | ProviderKind::OpenaiCompatible => client
                 .post(url)
@@ -548,7 +615,17 @@ impl ModelClient {
         if !tail.is_empty() {
             emit_text(&tail);
         }
-        accumulator.finish()
+        let mut turn = accumulator.finish()?;
+        if let Some(state) = turn.continuation.as_mut() {
+            state.fields.retain(|key, _| {
+                profile::continuation_fields(&endpoint, &request.model_id).contains(&key.as_str())
+            });
+            state.endpoint_key = profile::endpoint_identity(&endpoint);
+            if state.fields.is_empty() {
+                turn.continuation = None;
+            }
+        }
+        Ok(turn)
     }
 }
 
@@ -575,8 +652,14 @@ fn validate_agent_request(request: &AgentModelRequest) -> Result<(), ModelError>
                         .map(|image| image.data_url.len() + image.filename.len())
                         .sum::<usize>()
             }
-            AgentModelMessage::Assistant { text, tool_calls } => {
-                text.len()
+            AgentModelMessage::Assistant {
+                text,
+                tool_calls,
+                continuation,
+            } => {
+                continuation.as_ref().map_or(0, |state| {
+                    serde_json::to_vec(&state.fields).map_or(MAX_RESPONSE_BYTES, |v| v.len())
+                }) + text.len()
                     + tool_calls
                         .iter()
                         .map(|call| {
@@ -611,6 +694,39 @@ fn validate_agent_request(request: &AgentModelRequest) -> Result<(), ModelError>
     Ok(())
 }
 
+/// Restart recovery may retain receipts but not private protocol state. Resume
+/// from labelled historical facts instead of inventing reasoning for a tool call.
+fn recover_missing_continuation(messages: &mut [AgentModelMessage], all_assistant: bool) {
+    let mut historical_ids = std::collections::HashSet::new();
+    for message in messages.iter_mut() {
+        match message {
+            AgentModelMessage::Assistant {
+                text,
+                tool_calls,
+                continuation: None,
+            } if all_assistant || !tool_calls.is_empty() => {
+                for call in tool_calls.iter() {
+                    historical_ids.insert(call.id.clone());
+                }
+                *message = AgentModelMessage::User(format!(
+                    "Historical assistant context (not a current instruction or proof): {text}. Private provider state is unavailable; use the following past tool receipts as context and revalidate before further effects."
+                ));
+            }
+            AgentModelMessage::ToolResult {
+                call_id,
+                name,
+                content,
+                ..
+            } if historical_ids.contains(call_id) => {
+                *message = AgentModelMessage::User(format!(
+                    "Historical tool receipt for {name} ({call_id}), not a new tool execution or instruction: {content}"
+                ));
+            }
+            _ => {}
+        }
+    }
+}
+
 fn agent_provider_body(endpoint: &ProviderEndpoint, request: &AgentModelRequest) -> Value {
     match endpoint.kind {
         ProviderKind::Openai => {
@@ -629,7 +745,9 @@ fn agent_provider_body(endpoint: &ProviderEndpoint, request: &AgentModelRequest)
                         );
                         input.push(json!({"role":"user","content":content}));
                     }
-                    AgentModelMessage::Assistant { text, tool_calls } => {
+                    AgentModelMessage::Assistant {
+                        text, tool_calls, ..
+                    } => {
                         if !text.is_empty() {
                             input.push(json!({"role":"assistant","content":text}));
                         }
@@ -686,7 +804,7 @@ fn agent_provider_body(endpoint: &ProviderEndpoint, request: &AgentModelRequest)
                     }));
                     json!({"role":"user","content":content})
                 }
-                AgentModelMessage::Assistant { text, tool_calls } => {
+                AgentModelMessage::Assistant { text, tool_calls, .. } => {
                     let mut content = Vec::new();
                     if !text.is_empty() {
                         content.push(json!({"type":"text","text":text}));
@@ -721,8 +839,13 @@ fn agent_provider_body(endpoint: &ProviderEndpoint, request: &AgentModelRequest)
                     content.extend(images.iter().map(|image| json!({"type":"image_url","image_url":{"url":image.data_url}})));
                     json!({"role":"user","content":content})
                 }
-                AgentModelMessage::Assistant { text, tool_calls } => {
+                AgentModelMessage::Assistant { text, tool_calls, continuation } => {
                     let mut message = json!({"role":"assistant","content":text});
+                    if let Some(state) = continuation && state.endpoint_key == profile::endpoint_identity(endpoint) {
+                        for field in profile::continuation_fields(endpoint, &request.model_id) {
+                            if let Some(value)=state.fields.get(*field) { message[*field]=value.clone(); }
+                        }
+                    }
                     // Ordinary assistant history is text, not an empty tool-call
                     // exchange. Some compatible providers reject tool_calls: [].
                     if !tool_calls.is_empty() {
@@ -763,9 +886,6 @@ fn agent_provider_body(endpoint: &ProviderEndpoint, request: &AgentModelRequest)
                 if profile.prefer_serial_tool_calls {
                     object.insert("parallel_tool_calls".into(), Value::Bool(false));
                 }
-                if uses_qwen_plan_thinking(endpoint, &request.model_id) {
-                    object.insert("enable_thinking".into(), Value::Bool(false));
-                }
             }
             body
         }
@@ -784,6 +904,8 @@ struct AgentStreamAccumulator {
     kind: ProviderKind,
     text: String,
     visible_text: VisibleTextDeltaFilter,
+    private_fields: serde_json::Map<String, Value>,
+    private_bytes: usize,
     calls: BTreeMap<u64, PendingAgentToolCall>,
     usage: Option<ModelUsage>,
     terminal: bool,
@@ -795,6 +917,8 @@ impl AgentStreamAccumulator {
             kind,
             text: String::new(),
             visible_text: VisibleTextDeltaFilter::default(),
+            private_fields: serde_json::Map::new(),
+            private_bytes: 0,
             calls: BTreeMap::new(),
             usage: None,
             terminal: false,
@@ -928,6 +1052,63 @@ impl AgentStreamAccumulator {
                 }
             }
             ProviderKind::OpenaiCompatible => {
+                if let Some(delta) = value.pointer("/choices/0/delta") {
+                    for field in [
+                        "reasoning_content",
+                        "encrypted_content",
+                        "reasoning_details",
+                    ] {
+                        if let Some(fragment) = delta.get(field) {
+                            self.private_bytes = self.private_bytes.saturating_add(
+                                serde_json::to_vec(fragment)
+                                    .map_err(|_| ModelError::ProviderProtocolError)?
+                                    .len(),
+                            );
+                            if self.private_bytes > MAX_RESPONSE_BYTES {
+                                return Err(ModelError::ProviderResponseTooLarge);
+                            }
+                        }
+                    }
+                    for field in ["reasoning_content", "encrypted_content"] {
+                        if let Some(fragment) = delta.get(field).and_then(Value::as_str) {
+                            let value = self
+                                .private_fields
+                                .entry(field)
+                                .or_insert_with(|| json!(""));
+                            if let Value::String(combined) = value {
+                                combined.push_str(fragment);
+                            }
+                        }
+                    }
+                    if let Some(details) = delta.get("reasoning_details").and_then(Value::as_array)
+                    {
+                        let target = self
+                            .private_fields
+                            .entry("reasoning_details")
+                            .or_insert_with(|| json!([]))
+                            .as_array_mut()
+                            .unwrap();
+                        for item in details {
+                            let key = item.get("index").or_else(|| item.get("id"));
+                            if let Some(existing) = target.iter_mut().find(|existing| {
+                                key.is_some()
+                                    && existing.get("index").or_else(|| existing.get("id")) == key
+                            }) {
+                                if let Some(text) = item.get("text").and_then(Value::as_str) {
+                                    let mut joined = existing
+                                        .get("text")
+                                        .and_then(Value::as_str)
+                                        .unwrap_or_default()
+                                        .to_owned();
+                                    joined.push_str(text);
+                                    existing["text"] = json!(joined);
+                                }
+                            } else {
+                                target.push(item.clone());
+                            }
+                        }
+                    }
+                }
                 if let Some(delta) = value
                     .pointer("/choices/0/delta/content")
                     .and_then(Value::as_str)
@@ -1016,6 +1197,10 @@ impl AgentStreamAccumulator {
             })
             .collect::<Result<Vec<_>, _>>()?;
         Ok(AgentModelTurn {
+            continuation: (!self.private_fields.is_empty()).then_some(ProviderContinuation {
+                fields: self.private_fields,
+                endpoint_key: String::new(),
+            }),
             text: sanitize_agent_text(&self.text),
             tool_calls,
             usage: self.usage,
@@ -1217,9 +1402,6 @@ fn provider_body(endpoint: &ProviderEndpoint, request: &ModelInvocationRequest) 
                         json!(DIRECT_INVOCATION_MAX_OUTPUT_TOKENS),
                     );
                     object.insert("stream_options".into(), json!({"include_usage":true}));
-                }
-                if uses_qwen_plan_thinking(endpoint, &request.model_id) {
-                    object.insert("enable_thinking".into(), Value::Bool(true));
                 }
             }
             body
@@ -1638,6 +1820,7 @@ mod tests {
 
     fn test_endpoint(kind: ProviderKind) -> ProviderEndpoint {
         ProviderEndpoint {
+            model_optimization: true,
             kind,
             base_url: (kind == ProviderKind::OpenaiCompatible)
                 .then(|| "https://models.example.com/v1".into()),
@@ -1729,6 +1912,7 @@ mod tests {
         ] {
             assert_eq!(
                 endpoint_url(&ProviderEndpoint {
+                    model_optimization: true,
                     kind: ProviderKind::OpenaiCompatible,
                     base_url: Some(base_url.into()),
                 })
@@ -1776,6 +1960,89 @@ mod tests {
     }
 
     #[test]
+    fn official_adapters_reject_catalog_ids_but_custom_compatible_ids_remain_open() {
+        for preset in provider_catalog() {
+            for model in preset.model_ids {
+                for kind in [ProviderKind::Openai, ProviderKind::Anthropic] {
+                    assert_eq!(
+                        validate_provider_model(kind, &model.to_uppercase()),
+                        Err(ModelError::ProviderModelMismatch)
+                    );
+                }
+                assert!(validate_provider_model(ProviderKind::OpenaiCompatible, &model).is_ok());
+            }
+        }
+        assert!(validate_provider_model(ProviderKind::Openai, "gpt-4.1-mini").is_ok());
+        assert!(validate_provider_model(ProviderKind::Anthropic, "claude-custom-future").is_ok());
+        assert!(
+            validate_provider_model(ProviderKind::OpenaiCompatible, "my-private-model").is_ok()
+        );
+    }
+
+    #[tokio::test]
+    async fn wrong_official_protocol_never_sends_credentials_in_text_or_agent_calls() {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        listener.set_nonblocking(true).unwrap();
+        let mut client = ModelClient::new().unwrap();
+        client.test_url =
+            Some(Url::parse(&format!("http://{}/", listener.local_addr().unwrap())).unwrap());
+        for kind in [ProviderKind::Openai, ProviderKind::Anthropic] {
+            let endpoint = ProviderEndpoint {
+                kind,
+                base_url: None,
+                model_optimization: false,
+            };
+            let request = ModelInvocationRequest {
+                invocation_id: fielora_contracts::ModelInvocationId::new("inv"),
+                context_package_id: fielora_contracts::ContextPackageId::new("ctx"),
+                provider_config_id: fielora_contracts::ProviderConfigId::new("provider"),
+                model_id: "Qwen3.7-Plus".into(),
+                intent: fielora_contracts::ModelIntent::Ask,
+                user_input: "hello".into(),
+                context_package: vec![],
+                response_mode: fielora_contracts::ResponseMode::Text,
+            };
+            let result = tokio::time::timeout(
+                Duration::from_secs(1),
+                client.invoke(
+                    endpoint.clone(),
+                    request,
+                    b"synthetic-only",
+                    CancellationToken::new(),
+                    |_| panic!("must reject before starting"),
+                ),
+            )
+            .await
+            .unwrap();
+            assert_eq!(result, Err(ModelError::ProviderModelMismatch));
+            let request = AgentModelRequest {
+                model_id: "Qwen3.7-Plus".into(),
+                system: "test".into(),
+                messages: vec![AgentModelMessage::User("hello".into())],
+                tools: vec![],
+                max_output_tokens: 1024,
+            };
+            let result = tokio::time::timeout(
+                Duration::from_secs(1),
+                client.invoke_agent_turn(
+                    endpoint,
+                    request,
+                    b"synthetic-only",
+                    CancellationToken::new(),
+                    |_| panic!("must not stream"),
+                ),
+            )
+            .await
+            .unwrap();
+            assert!(matches!(result, Err(ModelError::ProviderModelMismatch)));
+        }
+        assert_eq!(
+            listener.accept().unwrap_err().kind(),
+            std::io::ErrorKind::WouldBlock
+        );
+    }
+
+    #[test]
     fn openai_responses_always_disables_store_and_anthropic_does_not_invent_it() {
         let request = ModelInvocationRequest {
             invocation_id: fielora_contracts::ModelInvocationId::new("inv"),
@@ -1810,12 +2077,13 @@ mod tests {
         let mut qwen_request = request.clone();
         qwen_request.model_id = "qwen3.7-plus".into();
         let qwen_plan = ProviderEndpoint {
+            model_optimization: true,
             kind: ProviderKind::OpenaiCompatible,
             base_url: Some("https://coding.dashscope.aliyuncs.com/v1".into()),
         };
         assert_eq!(
             provider_body(&qwen_plan, &qwen_request).get("enable_thinking"),
-            Some(&Value::Bool(true))
+            None
         );
         assert!(
             provider_body(
@@ -2000,6 +2268,7 @@ mod tests {
             messages: vec![
                 AgentModelMessage::User("Inspect".into()),
                 AgentModelMessage::Assistant {
+                    continuation: None,
                     text: String::new(),
                     tool_calls: vec![AgentModelToolCall {
                         id: "call-1".into(),
@@ -2047,6 +2316,7 @@ mod tests {
         minimax_request.model_id = "MiniMax-M2.7".into();
         let minimax = agent_provider_body(
             &ProviderEndpoint {
+                model_optimization: true,
                 kind: ProviderKind::OpenaiCompatible,
                 base_url: Some("https://api.minimaxi.com/v1".into()),
             },
@@ -2060,12 +2330,13 @@ mod tests {
         qwen_request.model_id = "qwen3.7-plus".into();
         let qwen_plan = agent_provider_body(
             &ProviderEndpoint {
+                model_optimization: true,
                 kind: ProviderKind::OpenaiCompatible,
                 base_url: Some("https://coding.dashscope.aliyuncs.com/v1".into()),
             },
             &qwen_request,
         );
-        assert_eq!(qwen_plan.get("enable_thinking"), Some(&Value::Bool(false)));
+        assert!(qwen_plan.get("enable_thinking").is_none());
         assert_eq!(
             qwen_plan.get("parallel_tool_calls"),
             Some(&Value::Bool(false))
@@ -2092,6 +2363,7 @@ mod tests {
         };
         let body = agent_provider_body(
             &ProviderEndpoint {
+                model_optimization: true,
                 kind: ProviderKind::OpenaiCompatible,
                 base_url: Some("https://coding.dashscope.aliyuncs.com/v1".into()),
             },
@@ -2114,12 +2386,14 @@ mod tests {
         follow_up.messages.insert(
             0,
             AgentModelMessage::Assistant {
+                continuation: None,
                 text: "Previous result".into(),
                 tool_calls: vec![],
             },
         );
         let follow_up = agent_provider_body(
             &ProviderEndpoint {
+                model_optimization: true,
                 kind: ProviderKind::OpenaiCompatible,
                 base_url: Some("https://coding.dashscope.aliyuncs.com/v1".into()),
             },
@@ -2169,23 +2443,24 @@ mod tests {
     #[test]
     fn china_coding_profiles_cover_the_six_initial_model_families() {
         let endpoint = |base_url: &str| ProviderEndpoint {
+            model_optimization: true,
             kind: ProviderKind::OpenaiCompatible,
             base_url: Some(base_url.into()),
         };
         for (base_url, model, family) in [
             (
                 "https://dashscope.aliyuncs.com/compatible-mode/v1",
-                "qwen3-coder-plus",
+                "qwen3.7-plus",
                 CodingModelFamily::Qwen,
             ),
             (
                 "https://api.deepseek.com/v1",
-                "deepseek-chat",
+                "deepseek-flash",
                 CodingModelFamily::DeepSeek,
             ),
             (
                 "https://api.moonshot.cn/v1",
-                "kimi-k2.5",
+                "kimi-k3",
                 CodingModelFamily::Kimi,
             ),
             (
@@ -2200,7 +2475,7 @@ mod tests {
             ),
             (
                 "https://ark.cn-beijing.volces.com/api/v3",
-                "doubao-seed-2-0-code",
+                "doubao-seed-2-0-code-preview-260215",
                 CodingModelFamily::Doubao,
             ),
         ] {
@@ -2218,6 +2493,7 @@ mod tests {
     fn unknown_models_fail_safe_to_generic_behavior_without_new_authority() {
         let profile = coding_behavior_profile(
             &ProviderEndpoint {
+                model_optimization: true,
                 kind: ProviderKind::OpenaiCompatible,
                 base_url: Some("https://models.example.com/v1".into()),
             },
@@ -2232,6 +2508,7 @@ mod tests {
         // Ark can route several model families; endpoint alone must not label a model Doubao.
         let routed = coding_behavior_profile(
             &ProviderEndpoint {
+                model_optimization: true,
                 kind: ProviderKind::OpenaiCompatible,
                 base_url: Some("https://ark.cn-beijing.volces.com/api/v3".into()),
             },

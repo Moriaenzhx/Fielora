@@ -70,7 +70,7 @@ try {
   await writeFile(configPath, before);
   assert.equal(spawnSync('git', ['init'], { cwd: projectRoot, windowsHide: true, stdio: 'ignore' }).status, 0);
   await openApp();
-  assert.equal((await cdp.eval('window.fielora.core.getHealth()')).schema_version, 16);
+  assert.equal((await cdp.eval('window.fielora.core.getHealth()')).schema_version, 18);
 
   const setup = await cdp.eval(`(async()=>{
     const provider=await window.fielora.provider.create({provider_kind:'OPENAI_COMPATIBLE',display_name:'Durable File Fixture',base_url:'https://example.com/v1',default_model:'__fielora_agent_fixture__',custom_endpoint_acknowledged:true});

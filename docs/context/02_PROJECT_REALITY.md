@@ -3695,3 +3695,61 @@ Archify 生成失败已对齐生产 Run：56 次模型调用、9 次压缩、6 �
 ## 2026-10-02 — macOS 开发基线补齐
 
 在 `phase/complete-agent-v0.1@bc16374` 上补齐原生 Keychain、Unix 进程组取消/超时/退出清理、POSIX 字面参数引用、Command 菜单提示与交通灯避让、Finder/外部编辑器发现、Finder 启动 PATH 读取和原生 ARM64 `.app` 打包。Git 仓库署名按用户纠正设为 Moriaen；用户随后完成 GitHub CLI 设备授权，账号 Moriaenzhx，凭据由系统 keyring 保存，已配置 Git credential helper。仓库写权限及当前开发分支推送 dry-run 通过，未实际推送代码。跨平台 Node Gate 保留原 Docs/Ui/Core/Cross/PreMerge 分层；历史 Phase portable 发布脚本仍是 Windows 产物。本机 Cross、Phase 02 和 Mac 专项 dev/packaged 验收通过，完整 PreMerge 的两条历史桌面流程尚未通过。完整验证和已知边界以 `docs/engineering/MACOS_DEVELOPMENT.md` 为准，不把本地 fixture 作为真实模型验收。
+
+## 2026-10-02 — 模型能力、推理参数与分项兼容验证
+
+用户授权按“确认参数激活状态”的讨论实现首版。能力声明集中在 Core Model 层，UI 不再独立按模型名称猜测。Qwen 官方混合思考模型可选默认/开/关，DeepSeek 官方当前思考模型可选默认/关/低/高/最高；未知模型或代理端点保留默认，不声称不支持。直连文本和 Agent 共用参数配置，移除同一Qwen连接文本默认开、Agent默认关的矛盾覆盖。现有Run检查点记录首次调用设置与非敏感参数；私有DeepSeek工具续接状态只留内存。
+
+设置 → 模型配置 → 服务卡包含折叠设置、请求参数、显式有界兼容检查及分项结果。schema17新增端点/模型隔离设置与证据；改配置/凭据会使相关旧证据失效。未自动发起真实模型付费测试；本轮工程与桌面验收详情见 docs/engineering/MODEL_RUNTIME_VALIDATION.md。有限替身验证不等于真实长任务可靠性验收。
+
+## 2026-10-02 — 模型服务统一与十厂商适配
+
+用户要求重做配置页并扩展十个国产模型系列。当前实现以 Core 单一目录覆盖通义千问、DeepSeek、Kimi、GLM、MiniMax、豆包、混元 TokenHub、文心、星火、阶跃星辰；精确端点与模型对应适用参数，任意代理/未知ID仍不继承官方能力。UI统一在Settings中维护连接、密钥、参数和测试，删除旧弹窗。Provider协议修改使用原revision CAS，保留ID/凭据引用并更新endpoint_class。schema仍为17。
+
+新包完成且主程序、app.asar、Core产物齐全后自动保留一个受管理开发包；失败不触发旧包清理。当前打包目录只有一个macOS ARM64包。完整本轮验证结果以MODEL_RUNTIME_VALIDATION.md为准；本地HTTP替身不等于十家真实付费账号连通验收。
+
+2026-10-02 后续：依用户明确要求增加自定义模式，当前 schema 为18（追加 model_optimization 列），先前“schema仍为17”的记录已被此实现替代。模式进入 Provider CAS 与运行端点身份，保留旧 Provider/凭据引用；同地址同模型名手动输入也不添加厂商参数、专用提示或私有续传。十系列版本目录增加星火X2/X2Flash专用地址，阶跃3.7/5支持中档，未知能力继续标为未知。
+
+
+## 2026-10-02 — Coding Plan connection repair
+
+The user confirmed Aliyun Model Studio Coding Plan. The production settings page still showed OPENAI, no base URL and Qwen3.7-Plus. Using the existing editor, the same Provider ID and stored credential now use OPENAI_COMPATIBLE, https://coding.dashscope.aliyuncs.com/v1 and qwen3.7-plus, with built-in adaptation. The previous change exposed repair controls but did not prevent saving the wrong combination again. The UI now blocks saving and offers a repair action; Core create/update and Model text/Agent sends reject known catalog IDs on official OpenAI/Anthropic adapters. Legacy records remain readable and custom compatible models remain supported. Configuration repair is not proof of credential validity or a successful real model task; see MODEL_RUNTIME_VALIDATION.md.
+
+
+## 2026-10-02 — 外观简化与开发产物清理
+
+用户明确取消跟随系统和深色模式。外观仅保留浅色，自定义背景/字体/对比度继续可用；历史 DARK/SYSTEM 偏好在读取和应用时归一到 LIGHT，系统外观变化不再切换产品主题。窗口右上角工具按钮仅在自身区域悬停、键盘聚焦或菜单展开时显示；应用底层沿用 Brand Chrome，避免深色底层露边。开发打包继续采用成功暂存→校验→替换→删除旧包，仅保留最新开发包；可再生成的构建缓存可清理，源码、用户数据、历史 Evidence 保留。
+
+本轮验证：Cross Gate（含 TS/Rust/Clippy/Core integration）通过，完整外观 Desktop E2E 通过，macOS ARM64 新包的浅色兼容/系统主题变化/按钮悬停及键盘聚焦检查通过。打包实际输出 old_packages_removed=1、keep=1；清理约5.2GB Rust增量缓存和本轮临时截图，target从约13GB降至7.7GB。后续外观E2E截图默认写入系统临时目录，不再堆积到开发包输出目录。未执行main合并或完整PreMerge。
+
+
+## 2026-10-02 — macOS 可选半透明侧栏
+
+用户要求侧栏可设置成参考图中的半透明效果，并交付可点击的App。外观页复用既有 translucentSidebar 偏好提供开关，macOS 使用原生 sidebar vibrancy，标题栏/导航透出窗后色彩，内容区域保持不透明；高对比度回退实色，关闭效果保留背景配置。默认关闭，非macOS暂保留实色。不新增Schema或权限能力，原有受信窗口外观IPC增加可选布尔值校验。新开发包仍在校验成功后替换并删除旧包。
+
+本轮Cross、开发与macOS打包版外观E2E通过（透明开关/高对比度回退/刷新保存/非法参数拒绝）；原生窗口截图已实际检查，侧栏磨砂、正文不透明。已生成桌面 Fielora.app 快捷入口，指向唯一开发包，新包替换日志 old_packages_removed=1 keep=1。
+
+
+## 2026-10-02 — 半透明圆角和原生窗口按钮修正
+
+用户指出内容圆角外有直角暗块；确认上一轮只给导航/标题栏罩色，圆角外露出未罩色的原生材质。改为desktop-frame统一铺一次半透明罩色，导航/标题栏和圆角外共享连续底色，正文仍不透明。此前视觉检查遗漏了该差异，新增实际截图相邻RGBA比较。用户随后明确左上角红黄绿按钮默认隐藏，macOS改用原生customButtonsOnHover，保留原按钮位置与功能。
+
+本轮Cross、开发版及macOS新包外观E2E通过，含半透明/实色的圆角外与邻近侧栏RGBA像素比较。原hover测试在1440px模拟视口下可能把指针送出1180px原生窗口，本轮将鼠标交互移回真实视口再截图；保留原硬断言。新包已按keep=1替换并删除旧包。
+
+真实用户桌面App已正常退出并启动新版：原生截图确认圆角外底色连续，初始窗口按钮隐藏；指针进入原生按钮区域后AX树出现关闭/最小化/全屏控件。桌面快捷入口继续指向最新包。
+
+
+## 2026-10-02 — 主工作页背景分层复查
+
+用户继续指出左侧边缘背景分层。当前已运行的半透明主工作页未复现截图中的明显色带；此前验证集中在设置页邻近圆角，未覆盖完整侧栏边缘。实色/渐变路径仍存在标题栏、导航、路由容器分别绘制同一背景和固定 -44px 偏移，本轮统一为 desktop-frame 单次绘制，避免多区域背景原点拼接。新增主工作页/设置页截图与完整窗口背景参考的RGBA比较，覆盖侧栏左右边缘、标题栏交界、正文圆角、自定义渐变和窗口宽度变化。原生半透明继续使用同一罩色，正文保持不透明。本轮 UI Gate（277项测试）、Docs Gate、打包版完整外观E2E通过。新包 old_packages_removed=1 keep=1，已实际启动并检查自定义渐变与半透明主工作页，左侧边缘/圆角连续，原生窗口按钮默认隐藏。恢复用户原先开启的半透明偏好。桌面入口仍指向唯一新包；未运行本轮Core或全量PreMerge。
+
+
+## 2026-10-02 — 对话页悬停残影与窗口按钮默认行为
+
+用户提供对话页/设置页对照：对话页鼠标经过侧栏时，原生窗口出现大块底色及按钮残影，设置页正常。原生截图确认残留；CDP 网页截图与计算样式未出现对应色块。上一轮外观E2E停留在没有输入框的空项目页面，未覆盖真实对话页的 conversation-composer（额外 blur(16px) saturate(1.06)）。本轮增加本地测试Project和实际对话输入框，移除原生磨砂开启时的网页 backdrop-filter 叠加，浮层/菜单采用solid材质；去掉静态Logo的无效hover底色。用户随后明确恢复红黄绿按钮默认常显/悬停符号行为，替代原hover才显示请求。实际原生合成与自动测试分开验证，不再把CDP截图通过等同于原生无闪烁。本轮 UI Gate（277项测试）、Docs Gate、macOS打包版完整外观E2E通过。新E2E覆盖带输入框的真实对话布局、原生磨砂下可见网页blur为0、四种侧栏动作连续三轮hover颜色一致及离开后透明恢复。重启实际用户App后，用原生截图检查鼠标经过侧栏及Logo后的画面，未再出现旧包已复现的矩形残影；原生AX确认启动即存在关闭/最小化/全屏控件。新包old_packages_removed=1 keep=1，桌面入口可直接打开。CDP像素比较不覆盖macOS合成器，仍单独保留原生检查边界；本轮未运行Core/全量PreMerge。
+
+## 2026-10-03 — 资料库/计划页面与当前用户字体
+
+资料库与已安排任务统一紧凑标题、筛选/搜索工具栏、内容宽度和可操作空状态。外观字体菜单读取本机已安装家族，显示缺失预设；支持搜索、预览、选择安装字体及导入 TTF/OTF/TTC。系统默认字体栈补齐 macOS。
+
+用户明确选择安装到当前用户系统字体目录。桌面文件选择与 Agent 复用 Rust 字体解析/发布/注册服务；新增 fonts.list、fonts.prepare、fonts.install，经既有 ToolCall、Policy、审批、checkpoint 和回执链路。Agent 仅从当前 Run 的成功准备回执安装，系统写入需要一次确认；不会自动运行脚本或覆盖文件，也不获得一般工作区验证权。实现和验证边界见 docs/engineering/FONT_INSTALLATION_CHANGE_IMPACT.md。当前自动/桌面验收按该记录补充，真实模型自主选择来源及 Windows 原生注册不由 macOS 替身测试证明。

@@ -11,6 +11,7 @@ const image: WorkspaceAttachmentView = {
 };
 const capableSet = { textInput: true, imageInput: true, videoInput: false, fileInput: true, toolCalling: true };
 const base: ModelCapabilities = {
+  imageSupport: 'UNSUPPORTED', toolSupport: 'SUPPORTED',
   ...capableSet, imageInput: false, model: { ...capableSet, imageInput: false }, provider: capableSet,
   transport: capableSet, imageInputReason: '当前模型不支持图片输入',
 };

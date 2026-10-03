@@ -6,8 +6,8 @@
   "main": ".webpack/main",
   "scripts": {
     "start": "node ../../scripts/check-node-version.cjs && electron-forge start",
-    "package": "electron-forge package",
-    "make": "electron-forge make",
+    "package": "node ../../scripts/package-desktop.mjs",
+    "make": "electron-forge make && node ../../scripts/artifact-retention.mjs finalize-development",
     "icon:generate": "node ../../scripts/generate-desktop-icon.cjs",
     "typecheck": "tsc --noEmit",
     "lint": "eslint src webpack.*.ts forge.config.ts",

@@ -1,3 +1,4 @@
+import { validateUpdateModelRuntime } from './validation';
 import { access, copyFile, mkdir, mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import { execFile, spawn } from 'node:child_process';
 import os from 'node:os';
@@ -357,12 +358,14 @@ function registerBridgeHandlers(): void {
   ipcMain.handle(channels.windowTitlebarTheme, (event, payload) => {
     assertBridgeEvent(event);
     if (!payload || typeof payload !== 'object') throw new Error('Invalid titlebar theme');
-    const { theme, background } = payload as { theme?: unknown; background?: unknown };
+    const { theme, background, translucentSidebar = false } = payload as { theme?: unknown; background?: unknown; translucentSidebar?: unknown };
     if (theme !== 'LIGHT' && theme !== 'DARK') throw new Error('Invalid titlebar theme');
     if (typeof background !== 'string' || !/^#[0-9a-f]{6}$/iu.test(background)) throw new Error('Invalid titlebar background');
+    if (typeof translucentSidebar !== 'boolean') throw new Error('Invalid sidebar material');
     const surface = windowSurfaceColors(theme as WindowSurfaceTheme, background);
     withUsableWindow(appWindow, (window) => {
-      window.setBackgroundColor(surface.background);
+      if (process.platform === 'darwin') window.setVibrancy(translucentSidebar ? 'sidebar' : null);
+      window.setBackgroundColor(process.platform === 'darwin' && translucentSidebar ? '#00000000' : surface.background);
       if (process.platform !== 'darwin') window.setTitleBarOverlay({ color: surface.background, symbolColor: surface.symbols, height: surface.height });
     });
     return null;
@@ -573,7 +576,10 @@ function registerBridgeHandlers(): void {
   handle(channels.providerStoreCredential, validateStoreCredential, 'command.provider.store_credential');
   handle(channels.providerDeleteCredential, validateProviderReference, 'command.provider.delete_credential');
   handle(channels.providerRemove, validateProviderReference, 'command.provider.remove_config');
+  handle(channels.providerRuntimeUpdate, validateUpdateModelRuntime, 'command.provider.update_model_runtime');
+  handle(channels.providerValidate, validateProviderReference, 'command.provider.validate_model');
   handle(channels.providerProbe, validateProviderReference, 'command.provider.probe');
+  ipcMain.handle(channels.providerCatalog, (event) => { assertBridgeEvent(event); return supervisor.request('query.provider.catalog'); });
   ipcMain.handle(channels.providerList, (event) => { assertBridgeEvent(event); return supervisor.request('query.provider.list_configs'); });
   handle(channels.providerGet, validateProviderReference, 'query.provider.get_config');
   ipcMain.handle(channels.modelStart, async (event, payload) => {
@@ -617,6 +623,22 @@ function registerBridgeHandlers(): void {
   handle(channels.captureRestore, validateMutateCapture, 'command.capture.restore');
   handle(channels.captureList, validateListCaptures, 'query.capture.list');
   handle(channels.captureGet, validateCaptureReference, 'query.capture.get');
+  ipcMain.handle(channels.fontsList, (event) => { assertBridgeEvent(event); return supervisor.request('query.fonts.list', {}); });
+  ipcMain.handle(channels.fontsImport, async (event) => {
+    assertBridgeEvent(event);
+    if (!appWindow || appWindow.isDestroyed()) throw new Error('App window is unavailable');
+    const selection = process.env.FIELORA_E2E === '1' && process.env.FIELORA_E2E_FONT_PATHS
+      ? { canceled: false, filePaths: JSON.parse(process.env.FIELORA_E2E_FONT_PATHS) as string[] }
+      : await dialog.showOpenDialog(appWindow, { title: '安装字体到当前用户', properties: ['openFile', 'multiSelections'], filters: [{ name: '字体', extensions: ['ttf', 'otf', 'ttc'] }] });
+    if (selection.canceled) return { canceled: true, installed: [], errors: [] };
+    if (!Array.isArray(selection.filePaths) || selection.filePaths.length > 32 || selection.filePaths.some(p => typeof p !== 'string' || !path.isAbsolute(p))) throw new Error('Invalid font selection');
+    const installed = []; const errors = [];
+    for (const source of selection.filePaths) {
+      try { installed.push(await supervisor.request('command.fonts.import', { path: source })); }
+      catch { errors.push({ filename: path.basename(source), message: '安装失败：请检查字体格式、文件完整性或目录权限。' }); }
+    }
+    return { canceled: false, installed, errors };
+  });
   ipcMain.handle(channels.libraryAddFiles, async (event) => {
     assertBridgeEvent(event);
     return durableMutation(async () => {
@@ -934,8 +956,10 @@ async function registerApplicationProtocol(): Promise<void> {
 }
 
 async function createWindow(): Promise<void> {
+  // Native sidebar material follows the app's light-only appearance as well.
+  nativeTheme.themeSource = 'light';
   trustedOrigin = trustedOriginFor(app.isPackaged, MAIN_WINDOW_WEBPACK_ENTRY);
-  const initialSurface = windowSurfaceColors(nativeTheme.shouldUseDarkColors ? 'DARK' : 'LIGHT');
+  const initialSurface = windowSurfaceColors('LIGHT');
   const window = new BrowserWindow({
     width: 1180,
     height: 560,

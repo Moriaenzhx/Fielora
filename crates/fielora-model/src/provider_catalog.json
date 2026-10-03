@@ -1,0 +1,340 @@
+[
+  {
+    "id": "QWEN",
+    "label": "通义千问",
+    "description": "阿里云百炼 · 按量 API",
+    "endpoints": [
+      "https://dashscope.aliyuncs.com/compatible-mode/v1",
+      "https://dashscope-intl.aliyuncs.com/compatible-mode/v1",
+      "https://dashscope-us.aliyuncs.com/compatible-mode/v1",
+      "https://coding.dashscope.aliyuncs.com/v1"
+    ],
+    "source_url": "https://www.alibabacloud.com/help/en/model-studio/deep-thinking",
+    "continuation": "none",
+    "groups": [
+      {
+        "ids": [
+          "qwen3.7-plus",
+          "qwen3.7-plus-2026-05-26",
+          "qwen3.6-plus",
+          "qwen3.5-plus"
+        ],
+        "policy": "enable_thinking",
+        "tools": "SUPPORTED",
+        "images": "SUPPORTED",
+        "structured_output": "UNKNOWN"
+      }
+    ]
+  },
+  {
+    "id": "DEEPSEEK",
+    "label": "DeepSeek",
+    "description": "DeepSeek 开放平台",
+    "endpoints": [
+      "https://api.deepseek.com/v1",
+      "https://api.deepseek.com"
+    ],
+    "source_url": "https://api-docs.deepseek.com/guides/thinking_mode/",
+    "continuation": "reasoning_content",
+    "groups": [
+      {
+        "ids": [
+          "deepseek-flash",
+          "deepseek-pro",
+          "deepseek-v4-flash",
+          "deepseek-v4-pro",
+          "deepseek-v4.1-flash"
+        ],
+        "policy": "deepseek",
+        "tools": "SUPPORTED",
+        "images": "UNSUPPORTED",
+        "structured_output": "UNKNOWN"
+      }
+    ]
+  },
+  {
+    "id": "KIMI",
+    "label": "Kimi",
+    "description": "月之暗面开放平台",
+    "endpoints": [
+      "https://api.moonshot.cn/v1",
+      "https://api.moonshot.ai/v1"
+    ],
+    "source_url": "https://platform.kimi.com/docs/guide/use-thinking-models",
+    "continuation": "reasoning_content",
+    "groups": [
+      {
+        "ids": [
+          "kimi-k3"
+        ],
+        "policy": "effort_max",
+        "tools": "SUPPORTED",
+        "images": "SUPPORTED",
+        "structured_output": "UNKNOWN"
+      },
+      {
+        "ids": [
+          "kimi-k2.7-code",
+          "kimi-k2.7-code-highspeed"
+        ],
+        "policy": "always",
+        "tools": "SUPPORTED",
+        "images": "SUPPORTED",
+        "structured_output": "UNKNOWN"
+      },
+      {
+        "ids": [
+          "kimi-k2.6"
+        ],
+        "policy": "thinking",
+        "tools": "SUPPORTED",
+        "images": "SUPPORTED",
+        "structured_output": "UNKNOWN"
+      }
+    ]
+  },
+  {
+    "id": "GLM",
+    "label": "智谱 GLM",
+    "description": "智谱开放平台",
+    "endpoints": [
+      "https://open.bigmodel.cn/api/paas/v4",
+      "https://open.bigmodel.cn/api/coding/paas/v4"
+    ],
+    "source_url": "https://docs.bigmodel.cn/cn/guide/capabilities/thinking",
+    "continuation": "reasoning_content",
+    "groups": [
+      {
+        "ids": [
+          "glm-5.3",
+          "glm-5.3-flash"
+        ],
+        "policy": "glm_effort",
+        "tools": "SUPPORTED",
+        "images": "UNKNOWN",
+        "structured_output": "UNKNOWN"
+      },
+      {
+        "ids": [
+          "glm-5",
+          "glm-4.7"
+        ],
+        "policy": "thinking",
+        "tools": "SUPPORTED",
+        "images": "UNSUPPORTED",
+        "structured_output": "UNKNOWN"
+      }
+    ]
+  },
+  {
+    "id": "MINIMAX",
+    "label": "MiniMax",
+    "description": "MiniMax 开放平台 · 中国区",
+    "endpoints": [
+      "https://api.minimaxi.com/v1",
+      "https://api.minimax.io/v1"
+    ],
+    "source_url": "https://platform.minimax.io/docs/api-reference/text-openai-api",
+    "continuation": "minimax",
+    "groups": [
+      {
+        "ids": [
+          "MiniMax-M3"
+        ],
+        "policy": "minimax_adaptive",
+        "tools": "SUPPORTED",
+        "images": "SUPPORTED",
+        "structured_output": "UNKNOWN"
+      },
+      {
+        "ids": [
+          "MiniMax-M2.7",
+          "MiniMax-M2.7-highspeed",
+          "MiniMax-M2.5"
+        ],
+        "policy": "minimax_always",
+        "tools": "SUPPORTED",
+        "images": "UNSUPPORTED",
+        "structured_output": "UNKNOWN"
+      }
+    ]
+  },
+  {
+    "id": "DOUBAO",
+    "label": "豆包",
+    "description": "火山方舟 · 通用 API",
+    "endpoints": [
+      "https://ark.cn-beijing.volces.com/api/v3"
+    ],
+    "source_url": "https://docs.volcengine.com/docs/ark/deep-thinking?lang=zh",
+    "continuation": "doubao",
+    "groups": [
+      {
+        "ids": [
+          "doubao-seed-2-1-pro-260628",
+          "doubao-seed-2-1-turbo-260628",
+          "doubao-seed-2-0-pro-260215",
+          "doubao-seed-2-0-code-preview-260215"
+        ],
+        "policy": "thinking",
+        "tools": "SUPPORTED",
+        "images": "SUPPORTED",
+        "structured_output": "UNKNOWN"
+      }
+    ]
+  },
+  {
+    "id": "HUNYUAN",
+    "label": "腾讯混元",
+    "description": "TokenHub · 需要该平台的 API Key",
+    "endpoints": [
+      "https://tokenhub.tencentmaas.com/v1",
+      "https://tokenhub-intl.tencentmaas.com/v1"
+    ],
+    "source_url": "https://cloud.tencent.com/document/product/1823/132252",
+    "continuation": "reasoning_content",
+    "groups": [
+      {
+        "ids": [
+          "hy4-preview"
+        ],
+        "policy": "effort",
+        "tools": "SUPPORTED",
+        "images": "UNKNOWN",
+        "structured_output": "UNKNOWN"
+      },
+      {
+        "ids": [
+          "hy3"
+        ],
+        "policy": "hy_adaptive",
+        "tools": "SUPPORTED",
+        "images": "UNKNOWN",
+        "structured_output": "UNKNOWN"
+      }
+    ]
+  },
+  {
+    "id": "ERNIE",
+    "label": "百度文心",
+    "description": "百度千帆 · V2 API Key",
+    "endpoints": [
+      "https://qianfan.baidubce.com/v2"
+    ],
+    "source_url": "https://cloud.baidu.com/doc/qianfan-api/s/3m7of64lb",
+    "continuation": "reasoning_content",
+    "groups": [
+      {
+        "ids": [
+          "ernie-5.0"
+        ],
+        "policy": "default",
+        "tools": "SUPPORTED",
+        "images": "SUPPORTED",
+        "structured_output": "UNKNOWN"
+      },
+      {
+        "ids": [
+          "ernie-5.1"
+        ],
+        "policy": "default",
+        "tools": "UNKNOWN",
+        "images": "UNKNOWN",
+        "structured_output": "UNKNOWN"
+      }
+    ]
+  },
+  {
+    "id": "SPARK",
+    "label": "讯飞星火",
+    "description": "HTTP API · 使用 APIPassword",
+    "endpoints": [
+      "https://spark-api-open.xf-yun.com/x2",
+      "https://spark-api-open.xf-yun.com/agent/v1",
+      "https://spark-api-open.xf-yun.com/v1"
+    ],
+    "source_url": "https://www.xfyun.cn/doc/spark/X1http.html",
+    "continuation": "none",
+    "groups": [
+      {
+        "ids": [
+          "spark-x"
+        ],
+        "label": "Spark X2",
+        "endpoints": [
+          "https://spark-api-open.xf-yun.com/x2"
+        ],
+        "policy": "spark_thinking",
+        "tools": "SUPPORTED",
+        "images": "UNSUPPORTED",
+        "structured_output": "UNKNOWN"
+      },
+      {
+        "ids": [
+          "spark-x"
+        ],
+        "label": "Spark X2 Flash",
+        "endpoints": [
+          "https://spark-api-open.xf-yun.com/agent/v1"
+        ],
+        "policy": "spark_thinking",
+        "tools": "SUPPORTED",
+        "images": "UNSUPPORTED",
+        "structured_output": "UNKNOWN"
+      },
+      {
+        "ids": [
+          "4.0Ultra"
+        ],
+        "policy": "spark",
+        "tools": "SUPPORTED",
+        "images": "UNSUPPORTED",
+        "structured_output": "UNKNOWN",
+        "endpoints": [
+          "https://spark-api-open.xf-yun.com/v1"
+        ],
+        "label": "Spark 4.0 Ultra"
+      }
+    ]
+  },
+  {
+    "id": "STEP",
+    "label": "阶跃星辰",
+    "description": "StepFun 开放平台",
+    "endpoints": [
+      "https://api.stepfun.com/v1"
+    ],
+    "source_url": "https://platform.stepfun.com/docs/zh/guides/developer/reasoning",
+    "continuation": "none",
+    "groups": [
+      {
+        "ids": [
+          "step-3.7-flash",
+          "step-5-preview"
+        ],
+        "policy": "effort_medium",
+        "tools": "SUPPORTED",
+        "images": "SUPPORTED",
+        "structured_output": "UNKNOWN"
+      },
+      {
+        "ids": [
+          "step-3.5-flash-2603"
+        ],
+        "policy": "effort",
+        "tools": "SUPPORTED",
+        "images": "UNSUPPORTED",
+        "structured_output": "UNKNOWN"
+      },
+      {
+        "ids": [
+          "step-3.5-flash"
+        ],
+        "policy": "always",
+        "tools": "SUPPORTED",
+        "images": "UNSUPPORTED",
+        "structured_output": "UNKNOWN"
+      }
+    ]
+  }
+]

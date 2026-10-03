@@ -23,9 +23,9 @@ pub fn remove_projection(messages: &mut Vec<AgentModelMessage>) {
         AgentModelMessage::User(s) => {
             !s.starts_with(MARKER) && !s.starts_with(crate::agent_user_input::REPLY_MARKER)
         }
-        AgentModelMessage::Assistant { text, tool_calls } => {
-            !tool_calls.is_empty() || !text.starts_with(crate::agent_user_input::QUESTION_MARKER)
-        }
+        AgentModelMessage::Assistant {
+            text, tool_calls, ..
+        } => !tool_calls.is_empty() || !text.starts_with(crate::agent_user_input::QUESTION_MARKER),
         _ => true,
     });
 }
@@ -165,6 +165,7 @@ impl TurnContext {
         // merely a nested answer expected to fill an assistant-chosen field.
         if let Some(reply) = crate::agent_user_input::latest_reply(&user_input) {
             messages.push(AgentModelMessage::Assistant {
+                continuation: None,
                 text: format!(
                     "{}{}\n{}",
                     crate::agent_user_input::QUESTION_MARKER,
@@ -269,6 +270,7 @@ mod tests {
         let provider = storage
             .create_provider_config(
                 CreateProviderConfigRequest {
+                    model_optimization: None,
                     provider_kind: ProviderKind::Openai,
                     display_name: "fixture".into(),
                     base_url: None,
@@ -433,7 +435,7 @@ mod tests {
             context.refresh(&mut messages, &current, None, reply.clone());
             assert_eq!(messages.len(), 4);
             assert!(
-                matches!(&messages[2],AgentModelMessage::Assistant {text,tool_calls} if text.starts_with(crate::agent_user_input::QUESTION_MARKER) && tool_calls.is_empty())
+                matches!(&messages[2],AgentModelMessage::Assistant { text, tool_calls, .. } if text.starts_with(crate::agent_user_input::QUESTION_MARKER) && tool_calls.is_empty())
             );
             assert!(
                 matches!(messages.last(),Some(AgentModelMessage::User(text)) if text.starts_with(crate::agent_user_input::REPLY_MARKER) && text.contains("这个你不可以联网搜索吗"))
@@ -444,6 +446,7 @@ mod tests {
         remove_projection(&mut messages);
         for i in 0..4 {
             messages.push(AgentModelMessage::Assistant {
+                continuation: None,
                 text: String::new(),
                 tool_calls: vec![fielora_model::AgentModelToolCall {
                     id: format!("call-{i}"),

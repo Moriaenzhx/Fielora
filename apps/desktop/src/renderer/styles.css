@@ -107,7 +107,7 @@ button:disabled { opacity: .55; cursor: wait; }
 .project-navigation-resizer span { opacity: 0; }
 .project-brand { display: flex; align-items: center; gap: 6px; padding: 2px 4px 8px; }
 .project-brand-button { min-width: 0; flex: 1; display: flex; align-items: center; gap: 9px; padding: 6px; border: 0; border-radius: 9px; color: #25282d; background: transparent; text-align: left; }
-.project-brand-button:hover, .sidebar-action:hover { background: #e5e9ef; }
+.sidebar-action:hover { background: #e5e9ef; }
 .project-brand-button img { width: 29px; height: 29px; }
 .project-brand-button strong { min-width: 0; overflow: hidden; text-overflow: ellipsis; font-size: 15px; letter-spacing: -.01em; }
 .sidebar-action { width: 32px; height: 32px; padding: 0; border: 0; border-radius: 9px; color: #5b626d; background: transparent; font-size: 20px; }
@@ -1064,7 +1064,7 @@ input[type="checkbox"]:checked::before { transform: translateY(-1px) rotate(-45d
 .settings-primary-action { border: 0; border-radius: 9px; padding: 9px 12px; color: #fff; background: #352371; font-weight: 650; }
 .settings-empty { margin: 0; padding: 20px; border-top: 1px solid #eceef1; color: #858b94; line-height: 1.55; }
 .settings-provider-list { border-top: 1px solid #eceef1; }
-.settings-provider-list article { display: flex; align-items: center; justify-content: space-between; gap: 20px; padding: 14px 20px; border-bottom: 1px solid #eceef1; }
+.settings-provider-list article { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 20px; padding: 14px 20px; border-bottom: 1px solid #eceef1; }
 .settings-provider-list article:last-child { border-bottom: 0; }
 .settings-provider-list article > span { min-width: 0; display: grid; gap: 4px; }
 .settings-provider-list article > span small { overflow-wrap: anywhere; }
@@ -1346,3 +1346,5 @@ body[data-sidebar-collapsed="true"] .browse-shell { grid-template-columns: 0 min
   .artifact-presentation { grid-template-columns: 112px minmax(0, 1fr); }
   .artifact-presentation > main { padding: 12px; }
 }
+
+/* Model runtime details share the existing service card and semantic theme tokens. */

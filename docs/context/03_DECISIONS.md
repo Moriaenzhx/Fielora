@@ -513,3 +513,34 @@ Agent 的新 Process 提案不再以历史相同 argv 自动替换为旧回执�
 ## 2026-10-02 — Mac 适配沿现有平台与 Agent 边界扩展
 
 用户授权补齐 Git、Keychain、跨平台脚本和进程管理、原生标题栏/快捷键/编辑器及 `.app`。共享 CredentialStore 根据本机平台使用 WinCred 或 Keychain，不使用明文 fallback。取消由现有 Capability 后端落实 Harness L5；不引入第二套 Runtime/权限/验证状态。默认 build/package 面向当前主机，Windows portable 历史交付独立保留。Git 署名最终为 Moriaen <formsg@163.com>；独立保存本地提交，GitHub 推送需本机完成正常登录。保留历史 stash、数据备份与旧 Evidence。
+
+## 2026-10-02 — 能力声明、参数选择与实际验证分别成立
+
+用户授权先完善模型配置与兼容性，不以OpenAI兼容协议推断所有模型行为一致。Model维护端点/模型声明和参数映射；Harness沿既有层次加载配置、持有运行快照、执行取消和验证。默认不强制推理开关，不通过名称为代理端点背书，不自动升级到Max。验证仅显式运行、定额、无副作用，保存分项证据和有效配置范围，失败不被改写成支持。内部推理状态不公开或落库；未测试能力标未知。首版不扩入自动任务难度评分、全模型可靠性认证或第二运行时。
+
+## 2026-10-02 — 统一模型配置与包替换
+
+用户明确要求更新配置页面、适配十个国产主流模型系列、以后新包删除旧包。无统一“前十”排名，按千问、DeepSeek、Kimi、GLM、MiniMax、豆包、混元、文心、星火、阶跃推进。目录由Core维护，UI不保留第二份厂商参数注册表。模型能力按官方端点与精确ID判定；强制思考模型不提供无效关闭选项。允许用户保存时修正协议并确认目标地址，保持既有Provider身份与系统密钥；不自动迁移用户的错误配置或发送付费测试。
+
+标准package/make成功后检查主程序、app.asar和Core文件，再清理带成功标记的旧开发包，仅保留最新一个。正式证据、用户数据、未知目录、失败证据不在清理范围。本轮不推送或合并GitHub。
+
+2026-10-02：采用显式 Provider model_optimization 状态区分内置适配与自定义配置；名称/域名猜测不再触发优化。schema18旧配置默认保持已知适配，新UI手动配置保存false；模式参与端点身份以隔离设置/验证/恢复快照。目录只列文档确认的版本和参数，版本可绑定独立端点，未声明的推理控制保持服务默认。
+
+
+## 2026-10-02 — Reject known model/protocol mismatches
+
+Use the Core catalog, matching exact model IDs case-insensitively, to reject known domestic models on official OpenAI/Anthropic adapters at save and send boundaries. Show the target address and a repair action in settings. Keep legacy records readable and arbitrary OpenAI-compatible custom models valid. Do not infer the plan from a brand or key format. The user explicitly identified Coding Plan, so its official dedicated endpoint was selected while preserving the stored credential. Do not use restricted Coding Plan credentials for automated Acceptance.
+
+
+## 2026-10-02 — 仅保留浅色外观
+
+用户明确取消跟随系统和深色模式。外观仅保留浅色，自定义背景/字体/对比度继续可用；历史 DARK/SYSTEM 偏好在读取和应用时归一到 LIGHT，系统外观变化不再切换产品主题。窗口右上角工具按钮仅在自身区域悬停、键盘聚焦或菜单展开时显示；应用底层沿用 Brand Chrome，避免深色底层露边。开发打包继续采用成功暂存→校验→替换→删除旧包，仅保留最新开发包；可再生成的构建缓存可清理，源码、用户数据、历史 Evidence 保留。
+
+
+## 2026-10-02 — macOS 可选半透明侧栏
+
+用户要求侧栏可设置成参考图中的半透明效果，并交付可点击的App。外观页复用既有 translucentSidebar 偏好提供开关，macOS 使用原生 sidebar vibrancy，标题栏/导航透出窗后色彩，内容区域保持不透明；高对比度回退实色，关闭效果保留背景配置。默认关闭，非macOS暂保留实色。不新增Schema或权限能力，原有受信窗口外观IPC增加可选布尔值校验。新开发包仍在校验成功后替换并删除旧包。
+
+## 2026-10-03 — 本机字体与用户级安装
+
+按用户选择，新字体安装到当前 OS 用户字体目录，供 Fielora 和其他软件使用。显示实际本机字体家族，预设缺失不再伪装成可用；保留旧偏好并明确回退。桌面导入与 Agent 共用平台服务。Agent 获取与系统安装分离，安装沿用现有一次审批与同 Run 准备回执；不新增权限/运行/证据系统，不允许目标覆盖、安装脚本或系统级管理员安装。页面优化沿用既有工作面和浅色、原生窗口控件规则。

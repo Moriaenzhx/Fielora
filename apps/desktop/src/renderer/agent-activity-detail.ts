@@ -143,6 +143,8 @@ export function activityFailureReason(run: AgentRunView | null): string | null {
     AGENT_TEXT_MATCH_FAILED: '待替换内容未能唯一匹配，修改未生效',
     AGENT_FILE_CHANGED: '文件内容已变化，需要重新核对修改',
     PROVIDER_RATE_LIMITED: '模型服务暂时限流',
+    PROVIDER_MODEL_MISMATCH: '模型与协议不匹配。请在模型配置中编辑连接，选择对应服务商和套餐后重试。',
+    MODEL_CONFIGURATION_UNSUPPORTED: '模型服务或推理设置已变化，无法沿用此任务的配置。请检查模型设置后创建新任务。',
     PROVIDER_PROTOCOL_ERROR: '模型服务未正确返回响应',
     PROVIDER_REQUEST_REJECTED: '模型服务拒绝了请求',
     CREDENTIAL_REJECTED: '模型凭据未通过验证',

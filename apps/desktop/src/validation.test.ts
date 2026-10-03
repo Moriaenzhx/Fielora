@@ -184,3 +184,14 @@ test('multimodal Agent and attachment bridges accept only bounded native image p
   assert.equal(validateSaveWorkspaceAttachment({ content_ref: `${'a'.repeat(64)}.png`, filename: 'saved.png' }).filename, 'saved.png');
   assert.throws(() => validateSaveWorkspaceAttachment({ content_ref: `${'a'.repeat(64)}.png`, filename: '../saved.png' }));
 });
+
+test('model runtime ingress rejects invented modes, fields and budgets', async () => {
+  const { validateUpdateModelRuntime } = await import('./validation.ts');
+  const value = { provider_config_id: '0194f000-0000-7000-8000-000000000001', expected_provider_revision: 1, expected_revision: 0, settings: { reasoning: 'PROVIDER_DEFAULT', max_output_tokens: 4096 } };
+  assert.deepEqual(validateUpdateModelRuntime(value), value);
+  for (const patch of [{reasoning:'ULTRA'},{max_output_tokens:0},{max_output_tokens:16385},{max_output_tokens:4096.5},{api_key:'secret'}]) {
+    assert.throws(() => validateUpdateModelRuntime({...value,settings:{...value.settings,...patch}}));
+  }
+  assert.throws(() => validateUpdateModelRuntime({...value,expected_revision:-1}));
+  assert.throws(() => validateUpdateModelRuntime({...value,expected_provider_revision:0}));
+});

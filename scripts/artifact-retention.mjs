@@ -1,11 +1,12 @@
-import { lstat, readFile, readdir, rm, writeFile } from 'node:fs/promises';
+import { lstat, readFile, readdir, realpath, rename, rm, writeFile } from 'node:fs/promises';
 import path from 'node:path';
+import { randomUUID } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 
 const MARKER_FILE = '.fielora-retention.json';
 const MARKER_KEYS = new Set(['version', 'kind', 'createdAt', 'status']);
 const DELETABLE_KINDS = new Set(['development-package', 'portable-temporary']);
-const DEFAULT_KEEP = 3;
+const DEFAULT_KEEP = 1;
 
 function isInside(root, candidate) {
   const relative = path.relative(root, candidate);
@@ -45,6 +46,8 @@ export async function planArtifactRetention({ repoRoot, keep = DEFAULT_KEEP }) {
   const root = outputRootFor(path.resolve(repoRoot));
   let entries = [];
   try {
+    const stats=await lstat(root);
+    if(stats.isSymbolicLink() || await realpath(root)!==path.join(await realpath(repoRoot),'apps','desktop','out')) throw new Error('Artifact output root must not traverse symlinks');
     entries = await readdir(root, { withFileTypes: true });
   } catch (error) {
     if (error?.code !== 'ENOENT') throw error;
@@ -85,6 +88,7 @@ export async function planArtifactRetention({ repoRoot, keep = DEFAULT_KEEP }) {
 
 async function validateDeletion(plan, item) {
   const candidate = assertOutputBoundary(plan.repoRoot, item.path);
+  if(await realpath(plan.root)!==path.join(await realpath(plan.repoRoot),'apps','desktop','out')) throw new Error('Artifact output root changed before cleanup');
   const stats = await lstat(candidate);
   if (!stats.isDirectory() || stats.isSymbolicLink()) throw new Error(`Artifact deletion target is not a safe directory: ${candidate}`);
   const marker = await readMarker(candidate);
@@ -116,6 +120,54 @@ export async function markDevelopmentOutput({ repoRoot, createdAt = new Date().t
   return target;
 }
 
+export async function verifyDevelopmentPayload(target, platform = process.platform) {
+  const resources = platform === 'darwin' ? path.join(target, 'Fielora.app', 'Contents', 'Resources') : path.join(target, 'resources');
+  const executable = platform === 'darwin' ? path.join(target, 'Fielora.app', 'Contents', 'MacOS', 'Fielora') : path.join(target, platform === 'win32' ? 'Fielora.exe' : 'Fielora');
+  for (const file of [executable, path.join(resources, 'app.asar'), path.join(resources, platform === 'win32' ? 'fielora-core.exe' : 'fielora-core')]) {
+    const stats = await lstat(file);
+    if (!stats.isFile() || stats.isSymbolicLink() || stats.size === 0) throw new Error('Incomplete package; previous packages retained');
+  }
+}
+
+// Promotion happens after Forge succeeds in a separate directory. On failure the old app stays usable.
+export async function promoteDevelopmentPackage({repoRoot, stagedPath, platform = process.platform, arch = process.arch}) {
+  const staged = assertOutputBoundary(repoRoot, stagedPath);
+  const target = assertOutputBoundary(repoRoot,path.join(outputRootFor(repoRoot),`Fielora-${platform}-${arch}`));
+  if(staged===target) throw new Error('Package staging and installed paths must differ');
+  await planArtifactRetention({repoRoot}); // Reject symlinked output ancestors.
+  const stagedStats=await lstat(staged);
+  if(!stagedStats.isDirectory()||stagedStats.isSymbolicLink())throw new Error('Invalid staging directory');
+  await verifyDevelopmentPayload(staged,platform);
+  const previous=assertOutputBoundary(repoRoot,path.join(outputRootFor(repoRoot),`.previous-Fielora-${platform}-${arch}-${randomUUID()}`));
+  let backedUp=false;
+  try {
+    try {
+      const stats=await lstat(target);
+      if(!stats.isDirectory()||stats.isSymbolicLink())throw new Error('Existing package is not a safe directory');
+      await verifyDevelopmentPayload(target,platform);
+      await rename(target,previous);backedUp=true;
+      // The exact previous installation has been verified, including legacy unmarked packages.
+      if(!await readMarker(previous))await writeFile(path.join(previous,MARKER_FILE),JSON.stringify({version:1,kind:'development-package',createdAt:new Date(0).toISOString(),status:'succeeded'}));
+    } catch(error) {if(error?.code!=='ENOENT')throw error;}
+    await rename(staged,target);
+  } catch(error) {
+    if(backedUp)await rename(previous,target);
+    throw error;
+  }
+  return finalizeDevelopmentPackage({repoRoot,platform,arch});
+}
+
+// Called only after Forge exits successfully. Missing payloads never trigger cleanup.
+export async function finalizeDevelopmentPackage({ repoRoot, platform = process.platform, arch = process.arch }) {
+  const target = assertOutputBoundary(repoRoot, path.join(outputRootFor(repoRoot), `Fielora-${platform}-${arch}`));
+  await verifyDevelopmentPayload(target,platform);
+  await markDevelopmentOutput({repoRoot, platform, arch});
+  const plan = await planArtifactRetention({repoRoot, keep:1});
+  if (!plan.retained.some(item => item.path === target)) throw new Error('Package timestamp conflict; previous packages retained');
+  const deleted = await applyArtifactRetention(plan, {dryRun:false});
+  return {target, deleted};
+}
+
 function displayPath(repoRoot, candidate) {
   return path.relative(repoRoot, candidate).split(path.sep).join('/');
 }
@@ -135,6 +187,13 @@ function parseCleanupArguments(arguments_) {
 async function main() {
   const repoRoot = path.resolve(import.meta.dirname, '..');
   const arguments_ = process.argv.slice(2);
+  if (arguments_[0] === 'finalize-development') {
+    if(arguments_.length !== 1) throw new Error('finalize-development does not accept additional arguments');
+    if(process.env.FIELORA_OUT_DIR) {console.log('PACKAGE_READY custom output retained; automatic cleanup applies to apps/desktop/out only');return;}
+    const result = await finalizeDevelopmentPackage({repoRoot});
+    console.log(`PACKAGE_READY ${displayPath(repoRoot,result.target)} old_packages_removed=${result.deleted.length} keep=1`);
+    return;
+  }
   if (arguments_[0] === 'mark-development') {
     if (arguments_.length !== 1) throw new Error('mark-development does not accept additional arguments');
     const target = await markDevelopmentOutput({ repoRoot });

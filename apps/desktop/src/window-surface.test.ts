@@ -26,6 +26,6 @@ test('native 44px caption plane stays continuous while workspace controls remain
   assert.match(styles, /\.desktop-chrome \{[^}]*padding: 0 146px 0 10px/);
   assert.match(styles, /\.utility-control-dock \{ right: 10px;[^}]*-webkit-app-region: no-drag/);
   assert.match(chrome, /data-chrome-plane="window" data-brand-chrome="top"/);
-  assert.match(materials, /data-chrome-plane="window"\]\[data-brand-chrome="top"\][\s\S]*?background-color: var\(--fl-brand-chrome-caption\);[\s\S]*?background-image: var\(--fl-brand-chrome-top\);[\s\S]*?backdrop-filter: none/);
+  assert.match(materials, /data-chrome-plane="window"\]\[data-brand-chrome="top"\][\s\S]*?background: transparent;[\s\S]*?backdrop-filter: none/);
   assert.match(materials, /data-brand-chrome="top"\]::after \{[\s\S]*?env\(titlebar-area-width,[\s\S]*?width: 96px;[\s\S]*?var\(--fl-brand-chrome-caption\)/);
 });

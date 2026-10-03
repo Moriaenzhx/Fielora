@@ -594,3 +594,50 @@ Agent 经浏览器快照确认需要用户登录时，现有暂停提示明确�
 ## 2026-10-02 macOS 原生窗口适配
 
 保持既有 Pane topology、Chrome ownership 与 Glass 材质。macOS 的 44px 顶栏在左侧预留 84px 给原生交通灯，移除 Windows 右侧按钮预留及 caption 渐变接缝；明暗外观仍由同一 token 解析。菜单与快捷键提示使用 Command，重做为 Shift+Command+Z；终端按本机 shell 显示 zsh。外部应用菜单在 macOS 仅展示实际检测到的应用和 Finder。
+
+## 2026-10-02 模型服务统一配置
+
+所有模型配置入口统一进入 Settings → 模型配置 → 模型服务；删除 Phase04 重复模态弹窗。服务列表与选中服务详情并列，窄内容区改为横向服务列表加纵向详情；不改变 Workspace Pane/Chrome 所有权。新增/编辑在同一内容区完成，服务商十宫格、模型预置、名称、地址、系统凭据依次呈现；保留手动兼容服务、OpenAI、Anthropic。百炼通用 API 与 Coding Plan 显式区分。用户可以修正已有配置协议；变更地址须确认，留空密钥保留原系统凭据。确认保存前不自动修正或测试用户配置。
+
+Core 下发官方端点与精确模型目录、能力声明和适用推理选项；未知与不支持分开。选中服务直接显示连接状态、模型能力、推理设置与兼容检查，不再额外展开才能找到。已保存请求参数仍放在高级详情内。服务默认沿用模型推理行为，不虚构强制思考模型的关闭选项。修改仅作用于新任务，已有 Run 保留首次调用快照。
+
+兼容测试显式点击，说明最多四次请求、每次最多1024输出Token及潜在费用。测试期间禁用保存/重复发起，可取消；分别显示文本流、工具调用、错误重试、结果续接的状态。端点、模型、设置、凭据或声明版本变化使证据失效。声明与有限实测分开，不授予额外 Agent 权限。删除密钥与移除服务需在页面明确确认。
+
+沿用 Button、SelectMenu、语义主题令牌；新样式在 styles/model-services.css，旧 styles.css 的模型运行时追加样式迁出。保持键盘焦点可见，明暗主题及920px窗口可用。
+
+### 模型配置的适配边界（2026-10-02）
+
+内置十个系列提供版本下拉框；星火版本同时切换对应地址，千问保留通用 API / Coding Plan 选择。手动填写 Model ID 或选择自定义服务时显示“无厂商优化”，明确保存自定义模式；输入与官方相同的名称也不会自动恢复优化。内置版本仅显示 Core 声明支持的推理模式（含适用版本的中档）；不支持调整时仅有服务默认值。自定义模型采用所选标准协议和服务默认推理，不注入厂商参数/提示词。保存连接后能力、参数与兼容检查仍在同一详情页。
+
+
+## 2026-10-02 外观简化
+
+当前只提供浅色外观，取消模式选择区，历史 SYSTEM/DARK 偏好归一至 LIGHT，系统切换不影响产品配色。此前 Light/Dark 双模式条款不再控制当前 UI。自定义背景、字体和对比度继续保留。右上角工具区默认透明，区域悬停、键盘聚焦或菜单展开时显示；不改变命中区域、快捷键和工作区 ownership。应用最底层及圆角使用同一 Brand Chrome 配色，不增加黑色外框。macOS 原生窗口阴影由系统管理。
+
+
+## 2026-10-02 可选半透明侧栏
+
+macOS 外观设置增加“半透明侧栏”，复用已有 translucentSidebar 偏好，默认关闭并持久保存。开启时通过现有受信窗口外观IPC设置原生 sidebar vibrancy，左侧导航和连续标题栏采用浅色半透明罩色，祖先背景透明，Conversation/Settings/工具正文保持不透明。关闭或启用高对比度后恢复实色，不覆盖保存的自定义颜色；恢复默认同时关闭半透明。非macOS保留既有实色外观，不伪称支持原生磨砂。无Schema、权限边界或布局变更。
+
+
+### 半透明圆角背景连续性修正（2026-10-02）
+
+半透明罩色由 desktop-frame 统一绘制一次；侧栏、标题栏和内容圆角背后的祖先不再各自绘制罩色。此前仅给侧栏/标题栏罩色，会让圆角外和分隔处暴露未罩色的原生材质，形成直角暗块。白色正文仍不透明。桌面验证增加圆角外与相邻侧栏的实际RGBA像素比较，同时覆盖半透明和实色状态。
+
+macOS 左上角红黄绿窗口控制改为 Electron 原生 customButtonsOnHover：默认隐藏，指针进入原生按钮区域后显示；仍使用原生关闭、最小化和全屏行为，保留按钮避让区。
+
+
+### 全窗口背景统一绘制（2026-10-02）
+
+实色和渐变也由 desktop-frame 统一绘制，标题栏、导航、路由祖先及圆角外直接透出同一底层；取消每个区域独立背景和固定 -44px 偏移，避免边距、窗口尺寸变化后重新拼接背景。Windows 原生按钮区域的 caption 过渡保留，macOS 不添加该过渡。内容面仍独立不透明。截图像素验证覆盖主工作页和设置页的左右侧栏边缘、标题栏交界与内容圆角，并检查自定义渐变在两种窗口宽度下的连续性。
+
+
+### 原生磨砂下的网页材质回退（2026-10-02）
+
+macOS translucentSidebar=true 时仅由系统 vibrancy 提供窗后模糊，网页侧 Chrome/Floating/Overlay/Dim 的 backdrop-filter 解析为 none，浮层和菜单使用对应 solid surface。这避免对话输入框的额外网页模糊与原生合成叠加；仍保留侧栏透明、统一罩色及正文不透明。没有启用原生磨砂的平台/状态不变。Logo 是静态品牌标识，不显示操作按钮的 hover 底色。侧栏交互按钮仍使用统一 Brand Chrome hover/active token。
+
+用户随后明确恢复红黄绿按钮的默认逻辑，覆盖此前 customButtonsOnHover 要求：使用 hidden titlebar 下的原生常显窗口控件，系统管理悬停符号和关闭/最小化/全屏行为。右上角应用工具按钮的 hover 逻辑不变。
+
+### 2026-10-03 — Collection pages and installed fonts
+
+Library and Scheduled pages share a bounded content rail, compact title/action header, aligned pill filters and compact search, and a centered empty state with a direct first action. Avoid implementation terminology in empty states. Preserve scroll and narrow-width wrapping. Appearance font choices come from installed system families, with searchable lists, explicit unavailable legacy choices, UI/code previews and a native font import action. Font import targets the current OS user's font directory; Agent installation shares the existing one-shot approval presentation with actual family/source/hash/destination. macOS system-default typography includes Apple UI/monospace fallbacks.

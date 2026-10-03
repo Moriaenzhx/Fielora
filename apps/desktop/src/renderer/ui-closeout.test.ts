@@ -17,8 +17,8 @@ test('global routes omit workspace controls while workspace contexts retain them
   assert.match(chrome, /workspaceControlsVisible = !globalPageRoute \|\| toolsOpen/);
   assert.match(chrome, /workspaceControlsVisible && <aside className=\{`utility-control-dock/);
   assert.match(chrome, /data-surface-context=\{workspaceControlsVisible \? 'workspace' : 'global'\}/);
-  assert.match(library, />长期资料<\/p>/);
-  assert.match(library, /或者在浏览网页时使用“保存到资料库”/);
+  assert.match(library, /collection-page/);
+  assert.match(library, /在浏览网页时保存到资料库/);
 });
 
 test('Browser narrow layout keeps three toolbar columns and exposes complete menu copy', () => {

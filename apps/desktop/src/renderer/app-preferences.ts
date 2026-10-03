@@ -24,8 +24,8 @@ export type AccentPreset = 'FIELORA' | 'BLUE' | 'TEAL' | 'ORANGE' | 'CUSTOM';
 export type InterfaceDensity = 'COMFORTABLE' | 'STANDARD' | 'COMPACT';
 export type InterfaceContrast = 'SOFT' | 'STANDARD' | 'HIGH';
 export type InterfaceRadius = 'SMALL' | 'STANDARD' | 'LARGE';
-export type UiFont = 'SYSTEM' | 'INTER' | 'SEGOE_UI' | 'PINGFANG_SC' | 'MICROSOFT_YAHEI';
-export type CodeFont = 'SYSTEM_MONO' | 'CONSOLAS' | 'CASCADIA_CODE' | 'JETBRAINS_MONO';
+export type UiFont = 'SYSTEM' | 'INTER' | 'SEGOE_UI' | 'PINGFANG_SC' | 'MICROSOFT_YAHEI' | `LOCAL:${string}`;
+export type CodeFont = 'SYSTEM_MONO' | 'CONSOLAS' | 'CASCADIA_CODE' | 'JETBRAINS_MONO' | `LOCAL:${string}`;
 export type UiFontScale = 90 | 95 | 100 | 105 | 110 | 115 | 120;
 export type UiFontSize = 12 | 13 | 14 | 15 | 16 | 17 | 18;
 export type CodeFontSize = 11 | 12 | 13 | 14 | 15 | 16 | 17;
@@ -95,7 +95,7 @@ const HEX_COLOR = /^#[0-9a-f]{6}$/i;
 const ADVANCED_COLOR_KEYS: AdvancedColorKey[] = ['accent', 'canvas', 'sidebar', 'surface', 'foreground', 'border'];
 
 export const defaultAppearancePreferences: AppearancePreferences = {
-  themePreference: 'SYSTEM', accentPreset: 'FIELORA', customAccent: '#6546C7', density: 'STANDARD', contrast: 'STANDARD', radius: 'STANDARD',
+  themePreference: 'LIGHT', accentPreset: 'FIELORA', customAccent: '#6546C7', density: 'STANDARD', contrast: 'STANDARD', radius: 'STANDARD',
   uiFont: 'SYSTEM', codeFont: 'SYSTEM_MONO', uiFontSize: 15, codeFontSize: 13,
   sidebarBackgroundOverride: null, sidebarBackgroundGradientOverride: null,
   workspaceBackgroundOverride: null, workspaceBackgroundGradientOverride: null,
@@ -146,6 +146,11 @@ function normalizeGradient(value: unknown): BackgroundGradientOverride | null {
   return { from: input.from.toUpperCase(), to: input.to.toUpperCase(), bottomLeft: isHexColor(input.bottomLeft) ? input.bottomLeft.toUpperCase() : input.from.toUpperCase() };
 }
 
+function normalizeFont<T extends string>(value: unknown, values: readonly T[], fallback: T): T | `LOCAL:${string}` {
+  if (typeof value === 'string' && value.startsWith('LOCAL:') && value.length > 6 && value.length <= 262 && !Array.from(value).some(c => c.charCodeAt(0) < 32 || c.charCodeAt(0) === 127)) return value as `LOCAL:${string}`;
+  return oneOf(value, values, fallback);
+}
+
 function normalizeAppearance(value: unknown, legacy?: Record<string, unknown>): AppearancePreferences {
   const input = record(value) ?? {};
   const legacyDensity = legacy?.density === 'COMPACT' ? 'COMPACT' : legacy?.density === 'COMFORTABLE' ? 'COMFORTABLE' : defaultAppearancePreferences.density;
@@ -153,14 +158,14 @@ function normalizeAppearance(value: unknown, legacy?: Record<string, unknown>): 
   const persistedSidebar = isHexColor(input.sidebarBackgroundOverride) ? input.sidebarBackgroundOverride.toUpperCase() : null;
   const sidebarBackgroundOverride = persistedSidebar === '#EFEBFF' || persistedSidebar === '#F0ECFF' || persistedSidebar === '#F7EFFB' ? null : persistedSidebar;
   return {
-    themePreference: oneOf(input.themePreference, ['SYSTEM', 'LIGHT', 'DARK'], defaultAppearancePreferences.themePreference),
+    themePreference: 'LIGHT',
     accentPreset: oneOf(input.accentPreset, ['FIELORA', 'BLUE', 'TEAL', 'ORANGE', 'CUSTOM'], defaultAppearancePreferences.accentPreset),
     customAccent: isHexColor(input.customAccent) ? input.customAccent.toUpperCase() : defaultAppearancePreferences.customAccent,
     density: oneOf(input.density, ['COMFORTABLE', 'STANDARD', 'COMPACT'], legacyDensity),
     contrast: oneOf(input.contrast, ['SOFT', 'STANDARD', 'HIGH'], defaultAppearancePreferences.contrast),
     radius: oneOf(input.radius, ['SMALL', 'STANDARD', 'LARGE'], defaultAppearancePreferences.radius),
-    uiFont: oneOf(input.uiFont, ['SYSTEM', 'INTER', 'SEGOE_UI', 'PINGFANG_SC', 'MICROSOFT_YAHEI'], defaultAppearancePreferences.uiFont),
-    codeFont: oneOf(input.codeFont, ['SYSTEM_MONO', 'CONSOLAS', 'CASCADIA_CODE', 'JETBRAINS_MONO'], defaultAppearancePreferences.codeFont),
+    uiFont: normalizeFont(input.uiFont, ['SYSTEM', 'INTER', 'SEGOE_UI', 'PINGFANG_SC', 'MICROSOFT_YAHEI'], defaultAppearancePreferences.uiFont),
+    codeFont: normalizeFont(input.codeFont, ['SYSTEM_MONO', 'CONSOLAS', 'CASCADIA_CODE', 'JETBRAINS_MONO'], defaultAppearancePreferences.codeFont),
     uiFontSize: numberIn(input.uiFontSize, [12, 13, 14, 15, 16, 17, 18], defaultAppearancePreferences.uiFontSize),
     codeFontSize: numberIn(input.codeFontSize, [11, 12, 13, 14, 15, 16, 17], defaultAppearancePreferences.codeFontSize),
     sidebarBackgroundOverride,
@@ -209,8 +214,11 @@ export function writeAppPreferences(storage: Pick<PreferenceStorage, 'setItem'>,
   storage.setItem(STORAGE_KEY, JSON.stringify({ ...preferences, version: 2 }));
 }
 
-export function resolveAppearance(preference: AppearanceMode, prefersDark: boolean): EffectiveAppearance {
-  return preference === 'SYSTEM' ? (prefersDark ? 'DARK' : 'LIGHT') : preference;
+// Legacy DARK/SYSTEM values remain readable; the product now has one light appearance.
+export function resolveAppearance(_preference: AppearanceMode, _prefersDark: boolean): EffectiveAppearance {
+  void _preference;
+  void _prefersDark;
+  return 'LIGHT';
 }
 
 export function resolveUiLocale(preference: UiLanguagePreference, systemLocale: string): UiLocale {
@@ -254,6 +262,11 @@ const CODE_FONT_FAMILIES: Record<CodeFont, string | null> = {
   JETBRAINS_MONO: '"JetBrains Mono", "Cascadia Code", Consolas, monospace',
 };
 
+export function fontFamilyCss(font: UiFont | CodeFont, code: boolean): string | null {
+  if (font.startsWith('LOCAL:')) return `${JSON.stringify(font.slice(6))}, ${code ? 'monospace' : 'sans-serif'}`;
+  return (code ? CODE_FONT_FAMILIES[font as CodeFont] : UI_FONT_FAMILIES[font as UiFont]) ?? null;
+}
+
 function setOrRemove(target: HTMLElement, property: string, value: string | null): void {
   if (value === null) target.style.removeProperty(property);
   else target.style.setProperty(property, value);
@@ -269,11 +282,11 @@ export function applyAppPreferences(target: HTMLElement, preferences: AppPrefere
   const material = resolveMaterial(environment.supportsBackdrop ?? false);
   target.dataset.officialTheme = 'fielora';
   target.dataset.designLanguage = 'fielora-glass';
-  target.dataset.appearanceMode = appearance.themePreference.toLowerCase();
+  target.dataset.appearanceMode = 'light';
   target.dataset.effectiveAppearance = effectiveAppearance.toLowerCase();
   target.dataset.material = material.toLowerCase();
   // Temporary compatibility markers for older non-visual E2E entry points.
-  target.dataset.themePreference = appearance.themePreference.toLowerCase();
+  target.dataset.themePreference = 'light';
   target.dataset.resolvedTheme = effectiveAppearance.toLowerCase();
   target.dataset.uiDensity = 'standard';
   target.dataset.uiContrast = 'standard';
@@ -282,10 +295,11 @@ export function applyAppPreferences(target: HTMLElement, preferences: AppPrefere
   target.dataset.smoothScrolling = String(appearance.smoothScrolling);
   target.dataset.pointerCursor = String(appearance.pointerCursor);
   target.dataset.highContrast = String(appearance.highContrast);
+  target.dataset.translucentSidebar = String(appearance.translucentSidebar && !appearance.highContrast);
   target.style.colorScheme = effectiveAppearance.toLowerCase();
   target.style.removeProperty('--fl-color-accent');
-  const uiFamily = UI_FONT_FAMILIES[appearance.uiFont];
-  const codeFamily = CODE_FONT_FAMILIES[appearance.codeFont];
+  const uiFamily = fontFamilyCss(appearance.uiFont, false);
+  const codeFamily = fontFamilyCss(appearance.codeFont, true);
   setOrRemove(target, '--fl-font-sans', uiFamily);
   setOrRemove(target, '--fl-font-agent-sans', uiFamily);
   setOrRemove(target, '--fl-font-mono', codeFamily);

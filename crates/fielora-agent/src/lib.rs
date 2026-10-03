@@ -11,6 +11,7 @@ mod capability_catalog;
 mod command_diagnostics;
 mod diagram;
 mod file;
+pub mod fonts;
 pub mod idr_context;
 pub mod mcp;
 pub mod mcp_connections;
@@ -937,7 +938,7 @@ pub fn coding_tool_catalog() -> Vec<ToolSpec> {
             AgentToolEffect::Process,
             json!({"type":"object","properties":{"program":{"type":"string"},"argv":{"type":"array","items":{"type":"string"},"maxItems":128},"cwd":{"type":"string"},"timeout_ms":{"type":"integer","minimum":1000,"maximum":900000}},"required":["program","argv"],"additionalProperties":false}),
         ),
-    ].into_iter().chain(skill_acquisition::catalog()).chain(tool_acquisition::catalog()).collect()
+    ].into_iter().chain(skill_acquisition::catalog()).chain(tool_acquisition::catalog()).chain(fonts::catalog()).collect()
 }
 
 fn tool(name: &str, description: &str, effect: AgentToolEffect, input_schema: Value) -> ToolSpec {
@@ -1103,7 +1104,8 @@ impl PolicyEngine {
         use AgentToolEffect::*;
         // Install authorization is based on a durable preparation resolved by Core,
         // never on a model-supplied risk flag. FullControl does not bypass this.
-        if spec.definition.name == "tools.install"
+        if spec.definition.name == "fonts.install"
+            || spec.definition.name == "tools.install"
             || (spec.definition.name == "run_command" && installation_command(arguments))
         {
             return Ask;
@@ -2276,6 +2278,12 @@ impl ToolRuntime {
         effect: AgentToolEffect,
         arguments: &Value,
     ) -> Result<ToolReconciliation, AgentError> {
+        if name == "fonts.install" {
+            return Ok(ToolReconciliation {
+                status: ToolReconciliationStatus::ManualReview,
+                evidence: json!({"reason":"FONT_INSTALLATION_INTERRUPTED","recovery":"Inspect prepared font digest, current-user font directory and native registration before retrying; do not assume installation completed."}),
+            });
+        }
         if name == "tools.install" {
             return Ok(ToolReconciliation {
                 status: ToolReconciliationStatus::ManualReview,
@@ -2793,6 +2801,8 @@ impl ToolExecutor for ToolRuntime {
             "skills.prepare" => skill_acquisition::prepare(self, arguments, cancellation),
             "environment.inspect" => tool_acquisition::inspect_environment(self, arguments),
             "tools.prepare" => tool_acquisition::prepare(self, arguments, cancellation),
+            "fonts.list" => fonts::list(arguments),
+            "fonts.prepare" => fonts::prepare(self, arguments, cancellation),
             "capability_status" => self.capability_status(arguments),
             "write_file" => self.write_file(arguments, false),
             "create_file" => self.write_file(arguments, true),
@@ -3541,6 +3551,7 @@ impl ToolRuntime {
             "csv":{"status":"AVAILABLE","path":"bounded UTF-8 file tools; formula-aware XLSX is not implied"},
             "web_research":{"status":"UNSUPPORTED_CAPABILITY","tools":[],"reason":"No Web provider is registered in the built-in executor; routed execution reports the actual admitted catalog.","effect":"NETWORK","authority":"UNTRUSTED_WEB_CONTENT","limitations":["no download-to-workspace tool","no browser fallback","no deep research runtime"]},
             "skill_acquisition":{"status":"AVAILABLE","tools":["skills.search","skills.prepare","skills.install"],"scope":"Public GitHub repository discovery and complete public HTTPS ZIP Skill bundles","network_reachability_verified":false,"guidance":"Search or reuse an observed source, prepare the whole bundle, then install using the actual preparation tool_call_id and run verify_skill. A browser failure does not prove these network tools are unavailable. No automatic script execution."},
+            "fonts":{"status":"AVAILABLE","tools":["fonts.list","fonts.prepare","fonts.install"],"scope":"Current-user system fonts; TTF/OTF/TTC up to 32 MiB; project-relative file or public HTTPS font; installation confirmation required"},
             "tool_acquisition":{"status":"AVAILABLE","tools":["environment.inspect","tools.prepare","tools.install"],"providers":["node","ripgrep","https_zip"],"scope":"Windows x64 portable ZIPs into project .fielora/tools; discover compatible existing executables first","automatic_install":"Official provider, actual download <=20 MiB, isolated, no PATH/system changes or install scripts; existing network/read-only approval applies","other_installations":"Human confirmation required even with FullControl","limitations":["128 MiB compressed / 512 MiB expanded","no automatic scripts, MSI, global installation or private sources"]},
             "web_download":{"status":"PARTIAL","tools":["skills.prepare","tools.prepare"],"scope":"Complete public HTTPS ZIP into quarantine; separate install authorizes project publication","limitations":["32 MiB Skill archives / 128 MiB portable tool archives","no private credentials","not a general file downloader"]},
             "archive":{"status":"PARTIAL","tools":["skills.prepare","skills.install"],"scope":"Validated ZIP Skill directories only; path/link/collision and extraction limits enforced","limitations":["no TAR/RAR","no arbitrary extraction destination","no automatic scripts"]},

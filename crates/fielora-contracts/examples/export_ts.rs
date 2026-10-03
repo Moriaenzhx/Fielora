@@ -13,6 +13,17 @@ fn main() {
 
     let config = Config::default();
     let declarations = [
+        ModelSupport::decl(&config),
+        ReasoningMode::decl(&config),
+        ModelRuntimeSettings::decl(&config),
+        ResolvedModelProfile::decl(&config),
+        ModelProviderPreset::decl(&config),
+        ModelProviderVersion::decl(&config),
+        ModelCheckStatus::decl(&config),
+        ModelCompatibilityCheck::decl(&config),
+        ModelCompatibilityReport::decl(&config),
+        ModelRuntimeView::decl(&config),
+        UpdateModelRuntimeRequest::decl(&config),
         FieldId::decl(&config),
         PrincipalId::decl(&config),
         DeviceId::decl(&config),

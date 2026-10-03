@@ -92,11 +92,7 @@
 [data-surface="chrome"][data-chrome-plane="window"][data-brand-chrome="top"],
 :root[data-material="solid"] [data-surface="chrome"][data-chrome-plane="window"][data-brand-chrome="top"] {
   border-color: var(--fl-brand-chrome-edge);
-  background-color: var(--fl-brand-chrome-caption);
-  background-image: var(--fl-brand-chrome-top);
-  background-position: 0 0;
-  background-size: 100vw 100vh;
-  background-repeat: no-repeat;
+  background: transparent;
   box-shadow: none;
   backdrop-filter: none;
 }
@@ -112,31 +108,38 @@
   background: linear-gradient(90deg, transparent, var(--fl-brand-chrome-caption));
 }
 
-/* Only persistent left navigation owns the vertical half of the brand theme. */
+/* Navigation reveals the same window canvas as the titlebar and corners. */
 .project-navigation[data-surface="chrome"][data-brand-chrome="navigation"],
 .settings-navigation[data-surface="chrome"][data-brand-chrome="navigation"],
 :root[data-material="solid"] .project-navigation[data-surface="chrome"][data-brand-chrome="navigation"],
 :root[data-material="solid"] .settings-navigation[data-surface="chrome"][data-brand-chrome="navigation"] {
   border-color: var(--fl-brand-chrome-edge);
   border: 0;
-  background: var(--fl-brand-chrome-navigation);
-  background-position: 0 -44px;
-  background-size: 100vw 100vh;
-  background-repeat: no-repeat;
+  background: transparent;
   box-shadow: none;
   backdrop-filter: none;
 }
 
-/* The shared shell canvas is only exposed by the rounded Content corners.
- * It keeps those corners visibly attached to Brand Chrome without tinting
- * Conversation, Settings Content, or the right-side work surfaces. */
-.workspace-surface,
-.settings-root {
+/* Paint the window gradient once. Repainting it on padded navigation or
+ * individual routes shifts its origin and introduces seams at their edges. */
+.desktop-frame {
   background: var(--fl-brand-chrome-canvas);
-  background-position: 0 -44px;
+  background-position: 0 0;
   background-size: 100vw 100vh;
   background-repeat: no-repeat;
 }
+
+body,
+.desktop-frame { border: 0; box-shadow: none; }
+
+body { background: var(--fl-brand-chrome-caption); }
+
+.desktop-content,
+.project-root,
+.workspace-surface,
+.settings-root,
+.scheduled-root,
+.library-root { background: transparent; }
 
 @supports not (backdrop-filter: blur(1px)) {
   [data-surface="chrome"] {
@@ -160,3 +163,34 @@
 }
 
 :root[data-platform="macos"] [data-surface="chrome"][data-chrome-plane="window"][data-brand-chrome="top"]::after { content: none; }
+
+/* Native macOS vibrancy sits behind the web view. Every ancestor of the
+ * navigation must let it through; content panes retain their opaque paint. */
+:root[data-platform="macos"][data-translucent-sidebar="true"] :is(body, .desktop-content, .project-root, .workspace-surface, .settings-root, .scheduled-root, .library-root) {
+  background: transparent;
+}
+/* Tint the common backing once, including dividers and exposed content corners.
+ * Painting only the navigation/titlebar leaves an untinted rectangular cutout. */
+:root[data-platform="macos"][data-translucent-sidebar="true"] .desktop-frame {
+  background: color-mix(in srgb, var(--fl-brand-chrome-caption) 28%, transparent);
+}
+:root[data-platform="macos"][data-translucent-sidebar="true"] [data-brand-chrome] {
+  background: transparent;
+  box-shadow: none;
+  backdrop-filter: none;
+}
+
+/* macOS already composites the window backdrop through native vibrancy.
+ * A second Chromium backdrop-filter (including the conversation composer)
+ * leaves stale opaque damage tiles during hover repaint in that window.
+ * Resolve all web glass roles to solid surfaces while native glass is active;
+ * navigation continues to reveal the single native backing above. */
+:root[data-platform="macos"][data-translucent-sidebar="true"] {
+  --fl-effect-backdrop-chrome: none;
+  --fl-effect-backdrop-floating: none;
+  --fl-effect-backdrop-overlay: none;
+  --fl-effect-backdrop-dim: none;
+  --fl-surface-chrome: var(--fl-surface-chrome-solid);
+  --fl-surface-floating: var(--fl-surface-floating-solid);
+  --fl-surface-overlay: var(--fl-surface-overlay-solid);
+}

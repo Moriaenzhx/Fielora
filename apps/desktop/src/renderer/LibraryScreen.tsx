@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import type { LibraryMediaKind, LibraryObjectView } from '@fielora/contracts';
 import { PrimaryNav } from './PrimaryNav';
 import { AppIcon } from './ui';
@@ -33,13 +33,21 @@ export function LibraryScreen(props: LibraryScreenProps) {
   const [filter, setFilter] = useState<Filter>('ALL');
   const [objects, setObjects] = useState<LibraryObjectView[]>([]);
   const [status, setStatus] = useState('');
+  const [query, setQuery] = useState('');
+  const [loading, setLoading] = useState(true);
+  const refreshVersion = useRef(0);
   const [navigationWidth, setNavigationWidth] = useState(() => readWorkspaceNavigationWidth(WORKSPACE_NAVIGATION_DEFAULT_WIDTH, 'fielora:library-navigation-width'));
 
   const refresh = useCallback(async (nextFilter: Filter = filter) => {
+    const version = ++refreshVersion.current;
+    setLoading(true);
     try {
-      setObjects(await window.fielora.library.list({ media_kind: nextFilter === 'ALL' ? null : nextFilter, include_deleted: false, limit: 200 }));
+      const objects = await window.fielora.library.list({ media_kind: nextFilter === 'ALL' ? null : nextFilter, include_deleted: false, limit: 200 });
+      if (version !== refreshVersion.current) return;
+      setObjects(objects);
       setStatus('');
-    } catch (reason) { setStatus(reason instanceof Error ? reason.message : String(reason)); }
+    } catch (reason) { if (version === refreshVersion.current) setStatus(reason instanceof Error ? reason.message : String(reason)); }
+    finally { if (version === refreshVersion.current) setLoading(false); }
   }, [filter]);
 
   useEffect(() => { void refresh(); }, [refresh]);
@@ -47,8 +55,8 @@ export function LibraryScreen(props: LibraryScreenProps) {
   async function addFiles() {
     try {
       const added = await window.fielora.library.addFiles();
-      if (added.length > 0) setStatus(`已添加 ${added.length} 个文件`);
       await refresh();
+      if (added.length > 0) setStatus(`已添加 ${added.length} 个文件`);
     } catch (reason) { setStatus(reason instanceof Error ? reason.message : String(reason)); }
   }
 
@@ -71,11 +79,13 @@ export function LibraryScreen(props: LibraryScreenProps) {
     persistWorkspaceNavigationWidth(width, 'fielora:library-navigation-width');
   };
 
+  const visibleObjects = objects.filter(object => `${object.title} ${object.original_filename ?? ''} ${object.original_source ?? ''}`.toLocaleLowerCase().includes(query.trim().toLocaleLowerCase()));
+
   return <WorkspaceSurface className="library-root" testId="library-screen" navigationWidth={navigationWidth} onNavigationWidthChange={updateNavigationWidth} navigationResizerTestId="library-navigation-resizer" navigationResizerClassName="library-navigation-resizer" navigation={<PrimaryNav active="LIBRARY" {...props} />}>
-    <main className="content library-content">
-      <header className="library-header page-header"><div><p className="eyebrow">长期资料</p><h1>资料库</h1><p>保存以后需要重新寻找、查看和使用的数字资产。</p></div><Button variant="primary" className="page-primary-action" onClick={() => void addFiles()} data-testid="library-add-file"><AppIcon name="filePlus"/><span>添加文件</span></Button></header>
-      <nav className="library-filters" aria-label="资料类型">{filters.map((item) => <button key={item.id} className={filter === item.id ? 'active' : ''} onClick={() => { setFilter(item.id); void refresh(item.id); }} data-testid={`library-filter-${item.id.toLowerCase()}`}>{item.label}</button>)}</nav>
-      {objects.length === 0 ? <section className="library-empty page-empty-state"><AppIcon name="library" size="lg"/><h2>还没有保存的内容</h2><p>添加本地文件，或者在浏览网页时使用“保存到资料库”。</p></section> : <section className="library-list" aria-label="资料库内容">{objects.map((object) => <article key={object.id} className="library-row" data-testid={`library-object-${object.id}`}>
+    <main className="content library-content collection-page">
+      <header className="library-header page-header"><div><h1>资料库</h1><p>收藏文件与网页，随时查找和使用。</p></div><Button variant="primary" className="page-primary-action" onClick={() => void addFiles()} data-testid="library-add-file"><AppIcon name="filePlus"/><span>添加文件</span></Button></header>
+      <div className="collection-toolbar"><nav className="library-filters collection-filters" aria-label="资料类型">{filters.map((item) => <button key={item.id} className={filter === item.id ? 'active' : ''} aria-pressed={filter === item.id} onClick={() => setFilter(item.id)} data-testid={`library-filter-${item.id.toLowerCase()}`}>{item.label}</button>)}</nav><label className="collection-search"><AppIcon name="search" size="sm"/><input aria-label="搜索资料库" placeholder="搜索资料" value={query} onChange={event => setQuery(event.target.value)}/></label></div>
+      {loading ? <p className="collection-loading" role="status">正在读取资料…</p> : visibleObjects.length === 0 ? <section className="library-empty page-empty-state"><span className="collection-empty-icon"><AppIcon name="library" size="lg"/></span><h2>{query || filter !== 'ALL' ? '没有匹配的内容' : '把需要的资料放在这里'}</h2><p>{query || filter !== 'ALL' ? '试试其他关键词或资料类型。' : '添加本地文件，或在浏览网页时保存到资料库。'}</p>{!query && filter === 'ALL' && <Button variant="secondary" onClick={() => void addFiles()}><AppIcon name="plus" size="sm"/>添加第一份资料</Button>}</section> : <section className="library-list" aria-label="资料库内容">{visibleObjects.map((object) => <article key={object.id} className="library-row" data-testid={`library-object-${object.id}`}>
         <div><strong>{object.title}</strong><span>{kindLabels[object.media_kind]} · {object.kind === 'WEB' ? object.original_source : object.original_filename}</span><small>{new Date(object.created_at).toLocaleString()}</small></div>
         <div className="library-actions"><button onClick={() => void openObject(object)}>打开</button>{object.kind === 'FILE' && <button onClick={() => void window.fielora.library.reveal({ library_object_id: object.id })}>打开所在位置</button>}<button className="danger-link" onClick={() => void remove(object)}>删除</button></div>
       </article>)}</section>}

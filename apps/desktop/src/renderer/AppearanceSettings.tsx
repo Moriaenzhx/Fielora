@@ -1,7 +1,6 @@
 import { useEffect, useLayoutEffect, useRef, useState, type CSSProperties, type PointerEvent as ReactPointerEvent } from 'react';
 import { createPortal } from 'react-dom';
 import type {
-  AppearanceMode,
   AppearancePreferences,
   BackgroundGradientOverride,
   CodeFont,
@@ -15,32 +14,16 @@ import {
   defaultAppearancePreferences,
   isHexColor,
   resolveAppearance,
+  fontFamilyCss,
 } from './app-preferences';
-import { SelectMenu, SettingsToggle, TextActionDialog } from './UiPrimitives';
+import { Button, SelectMenu, SettingsToggle, TextActionDialog } from './UiPrimitives';
 import { useUiLocale } from './ui-locale';
+import type { FontCatalog } from '../types';
+import { isMac } from './platform';
 
 interface AppearanceSettingsProps {
   appearance: AppearancePreferences;
   onChange: (appearance: AppearancePreferences) => void;
-}
-
-function AppearanceModeControl({ value, onChange }: { value: AppearanceMode; onChange: (value: AppearanceMode) => void }) {
-  const { t } = useUiLocale();
-  const appearanceModes: Array<{ value: AppearanceMode; label: string }> = [
-    { value: 'SYSTEM', label: t('跟随系统', 'Follow system') },
-    { value: 'LIGHT', label: t('浅色', 'Light') },
-    { value: 'DARK', label: t('深色', 'Dark') },
-  ];
-  return <div className="appearance-mode-control" role="radiogroup" aria-label={t('外观模式', 'Appearance mode')}>
-    {appearanceModes.map((option) => <button
-      type="button"
-      key={option.value}
-      role="radio"
-      aria-checked={value === option.value}
-      onClick={() => onChange(option.value)}
-      data-testid={`appearance-theme-${option.value.toLowerCase()}`}
-    ><span>{option.label}</span></button>)}
-  </div>;
 }
 
 interface HsvColor { h: number; s: number; v: number }
@@ -252,19 +235,42 @@ export function AppearanceSettings({ appearance, onChange }: AppearanceSettingsP
   const prefersDark = typeof window !== 'undefined' && window.matchMedia('(prefers-color-scheme: dark)').matches;
   const effectiveAppearance = resolveAppearance(appearance.themePreference, prefersDark);
   const themeDefaults = appearanceThemeDefaults(effectiveAppearance);
-  const uiFontOptions: Array<{ value: UiFont; label: string }> = [
-    { value: 'SYSTEM', label: t('系统默认', 'System default') },
-    { value: 'INTER', label: 'Inter' },
-    { value: 'SEGOE_UI', label: 'Segoe UI' },
-    { value: 'PINGFANG_SC', label: '苹方' },
-    { value: 'MICROSOFT_YAHEI', label: '微软雅黑' },
-  ];
-  const codeFontOptions: Array<{ value: CodeFont; label: string }> = [
-    { value: 'SYSTEM_MONO', label: t('系统等宽', 'System monospace') },
-    { value: 'CASCADIA_CODE', label: 'Cascadia Code' },
-    { value: 'JETBRAINS_MONO', label: 'JetBrains Mono' },
-    { value: 'CONSOLAS', label: 'Consolas' },
-  ];
+  const [fontCatalog, setFontCatalog] = useState<FontCatalog | null>(null);
+  const [fontStatus, setFontStatus] = useState('');
+  const [fontBusy, setFontBusy] = useState(false);
+  const refreshFonts = async () => {
+    try { setFontCatalog(await window.fielora.fonts.list()); }
+    catch { setFontStatus(t('无法读取本机字体，请重试。', 'Could not read installed fonts. Please retry.')); }
+  };
+  useEffect(() => { void refreshFonts(); }, []);
+  const fontOptions = (code: boolean) => {
+    const presets = code
+      ? [{ value: 'SYSTEM_MONO', label: t('系统等宽', 'System monospace'), families: [] }, { value: 'CASCADIA_CODE', label: 'Cascadia Code', families: ['Cascadia Code'] }, { value: 'JETBRAINS_MONO', label: 'JetBrains Mono', families: ['JetBrains Mono'] }, { value: 'CONSOLAS', label: 'Consolas', families: ['Consolas'] }]
+      : [{ value: 'SYSTEM', label: t('系统默认', 'System default'), families: [] }, { value: 'INTER', label: 'Inter', families: ['Inter'] }, { value: 'SEGOE_UI', label: 'Segoe UI', families: ['Segoe UI Variable', 'Segoe UI'] }, { value: 'PINGFANG_SC', label: '苹方', families: ['PingFang SC'] }, { value: 'MICROSOFT_YAHEI', label: '微软雅黑', families: ['Microsoft YaHei UI', 'Microsoft YaHei'] }];
+    const installed = new Set(fontCatalog?.families.map(f => f.family.toLowerCase()));
+    const options = presets.map(p => {
+      const available = p.families.length === 0 || p.families.some(f => installed.has(f.toLowerCase()));
+      return { value: p.value, label: p.label + (available ? '' : fontCatalog ? t(' · 未安装', ' · Not installed') : t(' · 检查中', ' · Checking')), disabled: !available };
+    });
+    const extra = (fontCatalog?.families ?? []).filter(f => !code || f.monospace).filter(f => !presets.some(p => p.families.includes(f.family)));
+    options.push(...extra.map(f => ({ value: `LOCAL:${f.family}`, label: f.family, disabled: false })));
+    const current = code ? appearance.codeFont : appearance.uiFont;
+    if (!options.some(o => o.value === current)) options.push({ value: current, label: current.slice(6) + t(' · 未安装', ' · Not installed'), disabled: true });
+    return options;
+  };
+  const uiFontOptions = fontOptions(false), codeFontOptions = fontOptions(true);
+  const importFonts = async () => {
+    setFontBusy(true); setFontStatus('');
+    try {
+      const result = await window.fielora.fonts.import();
+      if (!result.canceled) {
+        await refreshFonts();
+        const names = result.installed.flatMap(f => f.font.families.map(f => f.family));
+        setFontStatus([names.length ? t(`已安装：${[...new Set(names)].join('、')}。可在上方选择；其他已打开的软件可能需要重启。`, `Installed: ${[...new Set(names)].join(', ')}. Select above; other running apps may need to restart.`) : '', ...result.errors.map(e => `${e.filename}：${e.message}`)].filter(Boolean).join(' '));
+      }
+    } catch { setFontStatus(t('字体导入失败，请重试。', 'Font import failed. Please retry.')); }
+    finally { setFontBusy(false); }
+  };
 
   function resetOverrides() {
     onChange({
@@ -279,6 +285,7 @@ export function AppearanceSettings({ appearance, onChange }: AppearanceSettingsP
       codeFontSize: defaultAppearancePreferences.codeFontSize,
       surfaceContrast: defaultAppearancePreferences.surfaceContrast,
       actionColorOverride: null,
+      translucentSidebar: defaultAppearancePreferences.translucentSidebar,
     });
     setResetOpen(false);
     setFeedback(t('已恢复当前主题默认值', 'Current theme defaults restored'));
@@ -288,18 +295,20 @@ export function AppearanceSettings({ appearance, onChange }: AppearanceSettingsP
     <header><h1>{t('外观', 'Appearance')}</h1></header>
     {feedback && <div className="appearance-feedback" role="status" data-surface="floating"><span>{feedback}</span><button type="button" aria-label={t('关闭提示', 'Dismiss message')} onClick={() => setFeedback('')}>×</button></div>}
 
-    <section className="appearance-section appearance-mode-section" aria-labelledby="appearance-mode-title">
-      <div className="appearance-section-heading"><span><strong id="appearance-mode-title">{t('模式', 'Mode')}</strong></span></div>
-      <AppearanceModeControl value={appearance.themePreference} onChange={(themePreference) => update({ themePreference })}/>
-    </section>
-
     <section className="appearance-section" aria-labelledby="appearance-customization-title">
       <div className="appearance-section-heading"><span><strong id="appearance-customization-title">{t('界面自定义', 'Interface customization')}</strong><small>{t('只覆盖当前主题中对应的令牌，其他颜色和材质继续继承当前主题。', 'Only the corresponding tokens are overridden. Other colors and materials continue to inherit from the current theme.')}</small></span></div>
       <div className="appearance-card appearance-customization-card">
+        {isMac && <div className="appearance-setting-row appearance-material-row"><span><strong>{t('半透明侧栏', 'Translucent sidebar')}</strong><small>{t('透出窗后色彩；高对比度开启时使用实色。', 'Show colors behind the window; high contrast uses a solid background.')}</small></span><SettingsToggle value={appearance.translucentSidebar} onChange={(translucentSidebar) => update({ translucentSidebar })} label={t('半透明侧栏', 'Translucent sidebar')} testId="appearance-translucent-sidebar"/></div>}
         <BackgroundOverrideControl label={t('侧边栏背景', 'Sidebar background')} solid={appearance.sidebarBackgroundOverride} gradient={appearance.sidebarBackgroundGradientOverride} themeDefault={themeDefaults.sidebar} defaultDescription={t('默认与标题栏使用同一连续渐变', 'Uses the same continuous gradient as the title bar by default')} defaultPreview="var(--fl-brand-chrome-navigation)" suggestedGradient={effectiveAppearance === 'DARK' ? { from: '#1B1820', to: '#2B2229', bottomLeft: '#292032' } : { from: '#EFEBFF', to: '#FFEFF2', bottomLeft: '#F9E2F0' }} onSolidChange={(sidebarBackgroundOverride) => update({ sidebarBackgroundOverride, sidebarBackgroundGradientOverride: null })} onGradientChange={(sidebarBackgroundGradientOverride) => update({ sidebarBackgroundGradientOverride, sidebarBackgroundOverride: null })} testId="appearance-sidebar-background"/>
         <BackgroundOverrideControl label={t('工作区背景', 'Workspace background')} solid={appearance.workspaceBackgroundOverride} gradient={appearance.workspaceBackgroundGradientOverride} themeDefault={themeDefaults.workspace} suggestedGradient={effectiveAppearance === 'DARK' ? { from: '#181B23', to: '#222631', bottomLeft: '#202330' } : { from: '#FFFFFF', to: '#F4F8FF', bottomLeft: '#F7F2FC' }} onSolidChange={(workspaceBackgroundOverride) => update({ workspaceBackgroundOverride, workspaceBackgroundGradientOverride: null })} onGradientChange={(workspaceBackgroundGradientOverride) => update({ workspaceBackgroundGradientOverride, workspaceBackgroundOverride: null })} testId="appearance-workspace-background"/>
-        <div className="appearance-setting-row appearance-font-row"><span><strong>{t('界面字体', 'UI font')}</strong><small>{t('普通 UI、Conversation 正文、导航、设置和菜单。', 'Regular UI, conversation text, navigation, settings, and menus.')}</small></span><div className="appearance-paired-controls"><SelectMenu value={appearance.uiFont} onChange={(uiFont) => update({ uiFont: uiFont as UiFont })} ariaLabel={t('界面字体', 'UI font')} testId="appearance-ui-font" options={uiFontOptions}/><SelectMenu value={String(appearance.uiFontSize)} onChange={(value) => update({ uiFontSize: Number(value) as UiFontSize })} ariaLabel={t('界面字号', 'UI font size')} testId="appearance-ui-font-size" options={[12, 13, 14, 15, 16, 17, 18].map((value) => ({ value: String(value), label: `${value}px` }))}/></div></div>
-        <div className="appearance-setting-row appearance-font-row"><span><strong>{t('代码字体', 'Code font')}</strong><small>Code Block, Inline Code, Diff, Editor & Terminal.</small></span><div className="appearance-paired-controls"><SelectMenu value={appearance.codeFont} onChange={(codeFont) => update({ codeFont: codeFont as CodeFont })} ariaLabel={t('代码字体', 'Code font')} testId="appearance-code-font" options={codeFontOptions}/><SelectMenu value={String(appearance.codeFontSize)} onChange={(value) => update({ codeFontSize: Number(value) as CodeFontSize })} ariaLabel={t('代码字号', 'Code font size')} testId="appearance-code-font-size" options={[11, 12, 13, 14, 15, 16, 17].map((value) => ({ value: String(value), label: `${value}px` }))}/></div></div>
+        <div className="appearance-setting-row appearance-font-row"><span><strong>{t('界面字体', 'UI font')}</strong><small>{t('普通 UI、Conversation 正文、导航、设置和菜单。', 'Regular UI, conversation text, navigation, settings, and menus.')}</small></span><div className="appearance-paired-controls"><SelectMenu value={appearance.uiFont} onChange={(uiFont) => update({ uiFont: uiFont as UiFont })} ariaLabel={t('界面字体', 'UI font')} testId="appearance-ui-font" searchLabel={t("搜索字体", "Search fonts")} options={uiFontOptions}/><SelectMenu value={String(appearance.uiFontSize)} onChange={(value) => update({ uiFontSize: Number(value) as UiFontSize })} ariaLabel={t('界面字号', 'UI font size')} testId="appearance-ui-font-size" options={[12, 13, 14, 15, 16, 17, 18].map((value) => ({ value: String(value), label: `${value}px` }))}/></div></div>
+        <div className="appearance-setting-row appearance-font-row"><span><strong>{t('代码字体', 'Code font')}</strong><small>Code Block, Inline Code, Diff, Editor & Terminal.</small></span><div className="appearance-paired-controls"><SelectMenu value={appearance.codeFont} onChange={(codeFont) => update({ codeFont: codeFont as CodeFont })} ariaLabel={t('代码字体', 'Code font')} testId="appearance-code-font" searchLabel={t("搜索等宽字体", "Search monospace fonts")} options={codeFontOptions}/><SelectMenu value={String(appearance.codeFontSize)} onChange={(value) => update({ codeFontSize: Number(value) as CodeFontSize })} ariaLabel={t('代码字号', 'Code font size')} testId="appearance-code-font-size" options={[11, 12, 13, 14, 15, 16, 17].map((value) => ({ value: String(value), label: `${value}px` }))}/></div></div>
+        <div className="appearance-font-library" data-testid="appearance-font-library">
+          <div className="font-previews"><p style={{ fontFamily: fontFamilyCss(appearance.uiFont, false) ?? undefined }}>{t('字体预览 · 你好，Fielora。', 'Font preview · Hello, Fielora.')}<span> Aa Bb Cc · 0123456789</span></p><code style={{ fontFamily: fontFamilyCss(appearance.codeFont, true) ?? undefined }}>const greeting = "Hello, Fielora"; // 012345</code></div>
+          <div className="font-library-actions"><span>{fontCatalog ? t(`已识别 ${fontCatalog.families.length} 个本机字体家族`, `${fontCatalog.families.length} installed font families`) : t('正在检查本机字体…', 'Checking installed fonts…')}<small>{t('导入 TTF、OTF 或 TTC，安装到当前用户，供所有软件使用。也可以在对话中让 Agent 查找并安装字体。', 'Import TTF, OTF or TTC for your OS user, available to all apps. You can also ask the Agent to find and install a font.')}</small></span><div><Button variant="secondary" disabled={fontBusy} onClick={() => void refreshFonts()}>{t('刷新', 'Refresh')}</Button><Button variant="secondary" disabled={fontBusy} onClick={() => void importFonts()} data-testid="appearance-font-import">{fontBusy ? t('正在导入…', 'Importing…') : t('导入字体', 'Import fonts')}</Button></div></div>
+          {fontCatalog && <small className="font-install-directory">{fontCatalog.install_directory}</small>}
+          {fontStatus && <p role="status" className="font-import-status">{fontStatus}</p>}
+        </div>
         <div className="appearance-setting-row appearance-contrast-row"><span><strong>{t('对比度', 'Contrast')}</strong><small>{t('只调整中性 Surface、输入框、选中/悬停和边框层级。', 'Adjusts only neutral surfaces, inputs, selected/hover states, and border hierarchy.')}</small></span><label><input type="range" min="0" max="100" step="1" value={appearance.surfaceContrast} style={{ '--appearance-contrast-progress': `${appearance.surfaceContrast}%` } as CSSProperties} onChange={(event) => update({ surfaceContrast: Number(event.target.value) })} aria-label={t('对比度', 'Contrast')} data-testid="appearance-surface-contrast"/><output>{appearance.surfaceContrast}</output></label></div>
         <SolidColorOverrideControl label={t('按钮颜色', 'Button color')} value={appearance.actionColorOverride} themeDefault={themeDefaults.action} onChange={(actionColorOverride) => update({ actionColorOverride })} testId="appearance-action-color"/>
       </div>
@@ -315,6 +324,6 @@ export function AppearanceSettings({ appearance, onChange }: AppearanceSettingsP
     </section>
 
     <footer className="appearance-footer"><button type="button" onClick={() => setResetOpen(true)} data-testid="appearance-reset">{t('恢复当前主题默认值', 'Restore current theme defaults')}</button></footer>
-    {resetOpen && <TextActionDialog title={t('恢复当前主题默认值？', 'Restore current theme defaults?')} description={t('只清除这 6 项界面 Override；外观模式、可访问性、模型和项目设置不会改变。', 'Only these six interface overrides will be cleared. Appearance mode, accessibility, models, and project settings will not change.')} confirmLabel={t('恢复默认', 'Restore defaults')} onCancel={() => setResetOpen(false)} onConfirm={resetOverrides} testId="appearance-reset-dialog"/>}
+    {resetOpen && <TextActionDialog title={t('恢复当前主题默认值？', 'Restore current theme defaults?')} description={t('恢复背景、侧栏材质、字体、对比度和按钮颜色；可访问性、模型和项目设置不会改变。', 'Reset backgrounds, sidebar material, fonts, contrast and button color. Accessibility, models and projects stay unchanged.')} confirmLabel={t('恢复默认', 'Restore defaults')} onCancel={() => setResetOpen(false)} onConfirm={resetOverrides} testId="appearance-reset-dialog"/>}
   </div>;
 }

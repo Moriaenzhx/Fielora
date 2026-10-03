@@ -1,5 +1,27 @@
 // Generated from Rust DTOs. Do not edit by hand.
 
+export type ModelSupport = "UNKNOWN" | "SUPPORTED" | "UNSUPPORTED";
+
+export type ReasoningMode = "PROVIDER_DEFAULT" | "OFF" | "ON" | "LOW" | "MEDIUM" | "HIGH" | "MAX";
+
+export type ModelRuntimeSettings = { reasoning: ReasoningMode, max_output_tokens: number, };
+
+export type ResolvedModelProfile = { model_id: string, profile_id: string, source: string, source_url: string | null, reviewed_on: string | null, tools: ModelSupport, images: ModelSupport, structured_output: ModelSupport, reasoning_modes: Array<ReasoningMode>, };
+
+export type ModelProviderPreset = { id: string, label: string, description: string, base_url: string, model_ids: Array<string>, versions: Array<ModelProviderVersion>, base_urls: Array<string>, source_url: string, };
+
+export type ModelProviderVersion = { id: string, label: string, model_id: string, base_url: string, reasoning_modes: Array<ReasoningMode>, };
+
+export type ModelCheckStatus = "PASSED" | "FAILED" | "CANCELLED" | "NOT_TESTED";
+
+export type ModelCompatibilityCheck = { name: string, status: ModelCheckStatus, detail: string, };
+
+export type ModelCompatibilityReport = { profile_id: string, checks: Array<ModelCompatibilityCheck>, settings: ModelRuntimeSettings, provider_revision: number, checked_at: number, };
+
+export type ModelRuntimeView = { profile: ResolvedModelProfile, settings: ModelRuntimeSettings, revision: number, effective_parameters: Record<string, unknown>, validation: ModelCompatibilityReport | null, };
+
+export type UpdateModelRuntimeRequest = { expected_provider_revision: number, provider_config_id: ProviderConfigId, expected_revision: number, settings: ModelRuntimeSettings, };
+
 export type FieldId = string;
 
 export type PrincipalId = string;
@@ -220,11 +242,11 @@ export type EndpointClass = "OFFICIAL" | "CUSTOM";
 
 export type ProviderLifecycle = "ACTIVE" | "DISABLED" | "REMOVED";
 
-export type ProviderConfigView = { id: ProviderConfigId, provider_kind: ProviderKind, display_name: string, endpoint_class: EndpointClass, base_url: string | null, default_model: string, lifecycle_status: ProviderLifecycle, credential_present: boolean, revision: number, created_at: number, updated_at: number, };
+export type ProviderConfigView = { model_optimization: boolean, id: ProviderConfigId, provider_kind: ProviderKind, display_name: string, endpoint_class: EndpointClass, base_url: string | null, default_model: string, model_runtime?: ModelRuntimeView, lifecycle_status: ProviderLifecycle, credential_present: boolean, revision: number, created_at: number, updated_at: number, };
 
-export type CreateProviderConfigRequest = { provider_kind: ProviderKind, display_name: string, base_url: string | null, default_model: string, custom_endpoint_acknowledged: boolean, };
+export type CreateProviderConfigRequest = { model_optimization?: boolean, provider_kind: ProviderKind, display_name: string, base_url: string | null, default_model: string, custom_endpoint_acknowledged: boolean, };
 
-export type UpdateProviderConfigRequest = { provider_config_id: ProviderConfigId, expected_revision: number, display_name: string, base_url: string | null, default_model: string, custom_endpoint_acknowledged: boolean, };
+export type UpdateProviderConfigRequest = { model_optimization?: boolean, provider_kind?: ProviderKind, provider_config_id: ProviderConfigId, expected_revision: number, display_name: string, base_url: string | null, default_model: string, custom_endpoint_acknowledged: boolean, };
 
 export type ProviderConfigRequest = { provider_config_id: ProviderConfigId, };
 

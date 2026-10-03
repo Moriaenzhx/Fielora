@@ -132,6 +132,7 @@ function activityToolPresentation(tool: AgentToolCallView): { title: string; det
     browser: '操作浏览器', browser_verify: '检查页面结果', browser_plan: '记录页面检查计划',
     browser_server: '管理开发服务', 'file.extract': '提取文档内容',
     'environment.inspect': '检查运行环境',
+    'fonts.list': '检查本机字体', 'fonts.prepare': '准备字体文件', 'fonts.install': '安装用户字体',
   };
   if (specific[tool.name]) return { title: specific[tool.name]!, detail: '', command: false, inlineDetail: false };
   if (tool.name === 'work_plan') return { title: '工作计划', detail: '', command: false, inlineDetail: false };
@@ -360,10 +361,12 @@ function AgentApproval({ tool, summary, busy, onDecision }: {
   const mcpActivation = tool?.name === 'mcp.activate_connection';
   const install = tool?.name === 'tools.install' && tool.arguments && typeof tool.arguments === 'object'
     ? (tool.arguments as Record<string, unknown>)._installation_preview as Record<string, unknown> | undefined : undefined;
+  const fontInstall = tool?.name === 'fonts.install' && tool.arguments && typeof tool.arguments === 'object'
+    ? (tool.arguments as Record<string, unknown>)._installation_preview as { source: string; install_directory: string; font: { families: Array<{ family: string }>; bytes: number; sha256: string } } | undefined : undefined;
   const connectionId = mcpActivation && tool?.arguments && typeof tool.arguments === 'object' && 'connection_id' in tool.arguments
     ? String((tool.arguments as { connection_id?: unknown }).connection_id ?? '') : '';
   return <section className="agent-turn-approval" data-testid="agent-approval">
-    <p>{install ? `安装工具 ${String(install.name)}${install.version ? ` ${String(install.version)}` : ''}` : mcpActivation ? `Start local MCP Server “${connectionId}” for this Run` : '我已经定位到需要执行的下一步。'}</p>
+    <p>{fontInstall ? `安装字体 ${fontInstall.font.families.map(f => f.family).join("、")}` : install ? `安装工具 ${String(install.name)}${install.version ? ` ${String(install.version)}` : ''}` : mcpActivation ? `Start local MCP Server “${connectionId}” for this Run` : '我已经定位到需要执行的下一步。'}</p>
     {install && <dl className="agent-install-preview" data-testid="agent-install-preview">
       <dt>来源</dt><dd>{String(install.source_url)}</dd>
       <dt>下载大小</dt><dd>{Number(install.archive_bytes) < 1024 * 1024 ? `${Number(install.archive_bytes).toLocaleString()} 字节` : `${(Number(install.archive_bytes) / 1024 / 1024).toFixed(2)} MiB`}</dd>
@@ -372,9 +375,14 @@ function AgentApproval({ tool, summary, busy, onDecision }: {
       <dt>影响</dt><dd>仅解包到项目隔离目录；不修改系统或 PATH，不运行安装脚本。安装后另行检查兼容性。</dd>
       <dt>需要确认</dt><dd>{install.source_trust !== 'OFFICIAL_PROVIDER' ? '来源未列入可信供应商。' : '下载超过 20 MiB，或当前权限要求审批。'}</dd>
     </dl>}
-    {!install && <p>{mcpActivation ? '这会启动已配置的本地进程并发现有界 Tools；不会授予后续 Tool 权限。' : summary || (tool ? `${toolTitle(tool.name)} · ${toolDetail(tool)}` : '只会执行当前列出的操作，不会扩大范围。')}</p>}
+    {fontInstall && <dl className="agent-install-preview" data-testid="agent-font-install-preview">
+      <dt>来源</dt><dd>{fontInstall.source}</dd><dt>大小</dt><dd>{(fontInstall.font.bytes / 1024).toFixed(1)} KB</dd>
+      <dt>安装位置</dt><dd>{fontInstall.install_directory}</dd><dt>SHA-256</dt><dd>{fontInstall.font.sha256}</dd>
+      <dt>影响</dt><dd>安装到当前用户的系统字体目录，供其他软件使用。不覆盖已有文件，不运行脚本。</dd>
+    </dl>}
+    {!install && !fontInstall && <p>{mcpActivation ? '这会启动已配置的本地进程并发现有界 Tools；不会授予后续 Tool 权限。' : summary || (tool ? `${toolTitle(tool.name)} · ${toolDetail(tool)}` : '只会执行当前列出的操作，不会扩大范围。')}</p>}
     {detailsOpen && tool && <OperationDetail entry={{ id: `tool-${tool.id}`, kind: 'TOOL', toolId: tool.id, tool, status: tool.status, activityKind: 'OTHER', sequence: 0, occurredAt: tool.created_at, completedAt: null }}/>}
-    <div><button type="button" aria-expanded={detailsOpen} onClick={() => setDetailsOpen(value => !value)}>{install ? '查看执行详情' : '查看修改范围'}</button><button type="button" onClick={() => onDecision('DENY')} disabled={busy}>拒绝</button><button type="button" className="agent-primary-action" onClick={() => onDecision('ALLOW_ONCE')} disabled={busy} data-testid="agent-allow-once">{install ? '允许本次安装' : approvalActionLabel(tool)}</button></div>
+    <div><button type="button" aria-expanded={detailsOpen} onClick={() => setDetailsOpen(value => !value)}>{fontInstall ? '查看安装详情' : install ? '查看执行详情' : '查看修改范围'}</button><button type="button" onClick={() => onDecision('DENY')} disabled={busy}>拒绝</button><button type="button" className="agent-primary-action" onClick={() => onDecision('ALLOW_ONCE')} disabled={busy} data-testid="agent-allow-once">{install || fontInstall ? '允许本次安装' : approvalActionLabel(tool)}</button></div>
   </section>;
 }
 

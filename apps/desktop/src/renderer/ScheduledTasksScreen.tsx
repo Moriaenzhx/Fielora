@@ -170,18 +170,20 @@ export function ScheduledTasksScreen(props: ScheduledTasksScreenProps) {
     navigationResizerClassName="project-navigation-resizer"
     navigation={<PrimaryNav active="NOW" onProjects={props.onProjects} onNow={() => undefined} onBrowse={props.onBrowse} onFields={props.onFields} onNewConversation={props.onNewConversation} onSettings={props.onSettings} />}
   >
-    <section className="scheduled-page" data-surface="content">
+    <section className="scheduled-page collection-page" data-surface="content">
       <header className="scheduled-header page-header">
         <div><h1>已安排的任务</h1><p>让 Fielora 定时运行任务、设置提醒或持续监测更新。</p></div>
-        <Button variant="primary" className="scheduled-create page-primary-action" onClick={openCreate}><AppIcon name="plus" size="sm"/>创建</Button>
+        <Button variant="primary" className="scheduled-create page-primary-action" onClick={openCreate}><AppIcon name="plus" size="sm"/>创建任务</Button>
       </header>
-      <label className="scheduled-search"><AppIcon name="search" size="sm"/><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="搜索已安排任务" aria-label="搜索已安排任务" /></label>
-      <div className="scheduled-filters" role="tablist" aria-label="任务状态">
-        {filters.map((item) => <button key={item.value} type="button" role="tab" aria-selected={filter === item.value} className={filter === item.value ? 'active' : ''} onClick={() => setFilter(item.value)}>{item.label}</button>)}
+      <div className="collection-toolbar">
+        <div className="scheduled-filters collection-filters" role="group" aria-label="任务状态">
+          {filters.map((item) => <button key={item.value} type="button" aria-pressed={filter === item.value} className={filter === item.value ? 'active' : ''} onClick={() => setFilter(item.value)}>{item.label}</button>)}
+        </div>
+        <label className="collection-search"><AppIcon name="search" size="sm"/><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="搜索任务" aria-label="搜索已安排任务" /></label>
       </div>
       {error && <p className="scheduled-error" role="alert">{error}</p>}
       <section className="scheduled-list" aria-label="已安排任务列表">
-        {visibleTasks.length === 0 ? <div className="scheduled-empty page-empty-state"><AppIcon name="scheduled" size="lg"/><h2>{tasks.length === 0 ? '还没有已安排的任务' : '没有匹配的任务'}</h2><p>{tasks.length === 0 ? '创建一个定时任务，它会在独立对话中通过现有 Agent 运行。' : '请更换筛选条件或搜索词。'}</p></div>
+        {visibleTasks.length === 0 ? <div className="scheduled-empty page-empty-state"><span className="collection-empty-icon"><AppIcon name="scheduled" size="lg"/></span><h2>{tasks.length === 0 ? '让重复的工作按时完成' : '没有匹配的任务'}</h2><p>{tasks.length === 0 ? '安排一次提醒，或让 Fielora 每天、每周为你处理任务。' : '请更换筛选条件或搜索词。'}</p>{tasks.length === 0 && <Button variant="secondary" onClick={openCreate}><AppIcon name="plus" size="sm"/>创建第一个任务</Button>}</div>
           : visibleTasks.map((task) => <article className="scheduled-row" key={task.id} data-status={task.status}>
             <span className="scheduled-status" aria-label={nextRunLabel(task)} />
             <div className="scheduled-copy"><strong>{task.name}</strong><p>{task.task}</p><small>{cadenceLabel(task)} · {nextRunLabel(task)}</small>{task.last_error && <small className="task-error">上次运行失败：{task.last_error}</small>}</div>
@@ -196,7 +198,7 @@ export function ScheduledTasksScreen(props: ScheduledTasksScreenProps) {
     </section>
     {dialogOpen && <div className="ui-dialog-backdrop scheduled-dialog-backdrop" role="presentation" data-effect="backdrop-dim" onMouseDown={(event) => { if (event.currentTarget === event.target) setDialogOpen(false); }}>
       <form className="ui-dialog scheduled-dialog" role="dialog" aria-modal="true" aria-labelledby="scheduled-dialog-title" data-surface="overlay" onSubmit={save}>
-        <header><div><h2 id="scheduled-dialog-title">{editing ? '编辑已安排任务' : '创建已安排任务'}</h2><p>任务会写入一个持久对话，并使用现有 AgentRun 执行。</p></div><IconButton size="sm" label="关闭" icon={<AppIcon name="close" size="sm"/>} onClick={() => setDialogOpen(false)}/></header>
+        <header><div><h2 id="scheduled-dialog-title">{editing ? '编辑已安排任务' : '创建已安排任务'}</h2><p>运行结果会保存在独立对话中，方便之后查看。</p></div><IconButton size="sm" label="关闭" icon={<AppIcon name="close" size="sm"/>} onClick={() => setDialogOpen(false)}/></header>
         <label>名称<input required maxLength={120} value={draft.name} onChange={(event) => setDraft({ ...draft, name: event.target.value })} placeholder="例如：每日项目回顾" /></label>
         <label>任务说明<textarea required maxLength={32768} rows={4} value={draft.task} onChange={(event) => setDraft({ ...draft, task: event.target.value })} placeholder="描述要执行、提醒或监测的内容" /></label>
         <div className="scheduled-form-grid">

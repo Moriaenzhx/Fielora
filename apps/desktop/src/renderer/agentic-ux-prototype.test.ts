@@ -47,10 +47,10 @@ test('agent conversation typography stays on the shared readable scale', () => {
   const prototypeComponent = readFileSync(path.join(rendererRoot, 'AgenticUXPrototype.tsx'), 'utf8');
 
   for (const declaration of [
-    '--fl-font-sans: "Segoe UI Variable", "Segoe UI", "Microsoft YaHei UI", sans-serif;',
-    '--fl-font-mono: "Cascadia Code", Consolas, monospace;',
-    '--fl-font-agent-sans: "Segoe UI Variable", "Segoe UI", "Microsoft YaHei UI", sans-serif;',
-    '--fl-font-agent-mono: "Cascadia Code", Consolas, monospace;',
+    '--fl-font-sans: -apple-system, BlinkMacSystemFont, "Segoe UI Variable", "Segoe UI", "PingFang SC", "Microsoft YaHei UI", sans-serif;',
+    '--fl-font-mono: ui-monospace, "SFMono-Regular", Menlo, "Cascadia Code", Consolas, monospace;',
+    '--fl-font-agent-sans: -apple-system, BlinkMacSystemFont, "Segoe UI Variable", "Segoe UI", "PingFang SC", "Microsoft YaHei UI", sans-serif;',
+    '--fl-font-agent-mono: ui-monospace, "SFMono-Regular", Menlo, "Cascadia Code", Consolas, monospace;',
     '--fl-font-size-agent-meta: calc(12.5px * var(--fl-ui-font-scale));',
     '--fl-font-size-agent-execution: calc(14px * var(--fl-ui-font-scale));',
     '--fl-font-size-agent-body: calc(15px * var(--fl-ui-font-scale));',

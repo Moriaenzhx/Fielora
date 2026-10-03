@@ -183,6 +183,7 @@ function activityPhrase(kind: Exclude<ConversationActivityGroupKind, 'MIXED'>, e
     return active ? '正在编辑文件' : count > 0 ? `已编辑 ${count} 个文件` : completed.length ? '已编辑文件' : '尝试修改文件';
   }
   if (kind === 'VERIFY') return active ? '正在运行针对性验证' : '运行了针对性验证';
+  if (matching.length && matching.every(entry => entry.kind === 'TOOL' && entry.tool.name.startsWith('fonts.'))) return active ? '正在处理字体' : '已处理字体';
   if (kind === 'COMMAND') return active ? '正在运行命令' : '运行了命令';
   if (kind === 'VERSION') {
     const onlyRead = matching.every((entry) => entry.kind !== 'TOOL' || ['git_read', 'git_status'].includes(entry.tool.name));

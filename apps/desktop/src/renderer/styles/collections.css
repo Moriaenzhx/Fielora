@@ -1,0 +1,38 @@
+/* Library and Scheduled share one compact content rail, toolbar and empty state. */
+.collection-page { padding: clamp(24px, 4vw, 44px) clamp(24px, 4vw, 52px) 48px; container-type: inline-size; }
+.collection-page > * { max-width: 1120px; }
+.collection-page .page-header { min-height: auto; align-items: center; gap: 20px; margin-bottom: 28px; }
+.collection-page .page-header h1 { font-size: 25px; line-height: 1.3; letter-spacing: -.02em; margin: 0 0 7px; }
+.collection-page .page-header p { font-size: 14px; line-height: 1.6; }
+.collection-page .page-primary-action { min-height: 36px; padding: 0 14px; gap: 7px; font-size: 13px; box-shadow: none; }
+.collection-toolbar { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 14px 20px; padding-bottom: 16px; border-bottom: 1px solid var(--fl-color-border-subtle); }
+.collection-page .collection-filters { display: flex; flex-wrap: wrap; gap: 4px; border: 0; margin: 0; }
+.collection-page .collection-filters button { min-height: 32px; padding: 6px 11px; border: 0; border-radius: 8px; background: transparent; font: inherit; font-size: 13px; line-height: 1.4; color: var(--fl-color-text-subtle); }
+.collection-page .collection-filters button:hover { background: var(--fl-color-surface-hover); }
+.collection-page .collection-filters button.active { background: var(--fl-color-surface-selected); color: var(--fl-color-text-strong); font-weight: 600; }
+.collection-search { display: flex; align-items: center; gap: 8px; width: 220px; min-width: 150px; height: 34px; padding: 0 10px; border: 1px solid var(--fl-color-border); border-radius: 9px; color: var(--fl-color-icon-muted); }
+.collection-search input { width: 100%; min-width: 0; background: transparent; border: 0; outline: 0; padding: 0; color: var(--fl-color-text); font: inherit; font-size: 13px; }
+.collection-search:focus-within { outline: 2px solid var(--fl-color-focus); outline-offset: 2px; }
+.collection-page .page-empty-state { min-height: 300px; padding: 52px 20px; gap: 12px; border: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; }
+.collection-empty-icon { display: grid; place-items: center; width: 48px; height: 48px; border-radius: 14px; background: var(--fl-color-surface-subtle); color: var(--fl-color-icon-muted); margin-bottom: 5px; }
+.collection-page .page-empty-state h2 { font-size: 18px; line-height: 1.4; }
+.collection-page .page-empty-state p { font-size: 14px; max-width: 440px; line-height: 1.7; }
+.collection-page .page-empty-state .ui-button { margin-top: 9px; font-size: 13px; min-height: 34px; }
+.collection-page .scheduled-list, .collection-page .library-list { margin-top: 8px; }
+.collection-page .library-row { border-width: 0 0 1px; border-radius: 0; padding: 17px 4px; }
+.collection-page .library-row strong, .collection-page .scheduled-copy strong { font-size: 14px; }
+.collection-loading { padding-block: 48px; text-align: center; color: var(--fl-color-text-subtle); }
+.font-previews { display: grid; gap: 10px; padding: 16px 18px; background: var(--fl-color-surface-subtle); border-radius: 10px; }
+.font-previews p { margin: 0; line-height: 1.7; }
+.font-previews p span { color: var(--fl-color-text-subtle); }
+.font-previews code { font-size: var(--fl-code-font-size); overflow-wrap: anywhere; }
+.appearance-font-library { padding: 14px 0 22px; border-bottom: 1px solid var(--fl-color-border-subtle); }
+.font-library-actions { display: flex; align-items: center; justify-content: space-between; gap: 16px; margin-top: 16px; font-size: 13px; }
+.font-library-actions small { display: block; margin-top: 5px; max-width: 560px; color: var(--fl-color-text-subtle); line-height: 1.6; }
+.font-library-actions > div { display: flex; flex-shrink: 0; gap: 8px; }
+.font-library-actions .ui-button { min-height: 32px; font-size: 13px; }
+.font-install-directory { display: block; margin-top: 9px; color: var(--fl-color-text-subtle); overflow-wrap: anywhere; }
+.font-import-status { font-size: 13px; line-height: 1.6; margin: 12px 0 0; }
+.ui-select-popover .font-menu-search { position: sticky; top: 0; z-index: 1; box-sizing: border-box; width: 100%; min-height: 34px; padding: 8px 10px; border: 1px solid var(--fl-color-border); border-radius: 6px; background: var(--fl-color-surface); color: var(--fl-color-text); font: inherit; }
+@container (max-width: 660px) { .collection-page .page-header { align-items: flex-start; flex-direction: row; } .collection-search { flex: 1; } .collection-toolbar { gap: 12px; } }
+@media (max-width: 850px) { .font-library-actions { align-items: flex-start; flex-direction: column; } }

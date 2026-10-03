@@ -3,6 +3,8 @@ use serde_json::Value;
 use ts_rs::TS;
 
 pub mod idr;
+mod model_runtime;
+pub use model_runtime::*;
 
 macro_rules! typed_id {
     ($name:ident) => {
@@ -890,14 +892,23 @@ pub enum ProviderLifecycle {
     Removed,
 }
 
+fn default_model_optimization() -> bool {
+    true
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
 pub struct ProviderConfigView {
+    #[serde(default = "default_model_optimization")]
+    pub model_optimization: bool,
     pub id: ProviderConfigId,
     pub provider_kind: ProviderKind,
     pub display_name: String,
     pub endpoint_class: EndpointClass,
     pub base_url: Option<String>,
     pub default_model: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub model_runtime: Option<ModelRuntimeView>,
     pub lifecycle_status: ProviderLifecycle,
     pub credential_present: bool,
     #[ts(type = "number")]
@@ -911,6 +922,9 @@ pub struct ProviderConfigView {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
 #[serde(deny_unknown_fields)]
 pub struct CreateProviderConfigRequest {
+    #[serde(default)]
+    #[ts(optional)]
+    pub model_optimization: Option<bool>,
     pub provider_kind: ProviderKind,
     pub display_name: String,
     pub base_url: Option<String>,
@@ -921,6 +935,12 @@ pub struct CreateProviderConfigRequest {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
 #[serde(deny_unknown_fields)]
 pub struct UpdateProviderConfigRequest {
+    #[serde(default)]
+    #[ts(optional)]
+    pub model_optimization: Option<bool>,
+    #[serde(default)]
+    #[ts(optional)]
+    pub provider_kind: Option<ProviderKind>,
     pub provider_config_id: ProviderConfigId,
     #[ts(type = "number")]
     pub expected_revision: u64,

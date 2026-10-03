@@ -42,6 +42,7 @@ pub fn turn(
         let paths = crate::agent_request_scope::requested_paths(task, std::path::Path::new("."));
         let source = paths.first().ok_or(ModelError::ProviderProtocolError)?;
         return Ok(AgentModelTurn {
+            continuation: None,
             text: "现在可以看到了，让我继续修改以前的任务。".into(),
             tool_calls: vec![
                 ("replace_text", json!({"path":"settings.js","expected_sha256":"0".repeat(64),"old_text":"wrong","new_text":"BAD"})),
@@ -97,6 +98,7 @@ pub fn turn(
             _ => return Err(ModelError::ProviderProtocolError),
         };
         return Ok(AgentModelTurn {
+            continuation: None,
             text: if calls.is_empty() {
                 "已完成并验证测试文件；这不是实际 Archify 安装。".into()
             } else {
@@ -163,6 +165,7 @@ pub fn turn(
             _ => return Err(ModelError::ProviderProtocolError),
         };
         return Ok(AgentModelTurn {
+            continuation: None,
             text: if calls.is_empty() {
                 "已根据补充信息完成测试文件并通过校验；这不是实际 Archify 安装。".into()
             } else {
@@ -250,6 +253,7 @@ pub fn turn(
         }
     };
     Ok(AgentModelTurn {
+        continuation: None,
         text,
         tool_calls: tool
             .into_iter()
@@ -336,6 +340,7 @@ fn request_intent_turn(
         text = "处理完成。".into();
     }
     Ok(Some(AgentModelTurn {
+        continuation: None,
         text,
         tool_calls: tool
             .into_iter()

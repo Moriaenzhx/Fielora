@@ -169,6 +169,10 @@ pub(crate) fn project(
         ),
         ("rich_file_read", &["file.extract"][..]),
         (
+            "fonts",
+            &["fonts.list", "fonts.prepare", "fonts.install"][..],
+        ),
+        (
             "artifact",
             &[
                 "artifact.create",

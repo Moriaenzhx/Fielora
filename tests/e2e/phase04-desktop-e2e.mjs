@@ -125,7 +125,7 @@ try {
   await wait(cdp, `document.querySelector('[data-testid="project-workspace"]')`);
   await cdp.eval(`document.querySelector('[data-testid="now-nav"]').click()`);
   await wait(cdp, `document.querySelector('[data-testid="now-screen"]')`);
-  assert.equal((await cdp.eval('window.fielora.core.getHealth()')).schema_version, 16);
+  assert.equal((await cdp.eval('window.fielora.core.getHealth()')).schema_version, 18);
 
   ids = await cdp.eval(`(async()=>{
     const provider=await window.fielora.provider.create({provider_kind:'OPENAI_COMPATIBLE',display_name:'Phase 04 Fixture',base_url:'https://example.com/v1',default_model:'__fielora_fixture__',custom_endpoint_acknowledged:true});
@@ -176,10 +176,10 @@ try {
   const providerText = await cdp.eval(`document.querySelector('[data-testid="provider-setup"]').innerText`);
   assert.equal(providerText.includes(secret), false);
   assert.equal(providerText.includes('__fielora_fixture__'), true);
-  assert.equal(providerText.includes('服务方和账号政策决定'), true);
+  assert.equal(providerText.includes('遵循服务方政策'), true);
   shot = await cdp.send('Page.captureScreenshot', { format: 'png' });
   await writeFile(path.join(evidence, `${mode}-phase04-provider-setup.png`), Buffer.from(shot.data, 'base64'));
-  await cdp.eval(`document.querySelector('[data-testid="provider-setup"] > header [aria-label="关闭"]').click()`);
+  await cdp.eval(`document.querySelector('[data-testid="settings-back"]').click()`);
 
   await quit(cdp);
   assert.equal(await contains(dataRoot, secret), false, 'credential leaked outside Credential Manager');
@@ -196,12 +196,12 @@ try {
   await cdp.eval(`window.fielora.provider.remove({provider_config_id:${JSON.stringify(ids.providerId)}})`);
   await cdp.eval(`window.dispatchEvent(new CustomEvent('fielora:open-provider-setup'))`);
   await wait(cdp, `document.querySelector('[data-testid="provider-setup"]')`);
-  assert.equal(await cdp.eval(`document.querySelector('[data-testid="provider-setup"]').innerText.includes('还没有模型服务')`), true);
+  assert.equal(await cdp.eval(`document.querySelector('[data-testid="provider-setup"]').innerText.includes('添加模型服务')`), true);
   await quit(cdp);
 
   await writeFile(path.join(evidence, `${mode.toUpperCase()}_PHASE_04_ACCEPTANCE.json`), `${JSON.stringify({
     status: 'PASS',
-    schema_version: 16,
+    schema_version: 18,
     checks: [
       'provider_config', 'wincred_write_read_delete', 'fixture_started_delta_usage_completed',
       'fixture_started_cancelled', 'fixture_started_failed_stable_error', 'context_core_reread',

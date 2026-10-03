@@ -3,7 +3,7 @@ import { access, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promise
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
-import { applyArtifactRetention, markDevelopmentOutput, planArtifactRetention } from './artifact-retention.mjs';
+import { applyArtifactRetention, finalizeDevelopmentPackage, promoteDevelopmentPackage, markDevelopmentOutput, planArtifactRetention } from './artifact-retention.mjs';
 
 async function exists(candidate) {
   try { await access(candidate); return true; } catch { return false; }
@@ -69,4 +69,39 @@ test('development marker only targets the exact packaged output inside the repo'
   } finally {
     await rm(fixtureRoot, { recursive: true, force: true });
   }
+});
+
+
+test('successful package removes old managed packages; incomplete package preserves them', async () => {
+  const repoRoot=await mkdtemp(path.join(tmpdir(),'fielora-retention-finalize-'));
+  try {
+    const old=await fixtureDirectory(repoRoot,'previous-mac-package',{kind:'development-package',createdAt:'2026-01-01T00:00:00.000Z',status:'succeeded'});
+    const unknown=await fixtureDirectory(repoRoot,'unmarked-user-files');
+    const target=await fixtureDirectory(repoRoot,'Fielora-darwin-arm64');
+    await assert.rejects(()=>finalizeDevelopmentPackage({repoRoot,platform:'darwin',arch:'arm64'}));
+    assert.equal(await exists(old),true);
+    for(const file of ['MacOS/Fielora','Resources/app.asar','Resources/fielora-core']) {
+      const output=path.join(target,'Fielora.app','Contents',file);await mkdir(path.dirname(output),{recursive:true});await writeFile(output,'fixture');
+    }
+    const result=await finalizeDevelopmentPackage({repoRoot,platform:'darwin',arch:'arm64'});
+    assert.deepEqual(result.deleted,[old]);assert.equal(await exists(target),true);assert.equal(await exists(unknown),true);
+    assert.equal((await planArtifactRetention({repoRoot})).keep,1);
+  } finally {await rm(repoRoot,{recursive:true,force:true});}
+});
+
+
+test('staged package promotion replaces the previous app only after validating the new payload', async()=>{
+ const repoRoot=await mkdtemp(path.join(tmpdir(),'fielora-promotion-'));
+ try {
+  const old=await fixtureDirectory(repoRoot,'Fielora-darwin-arm64');
+  const staged=await fixtureDirectory(repoRoot,'.package-staging-test/Fielora-darwin-arm64');
+  async function payload(root,text){for(const file of ['MacOS/Fielora','Resources/app.asar','Resources/fielora-core']){const dest=path.join(root,'Fielora.app','Contents',file);await mkdir(path.dirname(dest),{recursive:true});await writeFile(dest,text);}}
+  await payload(old,'old');
+  await assert.rejects(()=>promoteDevelopmentPackage({repoRoot,stagedPath:staged,platform:'darwin',arch:'arm64'}));
+  assert.equal(await readFile(path.join(old,'Fielora.app','Contents','MacOS','Fielora'),'utf8'),'old');
+  await payload(staged,'new');
+  const result=await promoteDevelopmentPackage({repoRoot,stagedPath:staged,platform:'darwin',arch:'arm64'});
+  assert.equal(await readFile(path.join(old,'Fielora.app','Contents','MacOS','Fielora'),'utf8'),'new');
+  assert.equal(result.deleted.length,1);assert.equal(await exists(staged),false);
+ }finally{await rm(repoRoot,{recursive:true,force:true});}
 });

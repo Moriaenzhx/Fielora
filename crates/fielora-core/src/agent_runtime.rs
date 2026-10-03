@@ -1189,6 +1189,28 @@ impl ToolExecutor for DurableArtifactToolExecutor {
                     cancellation,
                 )
             }
+            "fonts.install" => {
+                if arguments.as_object().is_none_or(|a| {
+                    a.keys()
+                        .any(|k| k != "prepared_tool_call_id" && k != "_installation_preview")
+                }) {
+                    return Err(AgentError::ToolArgumentsInvalid);
+                }
+                let id = arguments["prepared_tool_call_id"]
+                    .as_str()
+                    .ok_or(AgentError::ToolArgumentsInvalid)?;
+                let calls = self
+                    .storage
+                    .list_agent_tool_calls(self.run_id.clone())
+                    .map_err(|_| AgentError::IoFailed)?;
+                let preparation = prepared_font_receipt(&calls, &self.run_id, id)?;
+                fielora_agent::fonts::install(
+                    &self.runtime,
+                    preparation,
+                    authorization_confirmed,
+                    cancellation,
+                )
+            }
             "tools.install" => {
                 let id = arguments["prepared_tool_call_id"]
                     .as_str()
@@ -1230,6 +1252,16 @@ impl ToolExecutor for DurableArtifactToolExecutor {
                 .execute(name, arguments, authorization_confirmed, cancellation),
         }
     }
+}
+
+fn prepared_font_receipt<'a>(
+    calls: &'a [AgentToolCallView],
+    run: &AgentRunId,
+    id: &str,
+) -> Result<&'a Value, AgentError> {
+    calls.iter().find(|call| call.run_id == *run && call.id.0 == id && call.name == "fonts.prepare" && call.status == AgentToolStatus::Completed)
+        .and_then(|call|call.receipt.as_ref()).filter(|r|r["kind"]=="FONT_PREPARATION_V1" && r["success"]==true)
+        .ok_or_else(||AgentError::WorkGuidance {code:"AGENT_FONT_PREPARATION_REQUIRED", detail:"Use a successful fonts.prepare tool_call_id from this Run; supplied hashes/manifests are not authorization.".into()})
 }
 
 fn prepared_tool_receipt<'a>(
@@ -3321,6 +3353,7 @@ impl AgentCoordinator {
         let prepared = PreparedRun {
             run: started.run,
             endpoint: ProviderEndpoint {
+                model_optimization: provider.view.model_optimization,
                 kind: provider.view.provider_kind,
                 base_url: provider.view.base_url,
             },
@@ -3468,6 +3501,7 @@ impl AgentCoordinator {
         let prepared = PreparedRun {
             run: started.run,
             endpoint: ProviderEndpoint {
+                model_optimization: provider.view.model_optimization,
                 kind: provider.view.provider_kind,
                 base_url: provider.view.base_url,
             },
@@ -3684,6 +3718,7 @@ impl AgentCoordinator {
             PreparedRun {
                 run: durable_run,
                 endpoint: ProviderEndpoint {
+                    model_optimization: provider.view.model_optimization,
                     kind: provider.view.provider_kind,
                     base_url: provider.view.base_url,
                 },
@@ -4091,6 +4126,7 @@ impl AgentCoordinator {
         Ok(PreparedRun {
             run,
             endpoint: ProviderEndpoint {
+                model_optimization: provider.view.model_optimization,
                 kind: provider.view.provider_kind,
                 base_url: provider.view.base_url,
             },
@@ -5101,6 +5137,7 @@ impl AgentCoordinator {
                 .map(|message| match message.role {
                     ConversationMessageRole::User => AgentModelMessage::User(message.content),
                     ConversationMessageRole::Assistant => AgentModelMessage::Assistant {
+                        continuation: None,
                         text: message.content,
                         tool_calls: vec![],
                     },
@@ -5161,6 +5198,7 @@ impl AgentCoordinator {
         if let Some((tool, approved_once)) = continuation_tool {
             if approved_once && !resumed_transcript {
                 messages.push(AgentModelMessage::Assistant {
+                    continuation: None,
                     text: String::new(),
                     tool_calls: vec![AgentModelToolCall {
                         id: tool.id.0.clone(),
@@ -5681,6 +5719,7 @@ impl AgentCoordinator {
                     return;
                 }
                 messages.push(AgentModelMessage::Assistant {
+                    continuation: turn.continuation.clone(),
                     text: turn.text,
                     tool_calls: vec![],
                 });
@@ -5701,6 +5740,7 @@ impl AgentCoordinator {
             }
 
             messages.push(AgentModelMessage::Assistant {
+                continuation: turn.continuation.clone(),
                 text: turn.text,
                 tool_calls: turn.tool_calls.clone(),
             });
@@ -6042,6 +6082,7 @@ impl AgentCoordinator {
                     ToolDisposition::Waiting => {
                         messages.pop();
                         messages.push(AgentModelMessage::Assistant {
+                            continuation: turn.continuation.clone(),
                             text: String::new(),
                             tool_calls: vec![AgentModelToolCall {
                                 id: waiting_tool.id.0.clone(),
@@ -6700,6 +6741,7 @@ impl AgentCoordinator {
                 {
                     let proposed = proposed.expect("checked request_evidence decision");
                     messages.push(AgentModelMessage::Assistant {
+                        continuation: turn.continuation.clone(),
                         text: turn.text,
                         tool_calls: vec![proposed.clone()],
                     });
@@ -6878,6 +6920,7 @@ impl AgentCoordinator {
                 }
                 let proposed = proposed.expect("validated apply_patches decision");
                 messages.push(AgentModelMessage::Assistant {
+                    continuation: turn.continuation.clone(),
                     text: turn.text,
                     tool_calls: vec![proposed.clone()],
                 });
@@ -6961,6 +7004,7 @@ impl AgentCoordinator {
                     ToolDisposition::Waiting => {
                         messages.pop();
                         messages.push(AgentModelMessage::Assistant {
+                            continuation: turn.continuation.clone(),
                             text: String::new(),
                             tool_calls: vec![AgentModelToolCall {
                                 id: waiting_tool.id.0.clone(),
@@ -7091,6 +7135,7 @@ impl AgentCoordinator {
                     AgentProjectionUpdate::default(),
                 );
                 messages.push(AgentModelMessage::Assistant {
+                    continuation: None,
                     text: String::new(),
                     tool_calls: vec![AgentModelToolCall {
                         id: tool.id.0.clone(),
@@ -7193,6 +7238,7 @@ impl AgentCoordinator {
                     AgentProjectionUpdate::default(),
                 );
                 messages.push(AgentModelMessage::Assistant {
+                    continuation: None,
                     text: String::new(),
                     tool_calls: vec![AgentModelToolCall {
                         id: tool.id.0.clone(),
@@ -7430,6 +7476,7 @@ impl AgentCoordinator {
             AgentProjectionUpdate::default(),
         );
         messages.push(AgentModelMessage::Assistant {
+            continuation: None,
             text: String::new(),
             tool_calls: vec![AgentModelToolCall {
                 id: search.id.0.clone(),
@@ -7531,6 +7578,7 @@ impl AgentCoordinator {
             return Err(AgentError::FileNotFound);
         }
         messages.push(AgentModelMessage::Assistant {
+            continuation: None,
             text: String::new(),
             tool_calls: reads
                 .iter()
@@ -7639,6 +7687,7 @@ impl AgentCoordinator {
             calls.push(tool);
         }
         messages.push(AgentModelMessage::Assistant {
+            continuation: None,
             text: String::new(),
             tool_calls: calls
                 .iter()
@@ -8122,6 +8171,7 @@ impl AgentCoordinator {
                 });
             }
             messages.push(AgentModelMessage::Assistant {
+                continuation: turn.continuation.clone(),
                 text: turn.text,
                 tool_calls: turn.tool_calls.clone(),
             });
@@ -8417,6 +8467,12 @@ impl AgentCoordinator {
         step: u32,
     ) -> Result<InvokedModelTurn, ModelError> {
         let invocation_started = Instant::now();
+        let model_settings = crate::model_runtime::settings_for_run(
+            &self.storage,
+            &self.sender,
+            &prepared.run,
+            &prepared.endpoint,
+        )?;
         if std::env::var("FIELORA_E2E").as_deref() == Ok("1")
             && prepared.run.model_id.starts_with("__fielora_agent_fixture")
         {
@@ -8433,6 +8489,7 @@ impl AgentCoordinator {
                     .sum::<usize>();
                 return Ok(invoked_fixture_turn(
                     AgentModelTurn {
+                        continuation: None,
                         text: format!(
                             "Image delivery fixture: {count} image(s). This fixture checks transport, not visual understanding."
                         ),
@@ -8469,6 +8526,7 @@ impl AgentCoordinator {
                 };
                 return Ok(invoked_fixture_turn(
                     AgentModelTurn {
+                        continuation: None,
                         text: if step == 1 {
                             "正在读取任务样例。".into()
                         } else {
@@ -8580,6 +8638,7 @@ impl AgentCoordinator {
                 };
                 return Ok(invoked_fixture_turn(
                     AgentModelTurn {
+                        continuation: None,
                         text: if step < 6 {
                             "Inspect retained settings evidence."
                         } else {
@@ -8746,6 +8805,7 @@ impl AgentCoordinator {
                 };
                 return Ok(InvokedModelTurn {
                     turn: AgentModelTurn {
+                        continuation: None,
                         text: if source_labels {
                             "按当前源码检查七个字段的翻译映射、顺序与金额绑定。源码检查通过；未执行浏览器布局验收。".into()
                         } else if call.is_some() {
@@ -8793,6 +8853,7 @@ impl AgentCoordinator {
                 };
                 return Ok(InvokedModelTurn {
                     turn: AgentModelTurn {
+                        continuation: None,
                         text: "当前配置已修改，检查结果将决定是否完成。".into(),
                         tool_calls: call
                             .into_iter()
@@ -8889,6 +8950,7 @@ impl AgentCoordinator {
                 .to_string();
                 return Ok(InvokedModelTurn {
                     turn: AgentModelTurn {
+                        continuation: None,
                         text,
                         tool_calls: call
                             .into_iter()
@@ -8964,6 +9026,7 @@ impl AgentCoordinator {
                     .collect();
                 return Ok(InvokedModelTurn {
                     turn: AgentModelTurn {
+                        continuation: None,
                         text,
                         tool_calls,
                         usage: None,
@@ -9043,6 +9106,7 @@ impl AgentCoordinator {
                 };
                 return Ok(invoked_fixture_turn(
                     AgentModelTurn {
+                        continuation: None,
                         text: if call.is_none() {
                             "已接着完成当前版本的验证，已有修改保留。".into()
                         } else if edited {
@@ -9081,6 +9145,7 @@ impl AgentCoordinator {
                 }
                 return Ok(invoked_fixture_turn(
                     AgentModelTurn {
+                        continuation: None,
                         text: if step == 1 {
                             "已收到两张原始图片，正在读取对照说明。"
                         } else {
@@ -9107,6 +9172,7 @@ impl AgentCoordinator {
             if prepared.run.task.contains("FIELORA_AGENT_FIXTURE_RESOURCE") {
                 return Ok(invoked_fixture_turn(
                     AgentModelTurn {
+                        continuation: None,
                         text: if step == 1 {
                             "正在核对证据。".into()
                         } else {
@@ -9147,6 +9213,7 @@ impl AgentCoordinator {
                 };
                 return Ok(invoked_fixture_turn(
                     AgentModelTurn {
+                        continuation: None,
                         text: "让我检查当前候选。".into(),
                         tool_calls: vec![AgentModelToolCall {
                             id: format!("plateau-{step}"),
@@ -9170,6 +9237,7 @@ impl AgentCoordinator {
                 if long_run && step <= 22 {
                     return Ok(invoked_fixture_turn(
                         AgentModelTurn {
+                            continuation: None,
                             text: if prepared.run.task.contains("FIELORA_COMPACT_DETAILS")
                                 && step == 7
                             {
@@ -9238,6 +9306,7 @@ impl AgentCoordinator {
                 };
                 return Ok(invoked_fixture_turn(
                     AgentModelTurn {
+                        continuation: None,
                         text: if call.is_some() {
                             "正在核对登录初始化；原因仍待验证。".into()
                         } else {
@@ -9266,6 +9335,7 @@ impl AgentCoordinator {
                 if escape && step >= 9 {
                     return Ok(invoked_fixture_turn(
                         AgentModelTurn {
+                            continuation: None,
                             text: "已根据新的证据行完成分析。".into(),
                             tool_calls: vec![],
                             usage: None,
@@ -9282,6 +9352,7 @@ impl AgentCoordinator {
                 };
                 return Ok(invoked_fixture_turn(
                     AgentModelTurn {
+                        continuation: None,
                         text: "我会继续核对证据。".into(),
                         tool_calls: vec![AgentModelToolCall {
                             id: format!("progress-{step}"),
@@ -9300,6 +9371,7 @@ impl AgentCoordinator {
             {
                 return Ok(invoked_fixture_turn(
                     AgentModelTurn {
+                        continuation: None,
                         text: "问题已经修复。".into(),
                         tool_calls: vec![],
                         usage: None,
@@ -9318,6 +9390,7 @@ impl AgentCoordinator {
                 }
                 return Ok(invoked_fixture_turn(
                     AgentModelTurn {
+                        continuation: None,
                         text: "I will inspect the bounded Skill metadata catalog.".into(),
                         tool_calls: vec![AgentModelToolCall {
                             id: format!("fixture-skill-list-{step}"),
@@ -9340,6 +9413,7 @@ impl AgentCoordinator {
                 }
                 return Ok(invoked_fixture_turn(
                     AgentModelTurn {
+                        continuation: None,
                         text: "I will lazily load the selected project Skill.".into(),
                         tool_calls: vec![AgentModelToolCall {
                             id: format!("fixture-skill-load-{step}"),
@@ -9361,7 +9435,8 @@ impl AgentCoordinator {
                 }
                 return Ok(invoked_fixture_turn(
                     AgentModelTurn {
-                        text: "## Completed\n\nThe project Skill was admitted lazily through the existing Harness context path.".into(),
+                        continuation: None,
+            text: "## Completed\n\nThe project Skill was admitted lazily through the existing Harness context path.".into(),
                         tool_calls: vec![],
                         usage: None,
                     },
@@ -9375,6 +9450,7 @@ impl AgentCoordinator {
             {
                 return Ok(invoked_fixture_turn(
                     AgentModelTurn {
+                        continuation: None,
                         text: "I will inspect passive user MCP connection metadata.".into(),
                         tool_calls: vec![AgentModelToolCall {
                             id: format!("fixture-user-mcp-list-{step}"),
@@ -9393,6 +9469,7 @@ impl AgentCoordinator {
             {
                 return Ok(invoked_fixture_turn(
                     AgentModelTurn {
+                        continuation: None,
                         text: "I will request activation of the selected local MCP connection."
                             .into(),
                         tool_calls: vec![AgentModelToolCall {
@@ -9418,6 +9495,7 @@ impl AgentCoordinator {
                     .ok_or(ModelError::ProviderProtocolError)?;
                 return Ok(invoked_fixture_turn(
                     AgentModelTurn {
+                        continuation: None,
                         text: "I will request the conservatively admitted MCP tool.".into(),
                         tool_calls: vec![AgentModelToolCall {
                             id: format!("fixture-user-mcp-call-{step}"),
@@ -9432,7 +9510,8 @@ impl AgentCoordinator {
             if prepared.run.task.contains("FIELORA_AGENT_FIXTURE_USER_MCP") {
                 return Ok(invoked_fixture_turn(
                     AgentModelTurn {
-                        text: "## Completed\n\nThe user-configured MCP tool returned through the existing Tool pipeline."
+                        continuation: None,
+            text: "## Completed\n\nThe user-configured MCP tool returned through the existing Tool pipeline."
                             .into(),
                         tool_calls: vec![],
                         usage: None,
@@ -9456,6 +9535,7 @@ impl AgentCoordinator {
                     .ok_or(ModelError::ProviderProtocolError)?;
                 return Ok(invoked_fixture_turn(
                     AgentModelTurn {
+                        continuation: None,
                         text: "I will call the admitted read-only MCP tool.".into(),
                         tool_calls: vec![AgentModelToolCall {
                             id: format!("fixture-mcp-{step}"),
@@ -9474,7 +9554,8 @@ impl AgentCoordinator {
             {
                 return Ok(invoked_fixture_turn(
                     AgentModelTurn {
-                        text: "## Completed\n\nThe read-only MCP tool returned through the existing Tool pipeline.".into(),
+                        continuation: None,
+            text: "## Completed\n\nThe read-only MCP tool returned through the existing Tool pipeline.".into(),
                         tool_calls: vec![],
                         usage: None,
                     },
@@ -9488,7 +9569,8 @@ impl AgentCoordinator {
             {
                 return Ok(invoked_fixture_turn(
                     AgentModelTurn {
-                        text: "## Completed\n\nThe active work-surface metadata was admitted without automatically inlining Artifact content.".into(),
+                        continuation: None,
+            text: "## Completed\n\nThe active work-surface metadata was admitted without automatically inlining Artifact content.".into(),
                         tool_calls: vec![],
                         usage: None,
                     },
@@ -9521,7 +9603,8 @@ impl AgentCoordinator {
                         });
                     return Ok(invoked_fixture_turn(
                         AgentModelTurn {
-                            text: "I will update the selected durable Document through the existing Artifact Tool path.".into(),
+                            continuation: None,
+            text: "I will update the selected durable Document through the existing Artifact Tool path.".into(),
                             tool_calls: vec![AgentModelToolCall {
                                 id: format!("fixture-artifact-update-{step}"),
                                 name: "artifact.update".into(),
@@ -9539,6 +9622,7 @@ impl AgentCoordinator {
                 if !completed_tools.iter().any(|name| name == "run_command") {
                     return Ok(invoked_fixture_turn(
                         AgentModelTurn {
+                            continuation: None,
                             text: "I will run the bounded deterministic Artifact fixture check."
                                 .into(),
                             tool_calls: vec![AgentModelToolCall {
@@ -9557,7 +9641,8 @@ impl AgentCoordinator {
                 }
                 return Ok(invoked_fixture_turn(
                     AgentModelTurn {
-                        text: "## Completed\n\nThe selected Document received one exact current-revision update.".into(),
+                        continuation: None,
+            text: "## Completed\n\nThe selected Document received one exact current-revision update.".into(),
                         tool_calls: vec![],
                         usage: None,
                     },
@@ -9583,6 +9668,7 @@ impl AgentCoordinator {
                 if imported_asset.is_none() {
                     return Ok(invoked_fixture_turn(
                         AgentModelTurn {
+                            continuation: None,
                             text: "I will admit the bounded PNG fixture as a durable source Asset."
                                 .into(),
                             tool_calls: vec![AgentModelToolCall {
@@ -9638,6 +9724,7 @@ impl AgentCoordinator {
                     });
                     return Ok(invoked_fixture_turn(
                         AgentModelTurn {
+                            continuation: None,
                             text: "I will create the bounded two-sheet sparse Spreadsheet fixture."
                                 .into(),
                             tool_calls: vec![AgentModelToolCall {
@@ -9667,7 +9754,8 @@ impl AgentCoordinator {
                     });
                     return Ok(invoked_fixture_turn(
                         AgentModelTurn {
-                            text: "I will create the composed Document with an exact Spreadsheet revision and durable PNG reference.".into(),
+                            continuation: None,
+            text: "I will create the composed Document with an exact Spreadsheet revision and durable PNG reference.".into(),
                             tool_calls: vec![AgentModelToolCall {
                                 id: format!("fixture-artifact-document-{step}"),
                                 name: "artifact.create".into(),
@@ -9696,6 +9784,7 @@ impl AgentCoordinator {
                 if completed_named_create("Artifact 工作面演示").is_none() {
                     return Ok(invoked_fixture_turn(
                         AgentModelTurn {
+                            continuation: None,
                             text: "I will create the three-slide Presentation semantic fixture."
                                 .into(),
                             tool_calls: vec![AgentModelToolCall {
@@ -9723,6 +9812,7 @@ impl AgentCoordinator {
                 if completed_named_create("Artifact 能力关系图").is_none() {
                     return Ok(invoked_fixture_turn(
                         AgentModelTurn {
+                            continuation: None,
                             text: "I will create the grouped cyclic CJK/English Diagram fixture."
                                 .into(),
                             tool_calls: vec![AgentModelToolCall {
@@ -9761,6 +9851,7 @@ impl AgentCoordinator {
                 if !completed_tools.iter().any(|name| name == "run_command") {
                     return Ok(invoked_fixture_turn(
                         AgentModelTurn {
+                            continuation: None,
                             text: "I will run the bounded deterministic Artifact fixture check."
                                 .into(),
                             tool_calls: vec![AgentModelToolCall {
@@ -9779,7 +9870,8 @@ impl AgentCoordinator {
                 }
                 return Ok(invoked_fixture_turn(
                     AgentModelTurn {
-                        text: "## Completed\n\nCreated the four durable Artifact Working Surface fixtures through the existing Tool pipeline.".into(),
+                        continuation: None,
+            text: "## Completed\n\nCreated the four durable Artifact Working Surface fixtures through the existing Tool pipeline.".into(),
                         tool_calls: vec![],
                         usage: None,
                     },
@@ -9820,6 +9912,7 @@ impl AgentCoordinator {
                     .unwrap_or_else(|| file.sha256.clone());
                 return Ok(invoked_fixture_turn(
                     AgentModelTurn {
+                        continuation: None,
                         text: "Applying one bounded fixture change set.".into(),
                         tool_calls: vec![AgentModelToolCall {
                             id: format!("fixture-fast-edit-{step}"),
@@ -9838,6 +9931,7 @@ impl AgentCoordinator {
             {
                 return Ok(invoked_fixture_turn(
                     AgentModelTurn {
+                        continuation: None,
                         text: "## 已完成\n\n已删除目标字段配置，其他内容未修改，验证通过。".into(),
                         tool_calls: vec![],
                         usage: None,
@@ -9853,6 +9947,7 @@ impl AgentCoordinator {
             {
                 return Ok(invoked_fixture_turn(
                     AgentModelTurn {
+                        continuation: None,
                         text: "我先读取需要引用的实现范围。".into(),
                         tool_calls: vec![AgentModelToolCall {
                             id: format!("fixture-rich-result-{step}"),
@@ -9887,6 +9982,7 @@ impl AgentCoordinator {
                     .unwrap_or_default();
                 return Ok(invoked_fixture_turn(
                     AgentModelTurn {
+                        continuation: None,
                         text: format!(
                             "## 实现位置\n\n相关逻辑位于 [reference-fixture.ts](fielora-project-file:src/reference-fixture.ts)，核心范围见 [reference-fixture.ts · L2–L4](fielora-code-range:src/reference-fixture.ts#L2-L4)。{inline_image}\n\n## 参考资料\n\n[Typed Reference Fixture](fielora-web-reference:https://example.com/fielora/typed-reference)"
                         ),
@@ -9901,6 +9997,7 @@ impl AgentCoordinator {
             {
                 return Ok(invoked_fixture_turn(
                     AgentModelTurn {
+                        continuation: None,
                         text: "I will inspect the bounded project tree.".into(),
                         tool_calls: vec![AgentModelToolCall {
                             id: format!("fixture-subagent-{step}"),
@@ -9917,6 +10014,7 @@ impl AgentCoordinator {
                     "Read-only subagent fixture inspected the project and returned evidence.";
                 return Ok(invoked_fixture_turn(
                     AgentModelTurn {
+                        continuation: None,
                         text: text.into(),
                         tool_calls: vec![],
                         usage: None,
@@ -9931,6 +10029,7 @@ impl AgentCoordinator {
             {
                 return Ok(invoked_fixture_turn(
                     AgentModelTurn {
+                        continuation: None,
                         text: "I will delegate an isolated read-only repository investigation."
                             .into(),
                         tool_calls: vec![AgentModelToolCall {
@@ -9948,7 +10047,8 @@ impl AgentCoordinator {
             {
                 return Ok(invoked_fixture_turn(
                     AgentModelTurn {
-                        text: "<think>private fixture reasoning</think>I will create the requested fixture file.".into(),
+                        continuation: None,
+            text: "<think>private fixture reasoning</think>I will create the requested fixture file.".into(),
                         tool_calls: vec![AgentModelToolCall {
                             id: format!("fixture-{step}"),
                             name: "create_file".into(),
@@ -9973,6 +10073,7 @@ impl AgentCoordinator {
                 };
                 return Ok(invoked_fixture_turn(
                     AgentModelTurn {
+                        continuation: None,
                         text: "I will verify the result.".into(),
                         tool_calls: vec![AgentModelToolCall {
                             id: format!("fixture-verify-{step}"),
@@ -9996,6 +10097,7 @@ impl AgentCoordinator {
             let text = "## 已完成\n\nFielora Agent fixture completed the task and verification.\n\n- **修改：** 创建验证文件\n- **验证：** `git diff --check` 通过";
             return Ok(invoked_fixture_turn(
                 AgentModelTurn {
+                    continuation: None,
                     text: text.into(),
                     tool_calls: vec![],
                     usage: None,
@@ -10013,7 +10115,7 @@ impl AgentCoordinator {
             let first_token_for_callback = first_token.clone();
             let sender_for_callback = self.sender.clone();
             let run_id_for_callback = prepared.run.id.clone();
-            let client = ModelClient::new()?;
+            let client = ModelClient::new()?.with_settings(model_settings.clone());
             match client
                 .invoke_agent_turn(
                     prepared.endpoint.clone(),
@@ -10344,11 +10446,17 @@ impl AgentCoordinator {
             }
         }
         // Resolve installation facts from storage, replacing any model-supplied preview.
-        let installation = if proposed.name == "tools.install" {
+        let installation = if matches!(proposed.name.as_str(), "tools.install" | "fonts.install") {
             let calls = self.storage.list_agent_tool_calls(run.id.clone())?;
             let preparation = proposed.arguments["prepared_tool_call_id"]
                 .as_str()
-                .and_then(|id| prepared_tool_receipt(&calls, &run.id, id).ok())
+                .and_then(|id| {
+                    if proposed.name == "fonts.install" {
+                        prepared_font_receipt(&calls, &run.id, id).ok()
+                    } else {
+                        prepared_tool_receipt(&calls, &run.id, id).ok()
+                    }
+                })
                 .cloned();
             if let Some(args) = proposed.arguments.as_object_mut() {
                 args.remove("_installation_preview");
@@ -10364,6 +10472,12 @@ impl AgentCoordinator {
             && !crate::agent_request_scope::allows(&proposed.name, spec.effect)
         {
             AgentPolicyDecision::Deny
+        } else if proposed.name == "fonts.install" {
+            if installation.is_some() {
+                AgentPolicyDecision::Ask
+            } else {
+                AgentPolicyDecision::Deny
+            }
         } else if proposed.name == "tools.install" {
             match installation.as_ref() {
                 None => AgentPolicyDecision::Deny,
@@ -12282,7 +12396,9 @@ fn prompt_shape(request: &AgentModelRequest) -> Value {
                         .map(|image| image.data_url.len())
                         .sum::<usize>()
             }
-            AgentModelMessage::Assistant { text, tool_calls } => {
+            AgentModelMessage::Assistant {
+                text, tool_calls, ..
+            } => {
                 text.len()
                     + tool_calls
                         .iter()
@@ -12305,7 +12421,7 @@ fn prompt_shape(request: &AgentModelRequest) -> Value {
             let (role, data) = match m {
                 AgentModelMessage::User(text) => ("user", json!({"text":text})),
                 AgentModelMessage::UserMultimodal {text,images} => ("user", json!({"text":text,"images":images.iter().map(|i|json!({"id":i.id,"sha256":crate::agent_turn_context::digest(&i.data_url)})).collect::<Vec<_>>()})),
-                AgentModelMessage::Assistant {text,tool_calls} => ("assistant",json!({"text":text,"calls":tool_calls.iter().map(|c|json!({"id":c.id,"name":c.name,"arguments":c.arguments})).collect::<Vec<_>>()})),
+                AgentModelMessage::Assistant { text, tool_calls, .. } => ("assistant",json!({"text":text,"calls":tool_calls.iter().map(|c|json!({"id":c.id,"name":c.name,"arguments":c.arguments})).collect::<Vec<_>>()})),
                 AgentModelMessage::ToolResult {call_id,name,content,is_error} => ("tool",json!({"call_id":call_id,"name":name,"content":content,"is_error":is_error})),
             };
             json!({"role":role,"sha256":crate::agent_turn_context::digest(&data.to_string()),"text_bytes":crate::agent_work_state::message_bytes(m)})
@@ -12342,7 +12458,7 @@ fn model_messages_contain(messages: &[AgentModelMessage], needle: &str) -> bool 
     })
 }
 
-fn append_event(
+pub(super) fn append_event(
     storage: &StorageHandle,
     sender: &SyncSender<Value>,
     run_id: AgentRunId,
@@ -13387,6 +13503,21 @@ fn now_ms() -> i64 {
 #[cfg(test)]
 mod tests {
     #[test]
+    fn font_preparation_is_bound_to_a_successful_same_run_tool() {
+        let mut call: fielora_contracts::AgentToolCallView = serde_json::from_value(serde_json::json!({"id":"font","run_id":"current","name":"fonts.prepare","effect":"NETWORK","status":"COMPLETED","policy_decision":"ALLOW","arguments":{},"receipt":{"kind":"FONT_PREPARATION_V1","success":true},"created_at":0,"updated_at":0})).unwrap();
+        let run = fielora_contracts::AgentRunId::new("current");
+        assert!(super::prepared_font_receipt(std::slice::from_ref(&call), &run, "font").is_ok());
+        assert!(super::prepared_font_receipt(std::slice::from_ref(&call), &run, "forged").is_err());
+        call.run_id = fielora_contracts::AgentRunId::new("other");
+        assert!(super::prepared_font_receipt(std::slice::from_ref(&call), &run, "font").is_err());
+        call.run_id = run.clone();
+        call.status = fielora_contracts::AgentToolStatus::Failed;
+        assert!(super::prepared_font_receipt(std::slice::from_ref(&call), &run, "font").is_err());
+        call.status = fielora_contracts::AgentToolStatus::Completed;
+        call.name = "tools.prepare".into();
+        assert!(super::prepared_font_receipt(std::slice::from_ref(&call), &run, "font").is_err());
+    }
+    #[test]
     fn tool_preparation_rejects_other_runs_and_nonterminal_or_forged_sources() {
         let mut call: fielora_contracts::AgentToolCallView = serde_json::from_value(serde_json::json!({"id":"prepared","run_id":"current","name":"tools.prepare","effect":"NETWORK","status":"COMPLETED","policy_decision":"ALLOW","arguments":{},"receipt":{"kind":"TOOL_PREPARATION_V1","success":true,"archive_complete":true},"created_at":0,"updated_at":0})).unwrap();
         let run = fielora_contracts::AgentRunId::new("current");
@@ -13903,6 +14034,7 @@ mod tests {
         let provider_config = storage
             .create_provider_config(
                 CreateProviderConfigRequest {
+                    model_optimization: None,
                     provider_kind: ProviderKind::Openai,
                     display_name: "Fixture model provider".into(),
                     base_url: None,
@@ -13988,6 +14120,7 @@ mod tests {
         let prepared = PreparedRun {
             run: started.run,
             endpoint: ProviderEndpoint {
+                model_optimization: true,
                 kind: ProviderKind::Openai,
                 base_url: None,
             },
@@ -14263,6 +14396,7 @@ mod tests {
         let provider = storage
             .create_provider_config(
                 CreateProviderConfigRequest {
+                    model_optimization: None,
                     provider_kind: ProviderKind::Openai,
                     display_name: "Fixture".into(),
                     base_url: None,
@@ -14457,6 +14591,7 @@ mod tests {
         let provider_config = storage
             .create_provider_config(
                 CreateProviderConfigRequest {
+                    model_optimization: None,
                     provider_kind: ProviderKind::Openai,
                     display_name: "Fixture model provider".into(),
                     base_url: None,
@@ -14554,6 +14689,7 @@ mod tests {
         let prepared = PreparedRun {
             run: started.run,
             endpoint: ProviderEndpoint {
+                model_optimization: true,
                 kind: ProviderKind::Openai,
                 base_url: None,
             },
@@ -14798,6 +14934,7 @@ mod tests {
         let provider = storage
             .create_provider_config(
                 CreateProviderConfigRequest {
+                    model_optimization: None,
                     provider_kind: ProviderKind::Openai,
                     display_name: "Fixture model provider".into(),
                     base_url: None,
@@ -14870,6 +15007,7 @@ mod tests {
         let prepared = PreparedRun {
             run: parent.clone(),
             endpoint: ProviderEndpoint {
+                model_optimization: true,
                 kind: ProviderKind::Openai,
                 base_url: None,
             },
@@ -14974,6 +15112,7 @@ mod tests {
         let provider_config = storage
             .create_provider_config(
                 CreateProviderConfigRequest {
+                    model_optimization: None,
                     provider_kind: ProviderKind::Openai,
                     display_name: "Fixture model provider".into(),
                     base_url: None,
@@ -15038,6 +15177,7 @@ mod tests {
         let prepared = PreparedRun {
             run: started.run,
             endpoint: ProviderEndpoint {
+                model_optimization: true,
                 kind: ProviderKind::Openai,
                 base_url: None,
             },
@@ -15143,6 +15283,7 @@ mod tests {
         let provider_config = storage
             .create_provider_config(
                 CreateProviderConfigRequest {
+                    model_optimization: None,
                     provider_kind: ProviderKind::Openai,
                     display_name: "Fixture model provider".into(),
                     base_url: None,
@@ -15207,6 +15348,7 @@ mod tests {
         let prepared = PreparedRun {
             run: started.run,
             endpoint: ProviderEndpoint {
+                model_optimization: true,
                 kind: ProviderKind::Openai,
                 base_url: None,
             },
@@ -15360,6 +15502,7 @@ mod tests {
         let provider = storage
             .create_provider_config(
                 CreateProviderConfigRequest {
+                    model_optimization: None,
                     provider_kind: ProviderKind::Openai,
                     display_name: "Fixture".into(),
                     base_url: None,
@@ -15425,6 +15568,7 @@ mod tests {
         let prepared = PreparedRun {
             run: started.run,
             endpoint: ProviderEndpoint {
+                model_optimization: true,
                 kind: ProviderKind::Openai,
                 base_url: None,
             },
@@ -15806,6 +15950,7 @@ mod tests {
         let provider = storage
             .create_provider_config(
                 CreateProviderConfigRequest {
+                    model_optimization: None,
                     provider_kind: ProviderKind::Openai,
                     display_name: "Fixture".into(),
                     base_url: None,
@@ -15875,6 +16020,7 @@ mod tests {
         let prepared = PreparedRun {
             run: started.run,
             endpoint: ProviderEndpoint {
+                model_optimization: true,
                 kind: ProviderKind::Openai,
                 base_url: None,
             },
@@ -16318,6 +16464,7 @@ mod tests {
         let provider = storage
             .create_provider_config(
                 CreateProviderConfigRequest {
+                    model_optimization: None,
                     provider_kind: ProviderKind::Openai,
                     display_name: "Fixture".into(),
                     base_url: None,
@@ -16383,6 +16530,7 @@ mod tests {
         let prepared = PreparedRun {
             run: started.run,
             endpoint: ProviderEndpoint {
+                model_optimization: true,
                 kind: ProviderKind::Openai,
                 base_url: None,
             },
@@ -17750,6 +17898,7 @@ mod tests {
         let restarted_prepared = PreparedRun {
             run: paused_recovery_run,
             endpoint: ProviderEndpoint {
+                model_optimization: true,
                 kind: ProviderKind::Openai,
                 base_url: None,
             },
@@ -17836,6 +17985,7 @@ mod tests {
         let provider_config = storage
             .create_provider_config(
                 CreateProviderConfigRequest {
+                    model_optimization: None,
                     provider_kind: ProviderKind::Openai,
                     display_name: "Fixture model provider".into(),
                     base_url: None,
@@ -18552,6 +18702,7 @@ mod tests {
         let provider = storage
             .create_provider_config(
                 CreateProviderConfigRequest {
+                    model_optimization: None,
                     provider_kind: ProviderKind::Openai,
                     display_name: "Fixture".into(),
                     base_url: None,
@@ -18915,6 +19066,7 @@ mod tests {
         let provider_config = storage
             .create_provider_config(
                 CreateProviderConfigRequest {
+                    model_optimization: None,
                     provider_kind: ProviderKind::Openai,
                     display_name: "Fixture model provider".into(),
                     base_url: None,
@@ -19405,6 +19557,7 @@ mod tests {
         let provider_config = storage
             .create_provider_config(
                 CreateProviderConfigRequest {
+                    model_optimization: None,
                     provider_kind: ProviderKind::Openai,
                     display_name: "Fixture model provider".into(),
                     base_url: None,
@@ -19582,6 +19735,7 @@ mod tests {
         let unknown_prepared = PreparedRun {
             run: unknown_started.run,
             endpoint: ProviderEndpoint {
+                model_optimization: true,
                 kind: ProviderKind::Openai,
                 base_url: None,
             },
@@ -20123,6 +20277,7 @@ mod tests {
         for i in 0..20 {
             let id = format!("read-{i}");
             messages.push(AgentModelMessage::Assistant {
+                continuation: None,
                 text: format!("Finding {i}"),
                 tool_calls: vec![AgentModelToolCall {
                     id: id.clone(),
@@ -20275,6 +20430,7 @@ mod tests {
         let provider = storage
             .create_provider_config(
                 CreateProviderConfigRequest {
+                    model_optimization: None,
                     provider_kind: ProviderKind::Openai,
                     display_name: "Provider-neutral fixture".into(),
                     base_url: None,
@@ -20346,6 +20502,7 @@ mod tests {
         let prepared = PreparedRun {
             run: created.run,
             endpoint: ProviderEndpoint {
+                model_optimization: true,
                 kind: ProviderKind::Openai,
                 base_url: None,
             },
@@ -20514,10 +20671,11 @@ mod tests {
     fn china_profile_prompt_is_bilingual_and_action_nudge_is_bounded() {
         let profile = coding_behavior_profile(
             &ProviderEndpoint {
+                model_optimization: true,
                 kind: ProviderKind::OpenaiCompatible,
                 base_url: Some("https://api.deepseek.com/v1".into()),
             },
-            "deepseek-chat",
+            "deepseek-flash",
         );
         let prompt = agent_system_prompt(
             AgentPermission::FullControl,

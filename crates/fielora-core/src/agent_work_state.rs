@@ -707,7 +707,9 @@ pub(crate) fn message_bytes(message: &AgentModelMessage) -> usize {
         AgentModelMessage::User(text) | AgentModelMessage::UserMultimodal { text, .. } => {
             text.len()
         }
-        AgentModelMessage::Assistant { text, tool_calls } => {
+        AgentModelMessage::Assistant {
+            text, tool_calls, ..
+        } => {
             text.len()
                 + tool_calls
                     .iter()
@@ -1293,6 +1295,7 @@ mod tests {
         body: &str,
     ) {
         messages.push(AgentModelMessage::Assistant {
+            continuation: None,
             text: String::new(),
             tool_calls: vec![AgentModelToolCall {
                 id: id.into(),
@@ -1538,6 +1541,7 @@ mod tests {
         let exchange = |id: &str, receipt: &Value| {
             vec![
                 AgentModelMessage::Assistant {
+                    continuation: None,
                     text: String::new(),
                     tool_calls: vec![AgentModelToolCall {
                         id: id.into(),
@@ -1592,6 +1596,7 @@ mod tests {
             ("two", "inspect", true),
         ] {
             messages.push(AgentModelMessage::Assistant {
+                continuation: None,
                 text: String::new(),
                 tool_calls: vec![AgentModelToolCall {
                     id: id.into(),
@@ -1765,6 +1770,7 @@ mod tests {
         for i in 0..8 {
             let r = &receipts[i % 4];
             messages.push(AgentModelMessage::Assistant {
+                continuation: None,
                 text: "Untested guess ".repeat(500),
                 tool_calls: vec![AgentModelToolCall {
                     id: i.to_string(),
@@ -1829,6 +1835,7 @@ mod tests {
             let r = json!({"kind":"FILE_READ","path":"template.js","sha256":if i==2 {"changed"} else {"same"},
                 "line_start":1,"observed_line_end":50,"line_end":50,"tool_call_id":i});
             messages.push(AgentModelMessage::Assistant {
+                continuation: None,
                 text: "another untested claim".into(),
                 tool_calls: vec![AgentModelToolCall {
                     id: i.to_string(),
@@ -1884,6 +1891,7 @@ mod tests {
             let receipt = json!({"kind":"FILE_READ","path":path,"sha256":path,
                 "line_start":1,"observed_line_end":30,"tool_call_id":format!("tool-{i}")});
             messages.push(AgentModelMessage::Assistant {
+                continuation: None,
                 text: "Possibly another modal. ".repeat(150),
                 tool_calls: vec![AgentModelToolCall {
                     id: format!("call-{i}"),
@@ -2102,6 +2110,7 @@ mod tests {
         )];
         let append_exchange = |messages: &mut Vec<_>, index: usize| {
             messages.push(AgentModelMessage::Assistant {
+                continuation: None,
                 text: "Inspect".into(),
                 tool_calls: vec![AgentModelToolCall {
                     id: format!("call-{index}"),

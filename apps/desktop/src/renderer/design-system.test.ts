@@ -244,8 +244,7 @@ test('shared navigation resize, collapse and Settings content behavior stay cano
   assert.match(rightDock, /\{tabs\.length > 0 && <div className="right-dock-add-wrap"/);
   assert.match(main, /width: 1180,[\s\S]*?height: 560,[\s\S]*?minWidth: 900,[\s\S]*?minHeight: 560,/);
 
-  assert.match(appearance, /data-testid=\{`appearance-theme-\$\{option\.value\.toLowerCase\(\)\}`\}/);
-  for (const mode of ['SYSTEM', 'LIGHT', 'DARK']) assert.match(appearance, new RegExp(`value: '${mode}'`));
+  assert.doesNotMatch(appearance, /AppearanceModeControl|appearance-theme-|appearance-mode-section/);
   for (const control of ['appearance-sidebar-background', 'appearance-workspace-background', 'appearance-ui-font', 'appearance-ui-font-size', 'appearance-code-font', 'appearance-code-font-size', 'appearance-surface-contrast', 'appearance-action-color', 'appearance-reduced-motion', 'appearance-high-contrast', 'appearance-smooth-scrolling', 'appearance-reset']) {
     assert.match(appearance, new RegExp(control), `missing useful Appearance control ${control}`);
   }
@@ -286,12 +285,7 @@ test('replaceable Brand Chrome is scoped to the top bar and left navigation', ()
     assert.match(tokens, new RegExp(`--fl-brand-chrome-${token}:`));
   }
   assert.match(tokens, /--fl-brand-logo-opacity: 0\.72;/);
-  assert.match(materials, /data-brand-chrome="top"[\s\S]*?background-color: var\(--fl-brand-chrome-caption\);[\s\S]*?background-image: var\(--fl-brand-chrome-top\)/);
   assert.match(materials, /data-brand-chrome="top"\]::after \{[\s\S]*?right: calc\(100vw - env\(titlebar-area-x,[\s\S]*?env\(titlebar-area-width,[\s\S]*?width: 96px;[\s\S]*?var\(--fl-brand-chrome-caption\)/);
-  assert.match(materials, /data-brand-chrome="navigation"[\s\S]*?border: 0;[\s\S]*?background: var\(--fl-brand-chrome-navigation\)/);
-  assert.match(materials, /data-brand-chrome="top"[\s\S]*?background-position: 0 0;[\s\S]*?background-size: 100vw 100vh;/);
-  assert.match(materials, /data-brand-chrome="navigation"[\s\S]*?background-position: 0 -44px;[\s\S]*?background-size: 100vw 100vh;/);
-  assert.match(materials, /\.workspace-surface,[\s\S]*?\.settings-root \{[\s\S]*?background: var\(--fl-brand-chrome-canvas\);[\s\S]*?background-position: 0 -44px;/);
   assert.match(appearance, /\.desktop-chrome\[data-brand-chrome="top"\]/);
   assert.match(appearance, /\.project-navigation\[data-brand-chrome="navigation"\]/);
   assert.match(appearance, /\.settings-navigation\[data-brand-chrome="navigation"\]/);
