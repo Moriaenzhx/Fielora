@@ -202,6 +202,7 @@ impl WorkProgress {
                     "tool_call_id":tool.id, "name":tool.name, "status":tool.status,
                     "path":tool.arguments.get("path"), "error_code":tool.error_code,
                     "query":tool.arguments.get("query"), "queries":tool.arguments.get("queries"),
+                    "command":(tool.name == "run_command").then(|| command_arguments(&tool.arguments)),
                     "receipt":tool.receipt.as_ref().map(compact_receipt),
                     "recovery":tool.error_code.as_deref().and_then(recovery_instruction),
                 })
@@ -313,7 +314,8 @@ impl WorkProgress {
             "repeated_file_versions":repeated(reads),"repeated_queries":repeated(searches),
             "recent_observations_without_new_evidence":self.recent_gains.iter().filter(|gain| !**gain).count(),
             "current_run_browser_observed":has_browser,
-            "last_rendered_observation":last_page.map(browser_text_excerpt)});
+            "last_rendered_observation":last_page.map(browser_text_excerpt),
+            "recent_command_facts":recent_command_facts(tools)});
         let next = if browser_required && !has_browser {
             "The user explicitly requested browser verification and no current-run page observation exists. Use the browser for that acceptance requirement. If access is blocked, report the concrete missing action. Do not reread unchanged source to claim rendered verification."
         } else if !has_browser {
@@ -322,7 +324,7 @@ impl WorkProgress {
             "Use the rendered observation already obtained. Repeated inspect/screenshot/reload without changed content is not new evidence. If rendered labels disagree with source literals, trace the actual binding and translation/filter lookup; use read_file.json_pointers for specific JSON keys instead of repeatedly reading the whole minified dictionary; do not assume cache or add data fields without evidence. Choose a check that distinguishes the remaining causes. A failed check requires repair, not another declaration that the source looks correct."
         };
         Some(format!(
-            "{DIAGNOSTIC_CONTEXT_MARKER}{facts}\nThese are historical observations, not current rendered verification. Repeated reads may be needed after context reduction, but add no new evidence for the diagnosis. {next}\nA different actionable check should continue this task; this feedback does not require a plan, grant completion or change the resource allowance."
+            "{DIAGNOSTIC_CONTEXT_MARKER}{facts}\nThese are historical observations, not current rendered verification. Repeated reads may be needed after context reduction, but add no new evidence for the diagnosis. {next}\nCompare the latest command targets and results before reusing an older address. A zero exit code or printed PASS does not prove assertions ran: check the test's target, selectors and failure handling before blaming application code. A different actionable check should continue this task; this feedback does not grant completion or change the resource allowance."
         ))
     }
 
@@ -403,7 +405,12 @@ fn stable_observation(receipt: &Value) -> Value {
     if let Some(fields) = receipt.as_object_mut() {
         // Keep arbitrary result facts, including stdout/stderr hashes. Timing
         // and provider metadata do not make an unchanged result informative.
-        for key in ["duration_ms", "execution_source", "tool_call_id"] {
+        for key in [
+            "duration_ms",
+            "execution_source",
+            "tool_call_id",
+            "workspace_revision",
+        ] {
             fields.remove(key);
         }
         if fields.get("kind").is_some_and(|kind| kind == "BROWSER") {
@@ -451,6 +458,10 @@ fn compact_receipt(receipt: &Value) -> Value {
     let mut result = serde_json::Map::new();
     for key in [
         "kind",
+        "program",
+        "requested_program",
+        "cwd",
+        "process_lifecycle",
         "path",
         "sha256",
         "before_sha256",
@@ -483,6 +494,7 @@ fn compact_receipt(receipt: &Value) -> Value {
         "status",
         "action",
         "readiness",
+        "service_phase",
         "process_tracking",
         "url",
         "requested_url",
@@ -529,6 +541,48 @@ fn compact_receipt(receipt: &Value) -> Value {
         }
     }
     Value::Object(result)
+}
+
+// Already admitted command arguments are historical data, not replay authority.
+// Keep the target with the result: exit=0 without its argv cannot identify what
+// was checked after reduction/restart. Never retain an unbounded inline script.
+fn command_arguments(arguments: &Value) -> Value {
+    let mut result = json!({"program":arguments["program"], "cwd":arguments["cwd"]});
+    if arguments["argv"].to_string().len() <= 2048 {
+        result["argv"] = arguments["argv"].clone();
+    } else {
+        result["argv_omitted"] = json!(
+            "Long command; inspect the original tool call or its saved script before reusing it"
+        );
+    }
+    result
+}
+
+pub(crate) fn recent_command_facts(tools: &[AgentToolCallView]) -> Vec<Value> {
+    let mut seen = HashSet::new();
+    let mut facts = tools
+        .iter()
+        .rev()
+        .filter(|t| t.name == "run_command")
+        .filter(|t| {
+            seen.insert(
+                json!([
+                    t.arguments["program"],
+                    t.arguments["argv"],
+                    t.arguments["cwd"]
+                ])
+                .to_string(),
+            )
+        })
+        .take(6)
+        .map(|t| {
+            json!({"tool_call_id":t.id, "command":command_arguments(&t.arguments),
+            "status":t.status, "receipt":t.receipt.as_ref().map(compact_receipt),
+            "error_code":t.error_code, "historical_only":true, "replay_authorized":false})
+        })
+        .collect::<Vec<_>>();
+    facts.reverse();
+    facts
 }
 
 pub(crate) fn recovery_instruction(code: &str) -> Option<&'static str> {
@@ -891,6 +945,16 @@ pub(crate) fn compact_transcript_observed(
     let mut evidence = Vec::<Value>::new();
     let mut skills = Vec::<Value>::new();
     let mut commands = Vec::<Value>::new();
+    let call_arguments = messages
+        .iter()
+        .filter_map(|m| match m {
+            AgentModelMessage::Assistant { tool_calls, .. } => Some(tool_calls),
+            _ => None,
+        })
+        .flatten()
+        .filter(|call| call.name == "run_command")
+        .map(|call| (call.id.as_str(), command_arguments(&call.arguments)))
+        .collect::<HashMap<_, _>>();
     for message in messages.iter() {
         match message {
             AgentModelMessage::User(text) if text.starts_with(COMPACTED_CONTEXT) => {
@@ -946,6 +1010,7 @@ pub(crate) fn compact_transcript_observed(
                 }
                 if name == "run_command" {
                     commands.push(json!({"call_id":call_id,
+                        "command":call_arguments.get(call_id.as_str()),
                         "receipt":receipt.as_ref().map(compact_receipt),
                         "is_error":*is_error || receipt.as_ref().is_some_and(|r| r["success"] == false),
                         "excerpt":command_diagnostic_excerpt(observation)}));
@@ -989,6 +1054,8 @@ pub(crate) fn compact_transcript_observed(
         }
     }
     let mut seen = HashSet::new();
+    // Preserve early distinct findings. Command targets/results below separately
+    // retain the latest execution, so stale command diagnoses cannot replace it.
     evidence.retain(|item| {
         seen.insert(
             item.get("identity")
@@ -1055,8 +1122,14 @@ pub(crate) fn compact_transcript_observed(
     checkpoint["loaded_skill_contexts"] = json!(skills);
     let mut calls = HashSet::new();
     commands.reverse();
-    commands.retain(|item| calls.insert(item["call_id"].to_string()));
-    commands.truncate(2);
+    commands.retain(|item| {
+        calls.insert(if item["command"].is_object() {
+            item["command"].to_string()
+        } else {
+            item["call_id"].to_string()
+        })
+    });
+    commands.truncate(4);
     commands.reverse();
     checkpoint["recent_command_diagnostics"] = json!(commands);
     let mut prefix = messages[..first].iter().filter(|message| {
@@ -1089,6 +1162,13 @@ pub(crate) fn compact_transcript_observed(
     let pinned_bytes = prefix.iter().map(message_bytes).sum::<usize>();
     let checkpoint_budget = target.saturating_sub(pinned_bytes).saturating_sub(512);
     while checkpoint.to_string().len() > checkpoint_budget {
+        let commands = checkpoint["recent_command_diagnostics"]
+            .as_array_mut()
+            .unwrap();
+        if commands.len() > 2 {
+            commands.remove(0);
+            continue;
+        }
         let observations = checkpoint["retained_observations"].as_array_mut().unwrap();
         if observations.len() > 4 {
             observations.remove(0);
@@ -1111,7 +1191,7 @@ pub(crate) fn compact_transcript_observed(
     let summary_index = prefix.len();
     let summary = |checkpoint: &Value| {
         AgentModelMessage::User(format!(
-            "{COMPACTED_CONTEXT}{checkpoint}\nContinue toward the original task. Older observations were reduced; reread affected evidence if needed. A checkpoint or tool success does not establish goal completion."
+            "{COMPACTED_CONTEXT}{checkpoint}\nContinue the original task. Match command targets to their latest results. Reread only needed source ranges. These historical observations and successful tool calls do not establish goal completion."
         ))
     };
     prefix.push(summary(&checkpoint));
@@ -1169,6 +1249,100 @@ fn command_diagnostic_excerpt(observation: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn unchanged_command_result_is_not_progress_when_only_server_logs_change_revision() {
+        let mut progress = WorkProgress::default();
+        let mut tools = Vec::new();
+        for i in 0..14 {
+            tools.push(serde_json::from_value(json!({"id":format!("command-{i}"),"run_id":"run",
+                "name":"run_command","effect":"PROCESS","status":"COMPLETED","policy_decision":"ALLOW",
+                "arguments":{"program":"curl","argv":["-s","http://127.0.0.1:8000/"]},
+                "receipt":{"kind":"COMMAND","success":true,"exit_code":0,"stdout_sha256":"same-page",
+                    "stderr_sha256":"empty","workspace_revision":format!("log-write-{i}"),"duration_ms":i},
+                "error_code":null,"created_at":i,"updated_at":i})).unwrap());
+            progress.observe(&tools);
+        }
+        assert_eq!(progress.stalled_turns, 13);
+        assert!(progress.needs_search_replan());
+        let mut changed = tools.last().unwrap().clone();
+        changed.receipt.as_mut().unwrap()["stdout_sha256"] = json!("changed-page");
+        tools.push(changed);
+        progress.observe(&tools);
+        assert_eq!(
+            progress.stalled_turns, 0,
+            "new output remains useful evidence"
+        );
+    }
+
+    #[test]
+    fn repeated_compaction_keeps_command_target_with_latest_result_without_replay_authority() {
+        let mut messages = vec![AgentModelMessage::User(
+            "Build and verify the requested app, preserve input".into(),
+        )];
+        for (id, port, output) in [
+            ("old", 5000, "HTTP 403 Server: other-service"),
+            ("latest", 8000, "HTTP 200 Project page"),
+            ("newest", 8000, "HTTP 200 Project page"),
+        ] {
+            append_compaction_exchange(
+                &mut messages,
+                id,
+                "run_command",
+                json!({"kind":"COMMAND","success":true,"exit_code":0,"stdout_sha256":output}),
+                output,
+            );
+            let index = messages.len() - 2;
+            if let AgentModelMessage::Assistant { tool_calls, .. } = &mut messages[index] {
+                tool_calls[0].arguments =
+                    json!({"program":"curl","argv":["-s",format!("http://127.0.0.1:{port}/")]});
+            }
+        }
+        for pass in 0..3 {
+            for i in 0..8 {
+                append_compaction_exchange(
+                    &mut messages,
+                    &format!("read-{pass}-{i}"),
+                    "read_file",
+                    json!({"kind":"FILE_READ","path":"app.py","sha256":"same", "byte_start":0,"byte_end":12000}),
+                    &"source ".repeat(1800),
+                );
+            }
+            compact_transcript(&mut messages, json!({})).unwrap();
+            let summary = messages
+                .iter()
+                .find_map(|m| match m {
+                    AgentModelMessage::User(s) if s.starts_with(COMPACTED_CONTEXT) => Some(s),
+                    _ => None,
+                })
+                .unwrap();
+            let value = serde_json::Deserializer::from_str(&summary[COMPACTED_CONTEXT.len()..])
+                .into_iter::<Value>()
+                .next()
+                .unwrap()
+                .unwrap();
+            let commands = value["recent_command_diagnostics"].as_array().unwrap();
+            assert_eq!(commands.len(), 2);
+            assert_eq!(commands[1]["call_id"], "newest");
+            assert_eq!(commands[1]["command"]["argv"][1], "http://127.0.0.1:8000/");
+            assert!(
+                commands[1]["excerpt"]
+                    .as_str()
+                    .unwrap()
+                    .contains("HTTP 200 Project page")
+            );
+            assert!(summary.contains("historical observations"));
+        }
+    }
+
+    #[test]
+    fn command_checkpoint_does_not_retain_private_policy_or_large_inline_scripts() {
+        let args = json!({"program":"python3","argv":["-c","private-script".repeat(300)],"_command_policy":{"authority":"forged"}});
+        let projected = command_arguments(&args);
+        assert!(projected["argv_omitted"].is_string());
+        assert!(!projected.to_string().contains("private-script"));
+        assert!(!projected.to_string().contains("forged"));
+    }
 
     #[test]
     fn oversized_latest_exchange_cannot_drop_followup_or_scope() {

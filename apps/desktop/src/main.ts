@@ -1,4 +1,4 @@
-import { validateUpdateModelRuntime } from './validation';
+import { validatePrepareProviderSend, validateUpdateModelRuntime } from './validation';
 import { access, copyFile, mkdir, mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import { execFile, spawn } from 'node:child_process';
 import os from 'node:os';
@@ -9,6 +9,7 @@ import type { AgentRunView, ConversationMessageView, LibraryMediaKind, LibraryOb
 import type { LibraryImagePreviewView } from './workspace-types';
 import { BrowserRuntime } from './browser-runtime';
 import { AgentBrowserHost } from './agent-browser-host';
+import { startAgentWithReconciliation } from './agent-start';
 import { channels } from './channels';
 import { assertTrustedSender, isAllowedNavigation, trustedOriginFor } from './security';
 import { CoreProcessSupervisor } from './supervisor';
@@ -136,7 +137,7 @@ async function executeScheduledTask(task: ScheduledTaskView): Promise<string> {
     invocation_id: null,
     references: [],
   })) as ConversationMessageView;
-  const run = await durableMutation(() => supervisor.request('command.agent.start', {
+  const run = await durableMutation(() => startAgentWithReconciliation((method, params) => supervisor.request(method, params), {
     field_id: task.field_id,
     conversation_id: task.conversation_id,
     user_message_id: message.id,
@@ -210,7 +211,9 @@ function endStorageMaintenance(): void { storageMaintenance = false; }
 function handle(channel: string, validator: (payload: unknown) => unknown, method: string): void {
   ipcMain.handle(channel, async (event, payload) => {
     assertBridgeEvent(event);
-    const request = () => supervisor.request(method, validator(payload));
+    const request = () => method === 'command.agent.start'
+      ? startAgentWithReconciliation((method, params) => supervisor.request(method, params), validateStartAgent(payload))
+      : supervisor.request(method, validator(payload));
     return method.startsWith('command.') ? durableMutation(request) : request();
   });
 }
@@ -577,6 +580,7 @@ function registerBridgeHandlers(): void {
   handle(channels.providerDeleteCredential, validateProviderReference, 'command.provider.delete_credential');
   handle(channels.providerRemove, validateProviderReference, 'command.provider.remove_config');
   handle(channels.providerRuntimeUpdate, validateUpdateModelRuntime, 'command.provider.update_model_runtime');
+  handle(channels.providerPrepareSend, validatePrepareProviderSend, 'command.provider.prepare_send');
   handle(channels.providerValidate, validateProviderReference, 'command.provider.validate_model');
   handle(channels.providerProbe, validateProviderReference, 'command.provider.probe');
   ipcMain.handle(channels.providerCatalog, (event) => { assertBridgeEvent(event); return supervisor.request('query.provider.catalog'); });

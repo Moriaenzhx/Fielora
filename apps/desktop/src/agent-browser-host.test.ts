@@ -4,6 +4,85 @@ import test from 'node:test';
 import { AgentBrowserHost, browserHttpUrl, browserServerCommand } from './agent-browser-host.ts';
 import type { BrowserRuntime } from './browser-runtime';
 
+test('slow managed startup remains STARTING, duplicate start keeps ownership, status later listens', async () => {
+  const server = createServer();
+  const reservation = createServer();
+  await new Promise<void>(resolve => reservation.listen(0, '127.0.0.1', resolve));
+  const address = reservation.address(); assert.ok(address && typeof address !== 'string');
+  const port = address.port;
+  await new Promise<void>(resolve => reservation.close(() => resolve()));
+  let starts = 0, running = false;
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  let listen!: () => void;
+  const listening = new Promise<void>(resolve => { listen = resolve; });
+  const workspace = {
+    startAgentServer: async () => { starts++; running = true; timer = setTimeout(() => server.listen(port, '127.0.0.1', listen), 2300); return 'owned'; },
+    agentServerStatus: () => ({ status: running ? 'RUNNING' : 'STOPPED', output: '', exit_code: running ? null : 0 }),
+    stopAgentServer: async () => { running = false; if (timer) clearTimeout(timer); if (server.listening) await new Promise<void>(resolve => server.close(() => resolve())); },
+  };
+  const replies = new Map<string, (result: Record<string, unknown>) => void>();
+  const host = new AgentBrowserHost(() => { throw new Error('not a page action'); }, async (_, params) => {
+    const r = params as { request_id: string; result: Record<string, unknown> }; replies.get(r.request_id)!(r.result);
+  }, () => {}, () => workspace as unknown as import('./workspace-runtime').WorkspaceRuntime);
+  const url = `http://127.0.0.1:${port}/`;
+  const call = (id: string, action: string) => new Promise<Record<string, unknown>>(resolve => {
+    replies.set(id, resolve); host.handle({ request_id: id, run_id: 'slow', conversation_id: 'c', tool_call_id: id,
+      name: 'browser_server', project_root: 'project', field_id: 'field', arguments: { action, url, program: 'python3', argv: ['app.py'] } });
+  });
+  try {
+    const start = await call('start', 'start');
+    assert.equal(start.success, true); assert.equal(start.status, 'RUNNING'); assert.equal(start.readiness, 'STARTING');
+    assert.match(String(start.guidance), /WAS spawned/);
+    const duplicate = await call('duplicate', 'start');
+    assert.equal(duplicate.error_code, 'BROWSER_SERVER_ALREADY_RUNNING'); assert.equal(duplicate.status, 'RUNNING');
+    assert.equal(starts, 1); assert.equal(duplicate.input_state, 'NOT_DISPATCHED');
+    await listening;
+    const ready = await call('status', 'status');
+    assert.equal(ready.readiness, 'LISTENING'); assert.equal(ready.page_verified, false);
+    assert.match(String(ready.guidance), /SAME TCP probe/);
+  } finally { await workspace.stopAgentServer(); host.reset(); }
+});
+
+test('process exit during startup reports the exit, not an infinite starting state', async () => {
+  let observations = 0;
+  const workspace = {
+    startAgentServer: async () => 'failed', stopAgentServer: async () => {},
+    agentServerStatus: () => (++observations < 2 ? { status: 'RUNNING', output: '', exit_code: null }
+      : { status: 'FAILED', output: 'ImportError: missing module', exit_code: 1 }),
+  };
+  let finish!: (r: Record<string, unknown>) => void;
+  const result = new Promise<Record<string, unknown>>(resolve => { finish = resolve; });
+  const host = new AgentBrowserHost(() => { throw new Error('no browser'); }, async (_, params) => {
+    finish((params as { result: Record<string, unknown> }).result);
+  }, () => {}, () => workspace as unknown as import('./workspace-runtime').WorkspaceRuntime);
+  host.handle({ request_id: 'failed', run_id: 'failed', conversation_id: 'c', tool_call_id: 't', name: 'browser_server',
+    project_root: 'project', field_id: 'field', arguments: { action: 'start', program: 'python3', argv: ['app.py'], url: 'http://127.0.0.1:1/' } });
+  const receipt = await result;
+  assert.equal(receipt.success, false); assert.equal(receipt.service_phase, 'EXITED');
+  assert.equal(receipt.readiness, 'PROCESS_STOPPED'); assert.equal(receipt.exit_code, 1);
+  assert.match(String(receipt.output), /ImportError/); host.reset();
+});
+
+test('cancelling managed startup stops the newly owned process', async () => {
+  let starts = 0, stops = 0;
+  const workspace = {
+    startAgentServer: async () => { starts++; setTimeout(() => host.cancel('cancel-start'), 30); return 'owned'; },
+    agentServerStatus: () => ({ status: 'RUNNING', output: '', exit_code: null }),
+    stopAgentServer: async () => { stops++; },
+  };
+  let finish!: (r: Record<string, unknown>) => void;
+  const result = new Promise<Record<string, unknown>>(resolve => { finish = resolve; });
+  const host = new AgentBrowserHost(() => { throw new Error('no browser'); }, async (_, params) => {
+    finish((params as { result: Record<string, unknown> }).result);
+  }, () => {}, () => workspace as unknown as import('./workspace-runtime').WorkspaceRuntime);
+  host.handle({ request_id: 'cancel-start', run_id: 'cancel-start', conversation_id: 'c', tool_call_id: 't', name: 'browser_server',
+    project_root: 'project', field_id: 'field', arguments: { action: 'start', program: 'python3', argv: ['app.py'], url: 'http://127.0.0.1:1/' } });
+  const receipt = await result;
+  assert.equal(receipt.error_code, 'BROWSER_CANCELLED');
+  assert.equal(starts, 1); assert.equal(stops, 1);
+  host.reset();
+});
+
 test('desktop viewport is bounded and passed to the existing browser runtime', async () => {
   const calls: unknown[] = [], completed: { result: Record<string, unknown> }[] = [];
   const runtime = { executeAgent: async (_run: string, args: unknown) => { calls.push(args); return { success: true, viewport: { width: 1280, height: 900 } }; } } as unknown as BrowserRuntime;
@@ -52,6 +131,55 @@ test('development server arguments remain literal and reject shell programs', ()
   assert.equal(browserServerCommand({ program: 'node', argv: ["test'file.js", '$(secret); `echo x`'] }, 'win32'), "& 'node' 'test''file.js' '$(secret); `echo x`'");
   assert.throws(() => browserServerCommand({ program: 'powershell', argv: ['-Command', 'anything'] }));
   assert.throws(() => browserServerCommand({ program: 'node', argv: ['line\nbreak'] }));
+});
+
+test('Python server accepts observed interpreters and quotes paths without treating them as shell', () => {
+  for (const program of ['python', 'python3', '/usr/bin/python3', '/a project/.venv/bin/python3.12', '.venv/bin/python']) {
+    assert.ok(browserServerCommand({ program, argv: ['-u', 'app.py'] }, 'darwin').endsWith("'-u' 'app.py'"));
+  }
+  assert.equal(browserServerCommand({ program: 'C:\\A project\\.venv\\Scripts\\python.exe', argv: ['-u', 'app.py'] }, 'win32'), "& 'C:\\A project\\.venv\\Scripts\\python.exe' '-u' 'app.py'");
+  for (const program of ['bash', '/bin/sh', 'python3; echo x', '../bin/python3', 'python3\n', '']) {
+    assert.throws(() => browserServerCommand({ program, argv: ['app.py'] }, 'darwin'));
+  }
+});
+
+test('real Python managed server survives returned calls and is stopped only by its owner', { skip: process.platform === 'win32', timeout: 15000 }, async () => {
+  const { mkdtemp, writeFile, rm } = await import('node:fs/promises');
+  const { tmpdir } = await import('node:os');
+  const path = await import('node:path');
+  const { WorkspaceRuntime } = await import('./workspace-runtime.ts');
+  const root = await mkdtemp(path.join(tmpdir(), 'fielora-python-server-'));
+  const workspace = new WorkspaceRuntime(() => {});
+  const replies = new Map<string, (result: Record<string, unknown>) => void>();
+  const host = new AgentBrowserHost(() => { throw new Error('no page needed'); }, async (_, params) => {
+    const reply = params as { request_id: string; result: Record<string, unknown> };
+    replies.get(reply.request_id)!(reply.result);
+  }, () => {}, () => workspace);
+  let serial = 0;
+  const call = (args: Record<string, unknown>, run = 'owner') => new Promise<Record<string, unknown>>(resolve => {
+    const id = String(++serial); replies.set(id, resolve);
+    host.handle({ request_id: id, run_id: run, conversation_id: 'conv', tool_call_id: id, name: 'browser_server', arguments: args, project_root: root, field_id: 'field' });
+  });
+  try {
+    await writeFile(path.join(root, 'server.py'), "from http.server import HTTPServer, BaseHTTPRequestHandler\nclass Handler(BaseHTTPRequestHandler):\n def do_GET(self):\n  self.send_response(200)\n  self.end_headers()\n  self.wfile.write(b'python-managed')\ns = HTTPServer(('127.0.0.1', 0), Handler)\nprint('http://127.0.0.1:' + str(s.server_port), flush=True)\ns.serve_forever()\n");
+    assert.equal((await call({ action: 'start', program: 'python3', argv: ['-u', 'server.py'] })).success, true);
+    let status: Record<string, unknown> = {}, url = '';
+    const deadline = Date.now() + 8000;
+    while (!url && Date.now() < deadline) {
+      status = await call({ action: 'status' });
+      url = String(status.output).match(/http:\/\/127\.0\.0\.1:\d+/)?.[0] ?? '';
+      if (!url) await new Promise(resolve => setTimeout(resolve, 30));
+    }
+    assert.ok(url, JSON.stringify(status));
+    assert.equal(await (await fetch(url)).text(), 'python-managed');
+    const ready = await call({ action: 'status', url });
+    assert.equal(ready.readiness, 'LISTENING'); assert.equal(ready.verification_eligible, false);
+    await call({ action: 'stop' }, 'other-run');
+    assert.equal(await (await fetch(url)).text(), 'python-managed');
+    await call({ action: 'stop' });
+    while ((await call({ action: 'status', url })).status === 'RUNNING' && Date.now() < deadline) await new Promise(resolve => setTimeout(resolve, 20));
+    await assert.rejects(fetch(url));
+  } finally { host.reset(); workspace.dispose(); await rm(root, { recursive: true, force: true }); }
 });
 
 test('invalid cases and stale snapshots never reach the page backend', async () => {

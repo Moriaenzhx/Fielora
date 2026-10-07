@@ -9,6 +9,7 @@ pub mod artifact;
 pub mod asset;
 mod capability_catalog;
 mod command_diagnostics;
+pub mod command_policy;
 mod diagram;
 mod file;
 pub mod fonts;
@@ -1125,7 +1126,7 @@ impl PolicyEngine {
             (ReadOnly, WorkspaceWrite | Process | Network | Destructive) => Ask,
             (ReviewChanges, WorkspaceWrite) => Allow,
             (ReviewChanges, Process) => {
-                if dangerous_command(arguments) {
+                if dangerous_command(arguments) || !fielora_platform::command_sandbox::available() {
                     Ask
                 } else {
                     Allow
@@ -1761,6 +1762,20 @@ fn repository_files(root: &Path) -> Result<Vec<PathBuf>, AgentError> {
             .filter_map(|bytes| std::str::from_utf8(bytes).ok())
             .filter_map(|path| normalize_relative(path).ok())
             .filter(|path| !is_project_skill_bundle(path))
+            // Git can list an unignored venv and external symlinks. Apply the
+            // same dependency-directory boundary as the filesystem fallback;
+            // such entries are not project context and must not abort startup.
+            .filter(|path| {
+                !path.parent().is_some_and(|parent| {
+                    parent.components().any(|part| {
+                        ignored_directory(&part.as_os_str().to_string_lossy().to_ascii_lowercase())
+                    })
+                }) && root
+                    .join(path)
+                    .symlink_metadata()
+                    .is_ok_and(|m| m.is_file())
+                    && resolve_existing(root, path).is_ok()
+            })
             .take(MAX_REPO_FILES)
             .collect::<Vec<_>>();
         if !paths.is_empty() {
@@ -1974,6 +1989,7 @@ impl StaticCredentialMediator {
                 }
                 CredentialError::InvalidReference
                 | CredentialError::InvalidSize
+                | CredentialError::InteractionRequired
                 | CredentialError::Platform => ToolProviderError::ClassifiedFailure(
                     ToolProviderFailureKind::CredentialStoreFailed,
                 ),
@@ -2133,6 +2149,7 @@ pub struct ToolRuntime {
     checkpoint_root: PathBuf,
     skill_catalog: SkillCatalog,
     content_blob_store: Option<asset::ContentBlobStore>,
+    project_install_sandbox: bool,
 }
 
 impl ToolRuntime {
@@ -2156,6 +2173,7 @@ impl ToolRuntime {
             checkpoint_root,
             skill_catalog,
             content_blob_store: None,
+            project_install_sandbox: false,
         })
     }
 
@@ -3270,10 +3288,13 @@ impl ToolRuntime {
         }
         let mut argv = vec!["--no-pager".to_owned(), args.operation];
         argv.extend(args.args);
-        let mut result = self.run_command(
+        // Typed Git observation keeps its existing validated backend on every
+        // platform; the generic run_command sandbox is a separate route.
+        let mut result = self.run_command_internal(
             &json!({"program":"git","argv":argv,"timeout_ms":30_000}),
             false,
             cancellation,
+            false,
         )?;
         if let Some(object) = result.receipt.as_object_mut() {
             object.insert("kind".into(), json!("GIT_READ"));
@@ -3464,6 +3485,7 @@ impl ToolRuntime {
             &json!({"program":"git","argv":argv,"timeout_ms":120_000}),
             true,
             cancellation,
+            false,
         )?;
         if let Some(receipt) = result.receipt.as_object_mut() {
             receipt.insert("kind".into(), json!(kind));
@@ -3544,6 +3566,7 @@ impl ToolRuntime {
         capability_catalog::validate(arguments)?;
         let capabilities = json!({
             "coding":{"status":"AVAILABLE","tools":["files","exact patch","git read","controlled command","verification"]},
+            "command_execution":{"sandbox_available":fielora_platform::command_sandbox::available(),"sandbox_scope":"run_command only; project/private temporary writes; no read confidentiality","automatic_review_commands":"OS sandbox with network denied; unavailable enforcement requires approval","full_control":"ordinary commands use current-user host access; recognized project dependency installs use OS write sandbox with network allowed; global/system/unknown installation still needs approval","python_dependencies":"Create a project venv, then invoke its absolute Python path with -m pip install -r and a project requirements file; never assume system Python is a project environment"},
             "rich_file_read":{"status":"AVAILABLE","tool":"file.extract","formats":["PDF","DOCX","PPTX","XLSX"],"authority":"UNTRUSTED_PROJECT_CONTENT","limitations":["read/extract only","no OCR","no layout rendering","no formula evaluation"]},
             "artifact":{"status":"AVAILABLE","tools":["artifact.create","artifact.read","artifact.update","artifact.list","artifact.history","artifact.set_archive_state","artifact.export"],"types":["DOCUMENT","PRESENTATION","DIAGRAM","SPREADSHEET"],"persistence":"DURABLE_REVISION","catalog_and_history":"BOUNDED_METADATA_ONLY","archive":"REVERSIBLE_VISIBILITY_STATE"},
             "artifact_export":{"status":"AVAILABLE","tool":"artifact.export","formats":["DOCX","PPTX","SVG","XLSX"],"effect":"WORKSPACE_WRITE","persistence":["REQUEST_SCOPED","DURABLE_REVISION"],"presentation_png_assets":"DURABLE_EXACT_SNAPSHOT_CONTAIN","verification":"STRUCTURAL_AND_SEMANTIC_ROUNDTRIP_ONLY"},
@@ -3552,7 +3575,7 @@ impl ToolRuntime {
             "web_research":{"status":"UNSUPPORTED_CAPABILITY","tools":[],"reason":"No Web provider is registered in the built-in executor; routed execution reports the actual admitted catalog.","effect":"NETWORK","authority":"UNTRUSTED_WEB_CONTENT","limitations":["no download-to-workspace tool","no browser fallback","no deep research runtime"]},
             "skill_acquisition":{"status":"AVAILABLE","tools":["skills.search","skills.prepare","skills.install"],"scope":"Public GitHub repository discovery and complete public HTTPS ZIP Skill bundles","network_reachability_verified":false,"guidance":"Search or reuse an observed source, prepare the whole bundle, then install using the actual preparation tool_call_id and run verify_skill. A browser failure does not prove these network tools are unavailable. No automatic script execution."},
             "fonts":{"status":"AVAILABLE","tools":["fonts.list","fonts.prepare","fonts.install"],"scope":"Current-user system fonts; TTF/OTF/TTC up to 32 MiB; project-relative file or public HTTPS font; installation confirmation required"},
-            "tool_acquisition":{"status":"AVAILABLE","tools":["environment.inspect","tools.prepare","tools.install"],"providers":["node","ripgrep","https_zip"],"scope":"Windows x64 portable ZIPs into project .fielora/tools; discover compatible existing executables first","automatic_install":"Official provider, actual download <=20 MiB, isolated, no PATH/system changes or install scripts; existing network/read-only approval applies","other_installations":"Human confirmation required even with FullControl","limitations":["128 MiB compressed / 512 MiB expanded","no automatic scripts, MSI, global installation or private sources"]},
+            "tool_acquisition":{"status":"AVAILABLE","tools":["environment.inspect","tools.prepare","tools.install"],"providers":["node","ripgrep","https_zip"],"scope":"Windows x64 portable ZIPs into project .fielora/tools; discover compatible existing executables first","automatic_install":"Official provider, actual download <=20 MiB, isolated, no PATH/system changes or install scripts; existing network/read-only approval applies","other_installations":"Other tools.install acquisitions still require approval; run_command project dependency rules are in command_execution","limitations":["128 MiB compressed / 512 MiB expanded","no automatic scripts, MSI, global installation or private sources"]},
             "web_download":{"status":"PARTIAL","tools":["skills.prepare","tools.prepare"],"scope":"Complete public HTTPS ZIP into quarantine; separate install authorizes project publication","limitations":["32 MiB Skill archives / 128 MiB portable tool archives","no private credentials","not a general file downloader"]},
             "archive":{"status":"PARTIAL","tools":["skills.prepare","skills.install"],"scope":"Validated ZIP Skill directories only; path/link/collision and extraction limits enforced","limitations":["no TAR/RAR","no arbitrary extraction destination","no automatic scripts"]},
             "docx_pdf":{"status":"PARTIAL","reason":"bounded one-shot DOCX export and DOCX/PDF extraction are available; PDF export, editing, preview, and visual verification remain unsupported"},
@@ -4058,6 +4081,7 @@ impl ToolRuntime {
         approved_unsandboxed: bool,
         cancellation: &CommandCancellation,
     ) -> Result<ToolExecution, AgentError> {
+        self.verify_project_install(arguments)?;
         // Model-controlled Git mutations must use the typed Git tools above. An approval for a
         // generic process is not permission to smuggle an unbounded Git operation through argv.
         if git_mutation_arguments(arguments) {
@@ -4066,7 +4090,12 @@ impl ToolRuntime {
         if installation_command(arguments) && !approved_unsandboxed {
             return Err(AgentError::CommandDenied);
         }
-        self.run_command_internal(arguments, approved_unsandboxed, cancellation)
+        self.run_command_internal(
+            arguments,
+            approved_unsandboxed,
+            cancellation,
+            !approved_unsandboxed || self.project_install_sandbox,
+        )
     }
 
     fn run_command_internal(
@@ -4074,6 +4103,7 @@ impl ToolRuntime {
         arguments: &Value,
         approved_unsandboxed: bool,
         cancellation: &CommandCancellation,
+        sandbox_required: bool,
     ) -> Result<ToolExecution, AgentError> {
         #[derive(Deserialize)]
         #[serde(deny_unknown_fields)]
@@ -4102,7 +4132,24 @@ impl ToolRuntime {
         let cwd = resolve_command_cwd(&self.root, args.cwd.as_deref().unwrap_or("."))?;
         let started = Instant::now();
         let resolved_program = resolve_command_program(&args.program);
-        let mut command = sanitized_command(&resolved_program);
+        let sandbox = if sandbox_required {
+            Some(fielora_platform::command_sandbox::CommandSandbox::new(
+                &self.root,
+                self.project_install_sandbox,
+            ).map_err(|_| AgentError::WorkGuidance {
+                code: "AGENT_COMMAND_SANDBOX_UNAVAILABLE",
+                detail: "The required OS command sandbox is unavailable. This command was not launched; propose it again for explicit approval. Do not silently retry without the sandbox.".into(),
+            })?)
+        } else {
+            None
+        };
+        let mut command = if let Some(sandbox) = &sandbox {
+            let mut command = sanitized_command(sandbox.launcher());
+            sandbox.configure(&mut command, &resolved_program);
+            command
+        } else {
+            sanitized_command(&resolved_program)
+        };
         command
             .args(&args.argv)
             .current_dir(&cwd)
@@ -4204,7 +4251,9 @@ impl ToolRuntime {
                 "stderr_sha256":sha256(stderr.as_bytes()),
                 "stdout_truncated":stdout_truncated,
                 "stderr_truncated":stderr_truncated,
-                "execution_boundary":"CONTROLLED_WORKSPACE_EXECUTION"
+                "execution_boundary":if sandbox.is_some() { "MACOS_WORKSPACE_WRITE_SANDBOX" } else { "CURRENT_USER_HOST" },
+                "network_policy":if sandbox.is_some() && !self.project_install_sandbox { "DENIED" } else { "ALLOWED" },
+                "read_isolation":false
             }),
             observation,
         })
@@ -5826,6 +5875,44 @@ mod tests {
         fs::remove_dir_all(artifacts).ok();
     }
 
+    #[cfg(unix)]
+    #[test]
+    fn git_context_excludes_unignored_venv_and_external_links() {
+        let (root, artifacts) = fixture();
+        assert!(
+            Command::new("git")
+                .args(["init", "-q"])
+                .current_dir(&root)
+                .status()
+                .unwrap()
+                .success()
+        );
+        fs::create_dir_all(root.join(".venv/bin")).unwrap();
+        fs::write(
+            root.join(".venv/pyvenv.cfg"),
+            "include-system-site-packages = false",
+        )
+        .unwrap();
+        std::os::unix::fs::symlink("/usr/bin/python3", root.join(".venv/bin/python3")).unwrap();
+        fs::create_dir_all(&artifacts).unwrap();
+        fs::write(artifacts.join("outside.txt"), "not project context").unwrap();
+        std::os::unix::fs::symlink(artifacts.join("outside.txt"), root.join("outside.txt"))
+            .unwrap();
+        let context = ContextCompiler::default()
+            .compile(&root, "read project", &[])
+            .unwrap();
+        assert!(!context.files.is_empty());
+        assert!(
+            context
+                .files
+                .iter()
+                .all(|f| !f.path.starts_with(".venv") && f.path != "outside.txt")
+        );
+        assert!(!context.rendered.contains("not project context"));
+        fs::remove_dir_all(root).unwrap();
+        fs::remove_dir_all(artifacts).unwrap();
+    }
+
     #[test]
     fn file_tools_preserve_unicode_space_paths_and_utf8_observations() {
         let (root, artifacts) = fixture();
@@ -6351,7 +6438,7 @@ mod tests {
         assert_eq!(result.receipt.get("success"), Some(&json!(false)));
         assert_eq!(
             result.receipt.get("execution_boundary"),
-            Some(&json!("CONTROLLED_WORKSPACE_EXECUTION"))
+            Some(&json!("CURRENT_USER_HOST"))
         );
         assert!(redact_output("token=abc\nsk-abcdefghijklmnopqrstuvwxyz").contains("[REDACTED"));
         fs::remove_dir_all(root).unwrap();

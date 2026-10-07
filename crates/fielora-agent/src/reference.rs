@@ -184,6 +184,7 @@ impl ToolRuntime {
             relative_text(relative)
         });
         let scoped = Self {
+            project_install_sandbox: false,
             root: root.to_owned(),
             reference_paths: vec![],
             checkpoint_root: self.checkpoint_root.clone(),

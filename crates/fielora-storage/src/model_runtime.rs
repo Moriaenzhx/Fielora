@@ -191,7 +191,7 @@ mod tests {
         // Reverse only the new additive table in this disposable fixture to reproduce schema 16.
         let mut db = open_connection(&paths.database).unwrap();
         db.execute_batch(
-            "ALTER TABLE provider_configs DROP COLUMN model_optimization; DROP TABLE model_runtime_settings; DELETE FROM schema_migrations WHERE version>=17;",
+            "ALTER TABLE provider_configs DROP COLUMN model_optimization; DROP TABLE model_runtime_settings; DROP TABLE local_credentials; DELETE FROM schema_migrations WHERE version>=17;",
         )
         .unwrap();
         assert_eq!(

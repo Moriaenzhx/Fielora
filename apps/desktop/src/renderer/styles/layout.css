@@ -346,11 +346,11 @@ body[data-sidebar-collapsed="true"] .project-layout.workspace-open.dock-focused 
   min-height: 40px;
   padding-block: 2px;
   padding-left: calc(var(--fl-space-3) + var(--fl-space-4));
-  padding-right: max(144px, calc((100% - var(--fl-layout-page-width)) / 2));
+  padding-right: max(var(--environment-header-inset, 144px), calc((100% - var(--fl-layout-page-width)) / 2));
 }
 
 .project-layout.workspace-open .conversation-context-header {
-  padding-right: 60px;
+  padding-right: var(--environment-header-inset, 60px);
 }
 
 .conversation-heading {
@@ -424,6 +424,29 @@ body[data-sidebar-collapsed="true"] .project-layout.workspace-open.dock-focused 
 .project-context-controls[hidden] {
   display: none;
 }
+
+/* A wide conversation uses spare space for changes; the resource dock still
+ * owns its own pane. Keep reading and composing in the same remaining rail. */
+.conversation-column.has-environment-panel { --environment-rail-width: 344px; }
+.conversation-column.has-environment-panel .message-list { width: calc(100% - var(--environment-rail-width)); }
+.conversation-column.has-environment-panel .conversation-composer,
+.conversation-column.has-environment-panel .queued-follow-up-stack {
+  right: var(--environment-rail-width);
+  width: min(calc(100% - var(--environment-rail-width) - 2 * var(--fl-layout-conversation-gutter)), var(--fl-layout-conversation-reading));
+}
+.conversation-column.has-environment-panel .latest-answer-button { left: calc((100% - var(--environment-rail-width)) / 2); }
+.conversation-column > .environment-panel {
+  position: absolute;
+  top: 58px;
+  right: 20px;
+  left: auto;
+  width: 304px;
+  max-height: calc(100% - 78px);
+  border-radius: var(--fl-radius-card);
+  box-shadow: var(--fl-shadow-subtle);
+}
+/* Reserve exactly the inline summary width so long titles never paint below it. */
+.desktop-work-area:has(.environment-summary) { --environment-header-inset: 460px; }
 
 /* Turn markers stay in the pane gutter, outside the reading/composer rail. */
 .conversation-turn-navigation {

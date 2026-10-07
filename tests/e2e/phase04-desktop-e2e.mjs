@@ -125,7 +125,7 @@ try {
   await wait(cdp, `document.querySelector('[data-testid="project-workspace"]')`);
   await cdp.eval(`document.querySelector('[data-testid="now-nav"]').click()`);
   await wait(cdp, `document.querySelector('[data-testid="now-screen"]')`);
-  assert.equal((await cdp.eval('window.fielora.core.getHealth()')).schema_version, 18);
+  assert.equal((await cdp.eval('window.fielora.core.getHealth()')).schema_version, 19);
 
   ids = await cdp.eval(`(async()=>{
     const provider=await window.fielora.provider.create({provider_kind:'OPENAI_COMPATIBLE',display_name:'Phase 04 Fixture',base_url:'https://example.com/v1',default_model:'__fielora_fixture__',custom_endpoint_acknowledged:true});
@@ -201,7 +201,7 @@ try {
 
   await writeFile(path.join(evidence, `${mode.toUpperCase()}_PHASE_04_ACCEPTANCE.json`), `${JSON.stringify({
     status: 'PASS',
-    schema_version: 18,
+    schema_version: 19,
     checks: [
       'provider_config', 'wincred_write_read_delete', 'fixture_started_delta_usage_completed',
       'fixture_started_cancelled', 'fixture_started_failed_stable_error', 'context_core_reread',

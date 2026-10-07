@@ -210,3 +210,15 @@ Work Scope & Goal 纳入 L4，相关权限与验收仍分别归 L7/L8。
 IDR 已退出生产运行链路，保留历史代码/数据/迁移与实验测试。
 旧八域和七域为历史组织口径，当前使用 Harness 九层。Agent Profile、当前用户约束和
 对话历史不依赖 IDR；Memory 为跨域语义。此次架构文档调整不新增权限、状态、迁移或运行时。
+
+
+## 2026-10-03 — Local credential storage amendment
+
+2026-10-04 follow-up: trusted `command.provider.prepare_send` checks lifecycle, model/protocol, saved parameters and actual credential readability through the same store before the UI creates a conversation or submits a user message. It returns no credential bytes and makes no model request; start/resume retain their own checks. This is local admission, not a remote connectivity guarantee. See `PROVIDER_SEND_PREFLIGHT_CHANGE_IMPACT_V0.1.md`.
+
+At the user's explicit request, production CredentialStore uses the existing SQLite StorageWorker (migration0019). Keys are device-local, excluded from public DTOs, tool evidence, sync and portable snapshots (including VACUUM). Local databases/backups contain credentials and use owner-only Unix file permissions; this is not database encryption. OS adapters provide noninteractive legacy migration only. Failed legacy authentication asks for the API Key to be saved again, never an OS password. This overrides the previous WinCred-only requirement; see LOCAL_CREDENTIALS_CHANGE_IMPACT_V0.1.md.
+
+
+### 2026-10-05 macOS Agent command boundary
+
+The existing platform/process backend now provides an optional macOS Seatbelt write/network boundary for run_command. Automatically allowed ReviewChanges commands restrict writes to Project/private temp and deny network; recognized FullControl project dependency installs restrict writes with network allowed. Reads remain allowed; ordinary FullControl and explicitly approved commands run on the current-user host. This does not cover independent process tools or implement a Windows sandbox. Missing enforcement asks/fails rather than falling back. See the Agent architecture amendment and AE-027 for exact routing and verification boundaries.

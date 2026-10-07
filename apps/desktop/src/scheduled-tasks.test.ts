@@ -61,6 +61,8 @@ test('scheduled execution reuses the existing Conversation message and AgentRun 
   assert.ok(start >= 0 && end > start);
   const executor = main.slice(start, end);
   assert.match(executor, /supervisor\.request\('command\.conversation\.message\.create'/);
-  assert.match(executor, /supervisor\.request\('command\.agent\.start'/);
+  assert.match(executor, /startAgentWithReconciliation/);
+  const startCommand = readFileSync(path.join(import.meta.dirname, 'agent-start.ts'), 'utf8');
+  assert.match(startCommand, /request\('command\.agent\.start'/);
   assert.doesNotMatch(executor, /new\s+(?:Agent|Core|Runtime)/);
 });

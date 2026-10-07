@@ -250,6 +250,8 @@ export type UpdateProviderConfigRequest = { model_optimization?: boolean, provid
 
 export type ProviderConfigRequest = { provider_config_id: ProviderConfigId, };
 
+export type PrepareProviderSendRequest = { provider_config_id: ProviderConfigId, model_id: string | null, };
+
 export type StoreCredentialRequest = { provider_config_id: ProviderConfigId, secret: string, };
 
 export type ModelIntent = "ASK" | "CONTINUE";

@@ -1,4 +1,5 @@
 import type { AgentEventView, AgentRunView, AgentToolCallView } from '@fielora/contracts';
+import { providerResponseReason } from './provider-response-errors.ts';
 
 /** Thinking requires an unfinished model invocation, never just an empty tool snapshot. */
 export function agentModelIsActive(events: readonly AgentEventView[], tools: readonly AgentToolCallView[]): boolean {
@@ -237,6 +238,19 @@ export function toolDetail(tool: AgentToolCallView): string {
   return (detail || toolTitle(tool.name)).slice(0, 140);
 }
 
+export function commandApprovalReason(tool: AgentToolCallView | null): string | null {
+  if (tool?.name !== 'run_command') return null;
+  const args = tool.arguments && typeof tool.arguments === 'object' ? tool.arguments as Record<string, unknown> : {};
+  const policy = args._command_policy && typeof args._command_policy === 'object' ? args._command_policy as Record<string, unknown> : {};
+  const reasons: Record<string, string> = {
+    INSTALLATION_REQUIRES_APPROVAL: '这项安装尚未确认限定在项目环境内，因此需要批准。Python 项目应优先使用项目虚拟环境安装依赖。批准后以当前用户权限运行，不使用命令沙箱。',
+    SANDBOX_UNAVAILABLE: '当前系统无法提供此命令需要的执行隔离。批准后将以当前用户权限运行，不使用命令沙箱。',
+    REQUEST_APPROVAL: '当前选择“请求批准”，运行命令需要你确认。批准仅对本次命令有效。',
+    RISKY_COMMAND: '此命令超出当前自动执行规则，需要你确认。批准后将以当前用户权限运行，不使用命令沙箱。',
+  };
+  return reasons[String(policy.reason)] ?? '这是此前保存的命令审批。批准仅对本次命令有效，将以当前用户权限运行，不使用命令沙箱。';
+}
+
 export function approvalActionLabel(tool: AgentToolCallView | null): string {
   if (!tool) return '允许一次';
   if (tool.name === 'mcp.activate_connection') return '允许此 Run 启动';
@@ -304,7 +318,7 @@ function phaseDetail(tools: AgentToolCallView[]): string {
 }
 
 function failureNarrative(errorCode: string | null, changedFiles: number): string {
-  const cause = ({
+  const cause = providerResponseReason(errorCode) ?? ({
     PROVIDER_MODEL_MISMATCH: '模型与协议不匹配。请在模型配置中编辑连接，选择对应服务商和套餐后重试。',
     MODEL_CONFIGURATION_UNSUPPORTED: '模型服务或推理设置已变化，无法沿用此任务的配置。请检查模型设置后创建新任务。',
     PROVIDER_PROTOCOL_ERROR: '模型服务没有接受或没有正确返回本次请求。',
@@ -520,23 +534,39 @@ function canonicalNarrative(payload: CanonicalPhasePayload, run: AgentRunView, c
   return { headline: '正在整理结果', narrative: '修改和验证已经完成，正在整理可核对的结果。' };
 }
 
+// Waiting for a user is not execution time. Derive the union of pause and
+// approval intervals from the existing ledger so reopening/reloading a Run
+// gives the same result as watching it live.
+export function agentActiveDurationMs(run: AgentRunView, events: readonly AgentEventView[], now = Date.now()): number {
+  const end = Math.max(run.created_at, run.finished_at ?? (['COMPLETED', 'FAILED', 'CANCELLED', 'PAUSED', 'WAITING_APPROVAL'].includes(run.status) ? run.updated_at : now));
+  const waits = new Set<'pause' | 'approval'>();
+  let waitingAt: number | null = null;
+  let waitingMs = 0;
+  for (const event of [...events].sort((a, b) => a.sequence - b.sequence)) {
+    if (event.run_id !== run.id || event.created_at > end) continue;
+    const at = Math.max(run.created_at, event.created_at);
+    if (event.kind === 'RUN_PAUSED') waits.add('pause');
+    else if (event.kind === 'APPROVAL_REQUESTED') waits.add('approval');
+    else if (event.kind === 'RUN_RESUMED') waits.delete('pause');
+    else if (event.kind === 'APPROVAL_RESOLVED') waits.delete('approval');
+    else continue;
+    if (waits.size > 0 && waitingAt === null) waitingAt = at;
+    if (waits.size === 0 && waitingAt !== null) {
+      waitingMs += Math.max(0, at - waitingAt);
+      waitingAt = null;
+    }
+  }
+  if (waitingAt !== null) waitingMs += Math.max(0, end - waitingAt);
+  return Math.max(0, end - run.created_at - waitingMs);
+}
+
 export function buildAgentPresentation(
   run: AgentRunView,
   events: readonly AgentEventView[],
   tools: readonly AgentToolCallView[],
   now = Date.now(),
 ): AgentPresentation {
-  const finishedAt = run.finished_at ?? (['COMPLETED', 'FAILED', 'CANCELLED', 'PAUSED'].includes(run.status) ? run.updated_at : now);
-  let pausedAt: number | null = null;
-  let pausedMs = 0;
-  for (const event of events) {
-    if (event.kind === 'RUN_PAUSED' && pausedAt === null) pausedAt = event.created_at;
-    if (event.kind === 'RUN_RESUMED' && pausedAt !== null) {
-      pausedMs += Math.max(0, event.created_at - pausedAt); pausedAt = null;
-    }
-  }
-  if (pausedAt !== null) pausedMs += Math.max(0, finishedAt - pausedAt);
-  const elapsed = formatElapsed(Math.max(0, finishedAt - run.created_at - pausedMs));
+  const elapsed = formatElapsed(agentActiveDurationMs(run, events, now));
   const completedMutations = tools.filter((tool) =>
     tool.status === 'COMPLETED' && (tool.effect === 'WORKSPACE_WRITE' || tool.effect === 'DESTRUCTIVE'),
   );
@@ -623,7 +653,7 @@ export function agentPausePresentation(run: AgentRunView): { reason: string; act
   const reasons: Record<string, string> = {
     PROVIDER_MODEL_MISMATCH: '模型与协议不匹配。请在模型配置中编辑连接，选择对应服务商和套餐后重试。',
     MODEL_CONFIGURATION_UNSUPPORTED: '模型服务或推理设置已变化，无法沿用此任务的配置。请检查模型设置后创建新任务。',
-    PROVIDER_PROTOCOL_ERROR: '模型响应异常，自动重试后仍未恢复。已有修改和执行记录已保存，可从中断处继续。',
+    PROVIDER_PROTOCOL_ERROR: '模型响应未能解析。旧运行只记录了通用错误，无法确定具体原因。可重试；新版会记录具体的响应失败类型。',
     PROVIDER_REQUEST_REJECTED: '模型服务拒绝了请求，具体原因尚未确认。进展已保存，可继续当前步骤；错误状态见执行记录。',
     PROVIDER_INVALID_MESSAGES: '模型服务拒绝了消息或工具调用的格式。进展已保存，请使用新版客户端继续；持续失败时检查服务兼容性。',
     PROVIDER_IMAGE_REJECTED: '模型服务无法接收或解析这次图片。请检查图片格式和当前模型的图片能力；原任务与附件仍保留。',
@@ -643,12 +673,13 @@ export function agentPausePresentation(run: AgentRunView): { reason: string; act
     AGENT_REFERENCED_IMAGES_UNAVAILABLE: '历史图片未能读取，任务已暂停。点击继续工作会重新尝试恢复本对话中的原图。',
     AGENT_REFERENCE_READ_REQUIRED: '指定的参考源码尚未读取，无法完成对照。进展已保存；继续后将读取参考文件并验证目标修改。',
     AGENT_VERIFICATION_REQUIRED: '尚未通过与需求对应的验证，模型连续未补充检查或修正动作，任务已暂停。进展已保存，可继续完成检查。',
+    AGENT_OUTCOME_EVIDENCE_INVALID: '模型提交的完成依据未通过校验，任务尚未完成。请查看上方具体原因；继续后需要修正依据并补充必要验证。',
     AGENT_BROWSER_LOGIN_REQUIRED: '需要你在右侧浏览器完成登录。请勿在对话中发送密码；登录后点击继续工作，Agent 将重新检查页面并接着验证。已有修改已保存，任务尚未完成。',
     AGENT_BROWSER_OUTCOME_REVIEW_REQUIRED: '之前的浏览器输入缺少可信结果，任务仍未完成，已有修改已保存。为避免重复提交，Agent 没有重放操作；需要先核对该操作在页面中的实际结果。',
     AGENT_RECOVERY_REQUIRED: '有操作的结果尚不明确，继续前将先核对执行结果。',
   };
   return {
-    reason: reasons[run.error_code ?? ''] ?? '工作已暂停，进展已保存。',
+    reason: providerResponseReason(run.error_code) ?? reasons[run.error_code ?? ''] ?? '工作已暂停，进展已保存。',
     action: exhausted ? `继续工作（增加 ${extra} 步）` : '继续工作',
     canResume: true,
   };

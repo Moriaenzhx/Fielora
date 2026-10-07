@@ -236,6 +236,7 @@
   --fl-color-icon: #505761;
   --fl-color-icon-muted: #777f89;
   --fl-color-link: color-mix(in srgb, var(--fl-color-accent) 82%, #173e89);
+  --fl-color-result-link: #245aa6;
 
   /* Borders and focus */
   --fl-color-border-subtle: #eceef1;
@@ -377,6 +378,7 @@
   --fl-color-icon: #d0d5dd;
   --fl-color-icon-muted: #929ba8;
   --fl-color-link: color-mix(in srgb, var(--fl-color-accent) 65%, #b8ceff);
+  --fl-color-result-link: #93b9ff;
   --fl-color-border-subtle: #24272d;
   --fl-color-border: #30343c;
   --fl-color-border-soft: #2c3037;

@@ -46,6 +46,7 @@
   backdrop-filter: var(--fl-effect-backdrop-floating);
 }
 
+.environment-panel[data-surface="floating"],
 .conversation-composer[data-surface="floating"] {
   box-shadow: inset 0 1px 0 var(--fl-effect-edge-highlight), var(--fl-shadow-surface);
 }

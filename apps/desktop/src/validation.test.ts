@@ -195,3 +195,13 @@ test('model runtime ingress rejects invented modes, fields and budgets', async (
   assert.throws(() => validateUpdateModelRuntime({...value,expected_revision:-1}));
   assert.throws(() => validateUpdateModelRuntime({...value,expected_provider_revision:0}));
 });
+
+test('send preflight accepts only provider and bounded model identity', async () => {
+  const { validatePrepareProviderSend } = await import('./validation.ts');
+  const value = { provider_config_id: fieldId, model_id: 'qwen3.7-plus' };
+  assert.deepEqual(validatePrepareProviderSend(value), value);
+  assert.equal(validatePrepareProviderSend({ provider_config_id: fieldId }).model_id, null);
+  for (const patch of [{ model_id: '' }, { model_id: 'x'.repeat(257) }, { model_id: 5 }, { secret: 'forbidden' }, { task: 'forbidden' }, { provider_config_id: '../invalid' }]) {
+    assert.throws(() => validatePrepareProviderSend({ ...value, ...patch }));
+  }
+});

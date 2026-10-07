@@ -612,7 +612,7 @@ Core 下发官方端点与精确模型目录、能力声明和适用推理选项
 
 ## 2026-10-02 外观简化
 
-当前只提供浅色外观，取消模式选择区，历史 SYSTEM/DARK 偏好归一至 LIGHT，系统切换不影响产品配色。此前 Light/Dark 双模式条款不再控制当前 UI。自定义背景、字体和对比度继续保留。右上角工具区默认透明，区域悬停、键盘聚焦或菜单展开时显示；不改变命中区域、快捷键和工作区 ownership。应用最底层及圆角使用同一 Brand Chrome 配色，不增加黑色外框。macOS 原生窗口阴影由系统管理。
+当前只提供浅色外观，取消模式选择区，历史 SYSTEM/DARK 偏好归一至 LIGHT，系统切换不影响产品配色。此前 Light/Dark 双模式条款不再控制当前 UI。自定义背景、字体和对比度继续保留。右上角工具区曾采用默认透明、悬停显示；2026-10-07 按用户反馈改为常显，详见后文环境信息修订。应用最底层及圆角使用同一 Brand Chrome 配色，不增加黑色外框。macOS 原生窗口阴影由系统管理。
 
 
 ## 2026-10-02 可选半透明侧栏
@@ -636,8 +636,33 @@ macOS 左上角红黄绿窗口控制改为 Electron 原生 customButtonsOnHover�
 
 macOS translucentSidebar=true 时仅由系统 vibrancy 提供窗后模糊，网页侧 Chrome/Floating/Overlay/Dim 的 backdrop-filter 解析为 none，浮层和菜单使用对应 solid surface。这避免对话输入框的额外网页模糊与原生合成叠加；仍保留侧栏透明、统一罩色及正文不透明。没有启用原生磨砂的平台/状态不变。Logo 是静态品牌标识，不显示操作按钮的 hover 底色。侧栏交互按钮仍使用统一 Brand Chrome hover/active token。
 
-用户随后明确恢复红黄绿按钮的默认逻辑，覆盖此前 customButtonsOnHover 要求：使用 hidden titlebar 下的原生常显窗口控件，系统管理悬停符号和关闭/最小化/全屏行为。右上角应用工具按钮的 hover 逻辑不变。
+用户随后明确恢复红黄绿按钮的默认逻辑，覆盖此前 customButtonsOnHover 要求：使用 hidden titlebar 下的原生常显窗口控件，系统管理悬停符号和关闭/最小化/全屏行为。当时未改右上角应用工具按钮；其显示逻辑由 2026-10-07 修订替代。
 
 ### 2026-10-03 — Collection pages and installed fonts
 
 Library and Scheduled pages share a bounded content rail, compact title/action header, aligned pill filters and compact search, and a centered empty state with a direct first action. Avoid implementation terminology in empty states. Preserve scroll and narrow-width wrapping. Appearance font choices come from installed system families, with searchable lists, explicit unavailable legacy choices, UI/code previews and a native font import action. Font import targets the current OS user's font directory; Agent installation shares the existing one-shot approval presentation with actual family/source/hash/destination. macOS system-default typography includes Apple UI/monospace fallbacks.
+
+### 2026-10-07 终态结果优先与操作详情（用户四图修订）
+
+用户要求有结果时默认收起全部过程。本条替代此前“不在外部再套总折叠”的终态规则：已完成、失败、取消的 AgentTurn 顶部使用“用时 …”按钮，默认收起同一条完整时间流，可鼠标或键盘展开；最终 Markdown、错误说明及文件交付卡始终在折叠区外。运行中、暂停待补充和待审批继续直接显示，不把当前需要用户处理的动作藏进终态历史。展开选择是视图状态，不修改 Run/Event，也不触发模型总结或删除记录。
+
+操作详情使用细边框圆角面板，标题/状态、紧凑键值信息、命令/输出分区；代码区域限高240px并独立滚动，默认收起原始回执。复制仍只使用既有脱敏 DTO；没有新增原始日志读取。最终交付引用显示文件/网页/图片语义图标及独立蓝色 result-link token，避免随中性 Action Color 变成灰色正文；真实 typed reference 沿原安全打开流程，兼容过程文件链接仍须有成功 read_file hash。文件卡顶部保留文件数、汇总增删行数、审核与受控撤销，默认三行及展开更多不变。用户截图中的现有交付链接已是 typed reference，问题主要是视觉识别度；补齐 activityFiles 是对旧过程型链接的兼容修复。
+
+本次呈现调整不改变“验证通过”的 Core 判定或给历史业务结果背书；独立验收发现测试覆盖缺口时，必须另行报告，不在 Renderer 伪造结果状态。
+
+
+### 2026-10-07 环境信息响应式展示与稳定工具入口
+
+有实际任务文件变更或 Git 工作区变更时，对话区域宽度达到 1120px 且资源 Dock 关闭，自动在右侧空余区域展示环境信息卡；卡片占用独立阅读边栏，正文、输入框、排队消息及回到底部按钮沿剩余区域对齐。可通过环境按钮收起/重新展开。820–1119px 显示顶部变更、本地与分支摘要；更窄时保留环境菜单入口。判断依据为实际对话区域，随导航宽度和右侧 Dock 变化，不仅依据窗口大小。无变更时不自动占用边栏。
+
+右上角环境、终端及 Dock 控件常显，取消两个独立 hover 区域造成的间隙隐藏；扩展按钮仅在工具区打开时出现，资源专注模式隐藏已不在屏幕上的对话控件，设置页保留自身路由边界。顶部长标题与摘要各有宽度，长分支省略并保留完整提示。
+
+顶部摘要的红绿增删是“审核任务变更”直接入口，打开与当前展示统计对应的任务 Diff，包含历史任务；只有 Git 工作区计数时直接在终端查看 Git 状态。本地/分支文字仅展示信息。右侧环境按钮独立控制环境信息卡或菜单，不让这两个入口重复展开同一菜单。菜单中的任务改动入口复用相同审核定位，无任务改动时禁用。
+
+环境信息进入 Project 时读取，窗口重新聚焦、任务状态/终端状态变化、显式刷新以及前台每 15 秒刷新；请求去重、切换 Project 后丢弃旧返回。刷新期间保留已有内容，失败不显示虚假零变更。任务的红绿增删读取既有 Review；Git 工作区计数仍读取 git status，不能把任务行数冒充全部 Git 差异。菜单和常驻卡复用相同内容/动作；提交、推送仍只准备待发送草稿，未新增 PR 执行或权限。
+
+### 2026-10-07 对话留白与文件审核卡比例
+
+正文、结果卡、输入框与排队消息共享阅读宽度和两侧留白；最大阅读宽度保持 920px，两侧留白随对话区域宽度在 20–48px 之间变化，避免中等窗口贴边铺满。环境信息卡展开时仍从实际阅读区域扣除其占位，不挤压或覆盖正文。
+
+文件审核卡使用紧凑的 38px 图标、约 64px 的头部、至少 36px 的文件行；标题采用正文尺寸，文件路径、增删数及操作采用标签尺寸，跟随全局字体偏好缩放。保持审核/撤销入口、默认三行、展开更多及长路径省略提示。卡片完整内容和底部动作必须可滚动到输入框上方；仅调整视觉密度，不改变结果或审核语义。

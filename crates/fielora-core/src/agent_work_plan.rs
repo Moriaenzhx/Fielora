@@ -17,7 +17,12 @@ pub fn catalog() -> ToolSpec {
             input_schema: json!({"type":"object","properties":{
                 "write_paths":{"type":"array","minItems":1,"maxItems":16,"items":{"type":"string","maxLength":256}},
                 "preserve":{"type":"array","minItems":1,"maxItems":8,"items":{"type":"string","maxLength":300}},
-                "criteria":{"type":"array","minItems":1,"maxItems":8,"items":{"type":"object","properties":{"id":{"type":"string","maxLength":80},"expected":{"type":"string","maxLength":300}},"required":["id","expected"],"additionalProperties":false}},
+                "criteria":{"type":"array","minItems":1,"maxItems":8,"items":{"type":"object","properties":{"id":{"type":"string","maxLength":80},"expected":{"type":"string","maxLength":300},
+                    "result":{"type":"object","description":"Optional per-case result. Keep stable IDs. A passed result needs a successful current eligible verification receipt and relevant source/test/fixture input_paths. Shell exit 0 or printed PASS is insufficient. Omit unchanged results to retain them; changed inputs become stale. This records evidence, not proof of coverage or task completion.","properties":{
+                        "outcome":{"type":"string","enum":["pending","passed","failed"]},"actual":{"type":"string","maxLength":600},
+                        "tool_call_id":{"type":"string","maxLength":128},"input_paths":{"type":"array","minItems":1,"maxItems":8,"items":{"type":"string","maxLength":256}}
+                    },"required":["outcome","actual"],"additionalProperties":false}
+                },"required":["id","expected"],"additionalProperties":false}},
                 "evidence":{"type":"array","maxItems":6,"items":{"type":"object","properties":{"tool_call_id":{"type":"string"},"quote":{"type":"string","minLength":8,"maxLength":1000},"line_start":{"type":"integer","minimum":1},"line_end":{"type":"integer","minimum":1},"interpretation":{"type":"string","maxLength":300}},"required":["tool_call_id","interpretation"],"additionalProperties":false}},
                 "next_step":{"type":"object","properties":{"kind":{"type":"string","enum":["inspect","edit","verify"]},"action":{"type":"string","maxLength":300}},"required":["kind","action"],"additionalProperties":false},
                 "reason":{"type":"string","maxLength":600}
@@ -44,6 +49,17 @@ struct Plan {
 struct Criterion {
     id: String,
     expected: String,
+    #[serde(default)]
+    result: Option<CheckResult>,
+}
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct CheckResult {
+    outcome: String,
+    actual: String,
+    tool_call_id: Option<String>,
+    #[serde(default)]
+    input_paths: Vec<String>,
 }
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -104,11 +120,22 @@ pub fn projection(tools: &[AgentToolCallView]) -> Option<Value> {
         .cloned()
 }
 
+#[cfg(test)]
 pub fn execute(
     runtime: &ToolRuntime,
     arguments: &Value,
     tools: &[AgentToolCallView],
     cancellation: &CommandCancellation,
+) -> Result<ToolExecution, AgentError> {
+    execute_checked(runtime, arguments, tools, cancellation, None)
+}
+
+pub fn execute_checked(
+    runtime: &ToolRuntime,
+    arguments: &Value,
+    tools: &[AgentToolCallView],
+    cancellation: &CommandCancellation,
+    current_revision: Option<&str>,
 ) -> Result<ToolExecution, AgentError> {
     let plan: Plan =
         serde_json::from_value(arguments.clone()).map_err(|_| AgentError::ToolArgumentsInvalid)?;
@@ -215,14 +242,215 @@ pub fn execute(
     projected["advisory"] = json!(true);
     projected["evidence_issues"] = json!(issues);
     projected.as_object_mut().unwrap().remove("evidence");
+    let previous = projection(tools);
+    for (index, criterion) in plan.criteria.iter().enumerate() {
+        let target = &mut projected["criteria"][index];
+        if let Some(result) = &criterion.result {
+            if !matches!(result.outcome.as_str(), "pending" | "passed" | "failed")
+                || !bounded(&result.actual, 1800)
+                || result.input_paths.len() > 8
+                || result.input_paths.iter().any(|p| !relative(p))
+            {
+                return Err(AgentError::ToolArgumentsInvalid);
+            }
+            let evidence = result
+                .tool_call_id
+                .as_ref()
+                .and_then(|id| tools.iter().find(|t| t.id.0 == *id));
+            let receipt = evidence.and_then(|t| t.receipt.as_ref());
+            let eligible = evidence.is_some_and(|t| t.status == AgentToolStatus::Completed)
+                && evidence.is_some_and(|t| {
+                    matches!(
+                        t.name.as_str(),
+                        "run_command" | "browser_verify" | "verify_skill"
+                    )
+                })
+                && receipt.is_some_and(|r| {
+                    r["verification_eligible"] == true
+                        && r["success"] == true
+                        && current_revision.is_some()
+                        && r["workspace_revision"].as_str() == current_revision
+                });
+            let mut hashes = serde_json::Map::new();
+            for path in &result.input_paths {
+                hashes.insert(path.clone(), input_hash(runtime, path, cancellation));
+            }
+            let issue = if result.outcome == "passed" && !eligible {
+                Some("CURRENT_VERIFICATION_RECEIPT_REQUIRED")
+            } else if result.outcome == "passed"
+                && (hashes.is_empty() || hashes.values().any(Value::is_null))
+            {
+                Some("CHECK_INPUT_VERSION_REQUIRED")
+            } else {
+                None
+            };
+            target["check"] = json!({"status":if issue.is_some(){"pending"}else{&result.outcome},
+                "actual":fielora_model::sanitize_agent_text(&result.actual),"tool_call_id":result.tool_call_id,
+                "input_hashes":hashes,"issue":issue,"coverage_verified":false});
+            target.as_object_mut().unwrap().remove("result");
+        } else if let Some(old) = previous
+            .as_ref()
+            .and_then(|p| p["criteria"].as_array())
+            .and_then(|cs| {
+                cs.iter()
+                    .find(|c| c["id"] == criterion.id && c["expected"] == criterion.expected)
+            })
+            && let Some(check) = old.get("check")
+        {
+            target["check"] = check.clone();
+        }
+    }
+    refresh_checks(runtime, &mut projected, cancellation);
     Ok(ToolExecution {
         receipt: json!({"kind":"WORK_PLAN","plan":projected,"verification_eligible":false}),
         observation: format!(
-            "Working intent recorded; {} source issue(s). Issues: {}. This plan is advisory, not a write allowlist, user requirement or verification. Do not retry planning merely to clear optional citations. Compare carried changes to the original user request and images; remove mistaken additions instead of inventing their missing dependencies. Perform the narrow fix and actual acceptance checks.",
+            "Working intent recorded; {} source issue(s). Issues: {}. Inspect each criterion's check/status/issue in the receipt. Pending CURRENT_VERIFICATION_RECEIPT_REQUIRED means run a direct supported test runner with failing assertions (e.g. python -m unittest); shell-wrapped print scripts do not establish acceptance. Mutating tests need an isolated database/fixture and must preserve original inputs. Keep passed unchanged cases; run only pending/failed/stale cases. This plan is advisory, not a write allowlist, user requirement or verification. Do not retry planning merely to clear optional citations. Compare carried changes to the original user request and images; remove mistaken additions instead of inventing their missing dependencies.",
             issues.len(),
             json!(issues)
         ),
     })
+}
+
+fn input_hash(runtime: &ToolRuntime, path: &str, cancel: &CommandCancellation) -> Value {
+    runtime
+        .execute("stat_path", &json!({"path":path}), false, cancel)
+        .ok()
+        .and_then(|t| t.receipt["sha256"].as_str().map(|s| json!(s)))
+        .unwrap_or(Value::Null)
+}
+
+fn refresh_checks(runtime: &ToolRuntime, plan: &mut Value, cancel: &CommandCancellation) {
+    if let Some(criteria) = plan["criteria"].as_array_mut() {
+        for criterion in criteria {
+            let Some(check) = criterion.get_mut("check") else {
+                continue;
+            };
+            if check["status"] != "passed" {
+                continue;
+            }
+            let current = check["input_hashes"].as_object().is_some_and(|hashes| {
+                !hashes.is_empty()
+                    && hashes.iter().all(|(path, hash)| {
+                        !hash.is_null() && input_hash(runtime, path, cancel) == *hash
+                    })
+            });
+            if !current {
+                check["status"] = json!("stale");
+                check["issue"] = json!("INPUT_CHANGED_OR_UNAVAILABLE");
+            }
+        }
+    }
+}
+
+/// Refresh only declared bounded dependencies; log changes outside these inputs
+/// cannot erase other cases. Existing final verification remains authoritative.
+pub fn current_projection(
+    tools: &[AgentToolCallView],
+    root: &std::path::Path,
+    artifacts: &std::path::Path,
+) -> Option<Value> {
+    let mut plan = projection(tools)?;
+    if let Ok(runtime) = ToolRuntime::new(root, artifacts) {
+        refresh_checks(&runtime, &mut plan, &CommandCancellation::default());
+    } else if let Some(criteria) = plan["criteria"].as_array_mut() {
+        for c in criteria {
+            if c["check"]["status"] == "passed" {
+                c["check"]["status"] = json!("stale");
+            }
+        }
+    }
+    Some(plan)
+}
+
+/// Only called by the coordinator's explicit deterministic E2E model gate.
+pub fn acceptance_fixture(
+    request: &fielora_model::AgentModelRequest,
+    tools: &[AgentToolCallView],
+    resumed: bool,
+) -> Result<fielora_model::AgentModelTurn, fielora_model::ModelError> {
+    use fielora_model::{AgentModelMessage, AgentModelToolCall, AgentModelTurn, ModelError};
+    let call = |name: &str, args: Value| {
+        Ok(AgentModelTurn {
+            continuation: None,
+            text: String::new(),
+            usage: None,
+            tool_calls: vec![AgentModelToolCall {
+                id: format!("cases-{}", tools.len()),
+                name: name.into(),
+                arguments: args,
+            }],
+        })
+    };
+    let plan = |check: usize, keep_input: bool| {
+        let mut input = json!({"id":"input","expected":"Isolated import is idempotent and original CSV unchanged"});
+        if !keep_input {
+            input["result"] = json!({"outcome":"passed","actual":"Isolated SQLite assertions passed","tool_call_id":tools[check].id,
+            "input_paths":["input.csv","test_acceptance.py"]});
+        }
+        json!({"write_paths":["source.txt"],"preserve":["Original input and real database"],"criteria":[
+            {"id":"source","expected":"Current source is accepted by the targeted test","result":{"outcome":"passed","actual":"Source assertion passed","tool_call_id":tools[check].id,"input_paths":["source.txt","test_acceptance.py"]}},input],
+            "next_step":{"kind":"verify","action":"Only test stale or pending cases"}})
+    };
+    match tools.len() {
+        0 => call(
+            "read_file",
+            json!({"path":"contract-a.txt","line_end":600,"max_bytes":65536}),
+        ),
+        1 => call("read_file", json!({"path":"source.txt"})),
+        2 => call(
+            "run_command",
+            json!({"program":"/usr/bin/python3","argv":["print_check.py"],"timeout_ms":5000}),
+        ),
+        3 => call("work_plan", plan(2, false)),
+        4 => {
+            if tools[3].receipt.as_ref().unwrap()["plan"]["criteria"][0]["check"]["status"]
+                != "pending"
+            {
+                return Err(ModelError::ProviderProtocolError);
+            }
+            call(
+                "run_command",
+                json!({"program":"/usr/bin/python3","argv":["-B","-m","unittest","test_acceptance"],"timeout_ms":5000}),
+            )
+        }
+        5 => call("work_plan", plan(4, false)),
+        6 => {
+            if tools[5].receipt.as_ref().unwrap()["plan"]["criteria"][0]["check"]["status"]
+                != "passed"
+            {
+                return Err(ModelError::ProviderProtocolError);
+            }
+            call(
+                "write_file",
+                json!({"path":"source.txt","content":"two\n","expected_sha256":tools[1].receipt.as_ref().unwrap()["sha256"]}),
+            )
+        }
+        7 if !resumed => Err(ModelError::ProviderUnavailable),
+        7 => {
+            let context = request
+                .messages
+                .iter()
+                .find_map(|m| match m {
+                    AgentModelMessage::User(s) if s.starts_with(CONTEXT_MARKER) => Some(s),
+                    _ => None,
+                })
+                .ok_or(ModelError::ProviderProtocolError)?;
+            if !context.contains("\"status\":\"stale\"")
+                || !context.contains("\"status\":\"passed\"")
+            {
+                return Err(ModelError::ProviderProtocolError);
+            }
+            call(
+                "run_command",
+                json!({"program":"/usr/bin/python3","argv":["-B","-m","unittest","test_acceptance.Cases.test_source"],"timeout_ms":5000}),
+            )
+        }
+        8 => call("work_plan", plan(7, true)),
+        _ => call(
+            "finish_task",
+            json!({"outcome":"completed","intent":"action","request_quote":"执行隔离验证，保留原始输入。","summary":"隔离验收记录已恢复；只重验受影响的文件。","evidence_tool_call_ids":[tools[7].id]}),
+        ),
+    }
 }
 
 pub fn guard(
@@ -339,24 +567,132 @@ pub fn fixture_call(step: u32, tools: &[AgentToolCallView]) -> Option<(&'static 
     }
 }
 
+#[cfg(test)]
 pub fn context(tools: &[AgentToolCallView], wrote: bool, verified: bool) -> Option<String> {
     let plan = projection(tools)?;
-    Some(format!(
+    Some(context_from_plan(&plan, wrote, verified))
+}
+
+pub fn current_context(
+    tools: &[AgentToolCallView],
+    root: &std::path::Path,
+    artifacts: &std::path::Path,
+    wrote: bool,
+    verified: bool,
+) -> Option<String> {
+    Some(context_from_plan(
+        &current_projection(tools, root, artifacts)?,
+        wrote,
+        verified,
+    ))
+}
+
+fn context_from_plan(plan: &Value, wrote: bool, verified: bool) -> String {
+    let outstanding = plan["criteria"].as_array().is_some_and(|criteria| {
+        criteria.iter().any(|criterion| {
+            criterion
+                .get("check")
+                .is_some_and(|check| check["status"] != "passed")
+        })
+    });
+    format!(
         "{CONTEXT_MARKER}{plan}\nThis retained plan is an ADVISORY MODEL HYPOTHESIS, including plans from older versions. It is not a write allowlist or user requirement. Source quotes describe code; interpretations remain tentative. The original user request and images take precedence. Do not complete dependencies of a mistakenly added field just because the current template or previous plan contains it. Reconcile current changes with the originally reported differences, then verify. No mandatory work_plan update is needed to change a relevant file. Preserve existing APIs unless the user requested otherwise. Current workspace changed={wrote}; current result verified={verified}. {}",
-        if wrote && !verified {
+        if outstanding {
+            "Acceptance is outstanding. Some retained cases are pending, failed or stale even if another check passed. Resolve those cases; retain unchanged passing cases. Do not claim all criteria passed."
+        } else if wrote && !verified {
             "Acceptance is outstanding. Prepare or run the relevant check now; inspect only concrete prerequisites or a failed check's cause. More searches and Git diffs are not verification."
         } else if verified {
             "Current checks passed. Close out the scoped result; do not expand into adjacent features."
         } else {
             "Resolve the stated differences using the observed owners and smallest edit. Empty or malformed searches do not prove absence."
         }
-    ))
+    )
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use std::fs;
+
+    #[test]
+    fn acceptance_cases_require_real_checks_and_survive_only_matching_inputs() {
+        let root = std::env::temp_dir().join(format!("fielora-cases-{}", uuid::Uuid::now_v7()));
+        fs::create_dir_all(&root).unwrap();
+        fs::write(root.join("app.py"), "original").unwrap();
+        fs::write(root.join("test_app.py"), "assert actual == expected").unwrap();
+        let runtime = ToolRuntime::new(&root, &root.join("artifacts")).unwrap();
+        let cancel = CommandCancellation::default();
+        let args = json!({"write_paths":["app.py"],"preserve":["input CSV and live database"],
+            "criteria":[{"id":"import","expected":"Repeated import is idempotent","result":{
+                "outcome":"passed","actual":"No duplicate IDs","tool_call_id":"check",
+                "input_paths":["app.py","test_app.py"]}}],"next_step":{"kind":"verify","action":"Check pending restore case"}});
+        let mut tools = vec![record(
+            "check",
+            "run_command",
+            json!({"program":"python3","argv":["final_check.py"]}),
+            json!({"success":true,"exit_code":0,"verification_eligible":false,"workspace_revision":"rev"}),
+        )];
+        let rejected = execute_checked(&runtime, &args, &tools, &cancel, Some("rev")).unwrap();
+        assert_eq!(
+            rejected.receipt["plan"]["criteria"][0]["check"]["status"],
+            "pending"
+        );
+        assert_eq!(
+            rejected.receipt["plan"]["criteria"][0]["check"]["issue"],
+            "CURRENT_VERIFICATION_RECEIPT_REQUIRED"
+        );
+        tools[0].receipt.as_mut().unwrap()["verification_eligible"] = json!(true);
+        let stale = execute_checked(&runtime, &args, &tools, &cancel, Some("new-rev")).unwrap();
+        assert_eq!(
+            stale.receipt["plan"]["criteria"][0]["check"]["status"],
+            "pending"
+        );
+        let checked = execute_checked(&runtime, &args, &tools, &cancel, Some("rev")).unwrap();
+        assert_eq!(checked.receipt["verification_eligible"], false);
+        assert_eq!(
+            checked.receipt["plan"]["criteria"][0]["check"]["status"],
+            "passed"
+        );
+        tools.push(record("plan", "work_plan", args.clone(), checked.receipt));
+        fs::write(root.join("server.log"), "unrelated startup log").unwrap();
+        assert_eq!(
+            current_projection(&tools, &root, &root.join("artifacts")).unwrap()["criteria"][0]["check"]
+                ["status"],
+            "passed"
+        );
+        let mut next = args.clone();
+        next["criteria"][0]
+            .as_object_mut()
+            .unwrap()
+            .remove("result");
+        assert_eq!(
+            execute_checked(&runtime, &next, &tools, &cancel, Some("rev"))
+                .unwrap()
+                .receipt["plan"]["criteria"][0]["check"]["status"],
+            "passed"
+        );
+        fs::write(root.join("app.py"), "changed through another process").unwrap();
+        assert_eq!(
+            current_projection(&tools, &root, &root.join("artifacts")).unwrap()["criteria"][0]["check"]
+                ["status"],
+            "stale"
+        );
+        assert_eq!(
+            execute_checked(&runtime, &next, &tools, &cancel, Some("rev"))
+                .unwrap()
+                .receipt["plan"]["criteria"][0]["check"]["status"],
+            "stale"
+        );
+        next["criteria"][0]["expected"] = json!("A different requirement");
+        assert!(
+            execute_checked(&runtime, &next, &tools, &cancel, Some("rev"))
+                .unwrap()
+                .receipt["plan"]["criteria"][0]
+                .get("check")
+                .is_none()
+        );
+        fs::remove_dir_all(root).unwrap();
+    }
 
     fn record(id: &str, name: &str, arguments: Value, receipt: Value) -> AgentToolCallView {
         serde_json::from_value(json!({"id":id,"run_id":"run","name":name,"effect":"OBSERVE","status":"COMPLETED","policy_decision":"ALLOW","arguments":arguments,"receipt":receipt,"error_code":null,"created_at":0,"updated_at":0})).unwrap()

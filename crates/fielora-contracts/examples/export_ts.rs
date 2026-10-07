@@ -138,6 +138,7 @@ fn main() {
         CreateProviderConfigRequest::decl(&config),
         UpdateProviderConfigRequest::decl(&config),
         ProviderConfigRequest::decl(&config),
+        PrepareProviderSendRequest::decl(&config),
         StoreCredentialRequest::decl(&config),
         ModelIntent::decl(&config),
         ResponseMode::decl(&config),

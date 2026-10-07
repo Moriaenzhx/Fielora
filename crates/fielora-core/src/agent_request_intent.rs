@@ -54,16 +54,37 @@ pub fn record(
 ) -> Result<ToolExecution, AgentError> {
     let args: Args =
         serde_json::from_value(arguments.clone()).map_err(|_| AgentError::ToolArgumentsInvalid)?;
-    if args.request_quote.trim().is_empty()
-        || args.request_quote.chars().count() > 2000
-        || !task.contains(&args.request_quote)
-    {
+    let quote = source_quote(task, &args.request_quote);
+    let Some(quote) = quote else {
         return Err(AgentError::WorkGuidance { code:"AGENT_CURRENT_REQUEST_QUOTE_REQUIRED", detail:"Quote the current user's actual wording. No intent was recorded; historical text and paraphrases are not valid source quotes.".into() });
-    }
+    };
     Ok(ToolExecution {
-        receipt:json!({"kind":"CURRENT_REQUEST_INTERPRETATION","run_id":run_id,"request_sha256":crate::agent_turn_context::digest(task),"intent":args.intent,"request_quote":args.request_quote,"source":"MODEL_INTERPRETATION","verification_eligible":false,"grants_authority":false}),
+        receipt:json!({"kind":"CURRENT_REQUEST_INTERPRETATION","run_id":run_id,"request_sha256":crate::agent_turn_context::digest(task),"intent":args.intent,"request_quote":quote,"source":"MODEL_INTERPRETATION","verification_eligible":false,"grants_authority":false}),
         observation:"Interpretation recorded for this request only. It is not proof of semantic correctness, authorization, action completion or verification. Answer the current question using evidence; preserve explicit user corrections. Actual action attempts still retain their obligations.".into(),
     })
+}
+
+fn source_quote<'a>(task: &'a str, quote: &str) -> Option<&'a str> {
+    fn normalized(c: char) -> char {
+        match c {
+            '“' | '”' => '"',
+            '‘' | '’' => '\'',
+            _ => c,
+        }
+    }
+    let needle: Vec<_> = quote.chars().map(normalized).collect();
+    if quote.trim().is_empty() || needle.len() > 2000 {
+        return None;
+    }
+    let source: Vec<_> = task.char_indices().collect();
+    let matched = source.windows(needle.len()).find(|slice| {
+        slice
+            .iter()
+            .map(|(_, c)| normalized(*c))
+            .eq(needle.iter().copied())
+    })?;
+    let (last, last_char) = matched.last()?;
+    Some(&task[matched[0].0..last + last_char.len_utf8()])
 }
 
 pub fn latest(run_id: &AgentRunId, task: &str, tools: &[AgentToolCallView]) -> Option<Intent> {
@@ -112,6 +133,26 @@ pub fn requirements(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn typographic_quotes_preserve_the_original_source_without_accepting_paraphrases() {
+        let task = "请在当前项目里做一个我可以日常使用的“工作室项目与回款管理器”。";
+        let result = record(
+            &AgentRunId::new("current"),
+            task,
+            &json!({"intent":"workspace_change","request_quote":task.replace(['“','”'], "\"")}),
+        )
+        .unwrap();
+        assert_eq!(result.receipt["request_quote"], task);
+        assert_eq!(result.receipt["grants_authority"], false);
+        for quote in [
+            task.replace("日常", "每天"),
+            task.replace("请在", "不要在"),
+            "做一个\"回款管理器\"".into(),
+        ] {
+            assert!(source_quote(task, &quote).is_none());
+        }
+    }
 
     fn tool(task: &str, intent: &str) -> AgentToolCallView {
         let receipt = record(

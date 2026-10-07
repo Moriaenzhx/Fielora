@@ -1,3 +1,4 @@
+pub mod command_sandbox;
 pub mod fonts;
 use fielora_contracts::DeviceId;
 use std::ffi::OsString;
@@ -475,6 +476,18 @@ pub enum CredentialError {
     InvalidSize,
     #[error("credential manager operation failed")]
     Platform,
+    #[error("CREDENTIAL_REENTRY_REQUIRED")]
+    InteractionRequired,
+}
+
+impl CredentialError {
+    pub fn user_code(&self) -> &'static str {
+        match self {
+            Self::InteractionRequired => "CREDENTIAL_REENTRY_REQUIRED",
+            Self::NotFound => "CREDENTIAL_MISSING",
+            _ => "CREDENTIAL_STORE_FAILED",
+        }
+    }
 }
 
 pub trait CredentialStore: Send + Sync {
@@ -512,6 +525,59 @@ pub struct SystemCredentialStore;
 
 // Preserve source compatibility for existing integrations.
 pub use SystemCredentialStore as WindowsCredentialStore;
+
+/// Read-only compatibility adapter. Production never writes new OS entries.
+pub struct NonInteractiveSystemCredentialStore;
+
+impl CredentialStore for NonInteractiveSystemCredentialStore {
+    fn store(&self, _: &str, _: SecretBytes) -> Result<(), CredentialError> {
+        Err(CredentialError::Platform)
+    }
+    fn delete(&self, _: &str) -> Result<(), CredentialError> {
+        Err(CredentialError::Platform)
+    }
+    fn read(&self, target: &str) -> Result<SecretBytes, CredentialError> {
+        #[cfg(target_os = "macos")]
+        {
+            let _lock = LEGACY_KEYCHAIN_ACCESS
+                .lock()
+                .map_err(|_| CredentialError::Platform)?;
+            let _no_ui =
+                security_framework::os::macos::keychain::SecKeychain::disable_user_interaction()
+                    .map_err(|_| CredentialError::InteractionRequired)?;
+            SystemCredentialStore
+                .read(target)
+                .map_err(|error| match error {
+                    CredentialError::NotFound => CredentialError::NotFound,
+                    _ => CredentialError::InteractionRequired,
+                })
+        }
+        #[cfg(not(target_os = "macos"))]
+        {
+            SystemCredentialStore.read(target)
+        }
+    }
+    fn exists(&self, target: &str) -> bool {
+        #[cfg(target_os = "macos")]
+        let _lock = match LEGACY_KEYCHAIN_ACCESS.lock() {
+            Ok(lock) => lock,
+            Err(_) => return false,
+        };
+        #[cfg(target_os = "macos")]
+        let _no_ui =
+            match security_framework::os::macos::keychain::SecKeychain::disable_user_interaction() {
+                Ok(lock) => lock,
+                Err(_) => return false,
+            };
+        SystemCredentialStore.exists(target)
+    }
+    fn static_exists(&self, credential_ref: &CredentialRef) -> bool {
+        self.exists(&credential_ref.target_name())
+    }
+}
+
+#[cfg(target_os = "macos")]
+static LEGACY_KEYCHAIN_ACCESS: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
 #[cfg(windows)]
 impl CredentialStore for WindowsCredentialStore {
@@ -1026,6 +1092,14 @@ mod tests {
             .put_static(&credential_ref, SecretBytes::new(first.as_bytes().to_vec()))
             .unwrap();
         assert!(WindowsCredentialStore.static_exists(&credential_ref));
+        assert!(NonInteractiveSystemCredentialStore.static_exists(&credential_ref));
+        assert_eq!(
+            NonInteractiveSystemCredentialStore
+                .resolve_static(&credential_ref)
+                .unwrap()
+                .expose(),
+            first.as_bytes()
+        );
         assert_eq!(
             WindowsCredentialStore
                 .resolve_static(&credential_ref)

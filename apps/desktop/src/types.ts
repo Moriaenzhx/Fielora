@@ -199,6 +199,7 @@ export interface FieloraBridge {
   provider: {
     catalog(): Promise<import('@fielora/contracts').ModelProviderPreset[]>;
     updateRuntime(request: UpdateModelRuntimeRequest): Promise<ProviderConfigView>;
+    prepareSend(request: import('@fielora/contracts').PrepareProviderSendRequest): Promise<null>;
     validate(request: ProviderConfigRequest): Promise<StartModelInvocationResult>;
     create(request: CreateProviderConfigRequest): Promise<ProviderConfigView>;
     update(request: UpdateProviderConfigRequest): Promise<ProviderConfigView>;

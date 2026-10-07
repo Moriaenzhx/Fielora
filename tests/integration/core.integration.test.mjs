@@ -108,8 +108,7 @@ test('General Agent preserves work across budget pause and restart, recovers gua
   const runs = await call('query.agent.list', { conversation_id: run.conversation_id });
   assert.equal(runs.length, 1);
   const doneEvents = await call('query.agent.events', { run_id: run.id, limit: 500 });
-  assert.equal(doneEvents.filter(event => event.payload.kind === 'MODEL_RUNTIME_SETTINGS_V1').length,1);
-  assert.equal(doneEvents.find(event => event.payload.kind === 'MODEL_RUNTIME_SETTINGS_V1').payload.settings.max_output_tokens,2048);
+  assert.deepEqual(doneEvents.filter(event => event.payload.kind === 'MODEL_RUNTIME_SETTINGS_V1').map(event=>event.payload.settings.max_output_tokens),[2048,4096], 'Explicit resume adopts saved settings without rewriting the earlier snapshot');
   assert.equal(doneEvents.find((event) => event.kind === 'RUN_RESUMED').payload.budget_grant.additional_steps, 24);
   assert.equal(doneEvents.find((event) => event.kind === 'RUN_COMPLETED').payload.verification_passed, true);
 
@@ -255,7 +254,7 @@ test('real Core persists create/focus/snapshot through close and restart', async
   const dataDir = await mkdtemp(path.join(tmpdir(), 'fielora-core-integration-'));
   t.after(() => rm(dataDir, { recursive: true, force: true }));
   const first = harness(dataDir);
-  assert.equal((await hello(first)).result.schema_version, 18);
+  assert.equal((await hello(first)).result.schema_version, 19);
   first.send('create', 'command.field.create', { title: 'Phase 01 Test', goal: 'Persistence' });
   const created = await first.next();
   const event = await first.next();
@@ -297,7 +296,7 @@ test('parent-pipe EOF exits within two seconds without explicit shutdown', async
 test('Desktop Foundation persists Project, Conversation, provider selection, and messages', async (t) => {
   const dataDir=await mkdtemp(path.join(tmpdir(),'fielora-desktop-foundation-'));t.after(()=>rm(dataDir,{recursive:true,force:true}));
   const projectRoot=path.join(dataDir,'local-project');
-  const first=harness(dataDir);const greeting=await hello(first);assert.equal(greeting.result.schema_version,18);
+  const first=harness(dataDir);const greeting=await hello(first);assert.equal(greeting.result.schema_version,19);
   for(const capability of ['project.create','project.update','project.archive','conversation.create','conversation.message.create'])assert.ok(greeting.result.capabilities.includes(capability));
   first.send('provider','command.provider.create_config',{provider_kind:'OPENAI_COMPATIBLE',display_name:'Desktop fixture',base_url:'https://example.com/v1',default_model:'__fielora_fixture__',custom_endpoint_acknowledged:true});const provider=(await first.next()).result;
   first.send('project','command.project.create',{title:'Local Project',goal:'Persist the coding loop',root_path:projectRoot});const project=(await first.next()).result;assert.equal(project.root_path,projectRoot);
@@ -323,7 +322,7 @@ test('Desktop Foundation persists Project, Conversation, provider selection, and
 test('Phase 02 FIPC reality workflow persists, resumes, and preserves atomic revisions', async (t) => {
   const dataDir=await mkdtemp(path.join(tmpdir(),'fielora-phase02-integration-'));t.after(()=>rm(dataDir,{recursive:true,force:true}));
   const h=harness(dataDir);const helloResponse=await hello(h);
-  assert.equal(helloResponse.result.schema_version,18);
+  assert.equal(helloResponse.result.schema_version,19);
   for(const capability of ['state.supersede','reference.archive','relation.attach_reference_source','surface.save_snapshot_v1','field.resume_v1'])assert.ok(helloResponse.result.capabilities.includes(capability));
   const field=await mutation(h,'p2-field','command.field.create',{title:'Phase 02 Reality',goal:'Prove durable truth'});
   const task=await mutation(h,'p2-task','command.state.create',{field_id:field.id,kind:'TASK',content:'Ship Phase 02',confidence:0.8});
@@ -389,9 +388,38 @@ test('protocol failures recover without crashing and conflict remains conflict',
   h.send('shutdown', 'system.shutdown'); await h.next(); await h.exit();
 });
 
+test('Provider preflight checks actual local credentials without invoking a model', async (t) => {
+  const dataDir = await mkdtemp(path.join(tmpdir(), 'fielora-send-preflight-'));
+  const h = harness(dataDir);
+  t.after(async () => { if (h.child.exitCode === null) { killTestProcess(h.child.pid); await h.exit(); } await rm(dataDir, {recursive:true,force:true}); });
+  await hello(h);
+  const events = [];
+  async function call(method, params) {
+    const id = randomUUID(); h.send(id, method, params);
+    for (;;) { const response = await h.next(); if (response.id === id) return response; events.push(response); }
+  }
+  const {result:provider} = await call('command.provider.create_config', {provider_kind:'OPENAI',display_name:'Local preflight only',base_url:null,default_model:'gpt-4.1-mini',custom_endpoint_acknowledged:false});
+  const request = {provider_config_id:provider.id,model_id:null};
+  assert.match((await call('command.provider.prepare_send', request)).error.message, /PROVIDER_DISABLED/);
+  const secret = `synthetic-preflight-${randomUUID()}`;
+  await call('command.provider.store_credential', {...request,model_id:undefined,secret});
+  const prepared = await call('command.provider.prepare_send', request);
+  assert.equal(prepared.result, null); assert.equal(prepared.error, undefined);
+  assert.equal(JSON.stringify(prepared).includes(secret), false);
+  assert.match((await call('command.provider.prepare_send', {...request, model_id:'qwen3.7-plus'})).error.message, /PROVIDER_MODEL_MISMATCH/);
+  assert.ok((await call('command.provider.prepare_send', {...request, secret})).error, 'No credential input accepted by preflight');
+  // Simulate stale presence metadata: only the isolated DB credential is lost.
+  const {DatabaseSync} = await import('node:sqlite');
+  const db = new DatabaseSync(path.join(dataDir, 'data', 'fielora.db'));
+  try { db.prepare('UPDATE local_credentials SET secret=NULL').run(); } finally { db.close(); }
+  assert.match((await call('command.provider.prepare_send', request)).error.message, /CREDENTIAL_MISSING/);
+  assert.equal(events.some(event => event.method === 'event.model.invocation' || event.method === 'event.agent.run'), false);
+  h.send('shutdown','system.shutdown'); await h.next(); await h.exit();
+});
+
 test('Phase 04 fixture proves provider-neutral stream, capture lifecycle, and no secret echo', async (t) => {
   const dataDir=await mkdtemp(path.join(tmpdir(),'fielora-phase04-integration-'));t.after(()=>rm(dataDir,{recursive:true,force:true}));
-  const h=harness(dataDir);assert.equal((await hello(h)).result.schema_version,18);const notifications=[];
+  const h=harness(dataDir);assert.equal((await hello(h)).result.schema_version,19);const notifications=[];
   async function response(id){for(;;){const value=await h.next();if(value.id===id)return value;notifications.push(value);}}
   h.send('provider','command.provider.create_config',{provider_kind:'OPENAI_COMPATIBLE',display_name:'Fixture provider',base_url:'https://example.com/v1',default_model:'__fielora_fixture__',custom_endpoint_acknowledged:true});
   const provider=(await response('provider')).result;t.after(()=>deleteTestCredential(provider.id));assert.equal(provider.lifecycle_status,'DISABLED');assert.equal(JSON.stringify(provider).includes('credential_ref'),false);
@@ -445,7 +473,7 @@ test('Complete Agent executes an approved coding loop with durable tools, verifi
   }
   assert.equal(approvalCount,2);
   assert.equal(await readFile(path.join(projectRoot,'fielora-agent-fixture.txt'),'utf8'),'created by the Fielora Agent fixture\n');
-  h.send('agent-tools','query.agent.tool_calls',{run_id:run.id});const tools=(await response('agent-tools')).result;assert.deepEqual(tools.map((tool)=>[tool.name,tool.status]),[['create_file','COMPLETED'],['run_command','COMPLETED'],['finish_task','COMPLETED']]);assert.equal(tools[2].effect,'OBSERVE');assert.equal(tools[2].receipt.task_complete,false);assert.equal(tools[1].receipt.success,true);assert.equal(tools[1].receipt.execution_boundary,'CONTROLLED_WORKSPACE_EXECUTION');
+  h.send('agent-tools','query.agent.tool_calls',{run_id:run.id});const tools=(await response('agent-tools')).result;assert.deepEqual(tools.map((tool)=>[tool.name,tool.status]),[['create_file','COMPLETED'],['run_command','COMPLETED'],['finish_task','COMPLETED']]);assert.equal(tools[2].effect,'OBSERVE');assert.equal(tools[2].receipt.task_complete,false);assert.equal(tools[1].receipt.success,true);assert.equal(tools[1].receipt.execution_boundary,'CURRENT_USER_HOST');assert.equal(tools[1].receipt.network_policy,'ALLOWED');assert.equal(tools[1].receipt.read_isolation,false);
   h.send('agent-all-events','query.agent.events',{run_id:run.id,after_sequence:null,limit:500});const allEvents=(await response('agent-all-events')).result;const kinds=allEvents.map((event)=>event.kind);for(const kind of ['RUN_CREATED','CONTEXT_COMPILED','ASSISTANT_NARRATIVE','APPROVAL_REQUESTED','TOOL_COMPLETED','VERIFICATION_RECORDED','RUN_COMPLETED'])assert.ok(kinds.includes(kind),kind);assert.equal(allEvents.find((event)=>event.kind==='RUN_CREATED').payload.user_message_id,userMessage.id);const runStarted=allEvents.find((event)=>event.kind==='RUN_STARTED');assert.equal(runStarted.payload.harness_profile,'CODING_V0.1');assert.equal(runStarted.payload.harness_strategy,'GOAL_DRIVEN_AGENT_LOOP_V4');const narratives=allEvents.filter((event)=>event.kind==='ASSISTANT_NARRATIVE');assert.equal(narratives[0].payload.text,'I will create the requested fixture file.');assert.ok(narratives[0].sequence<allEvents.find((event)=>event.kind==='TOOL_PROPOSED').sequence);assert.equal(JSON.stringify(narratives).includes('private fixture reasoning'),false);assert.equal(JSON.stringify(narratives).includes('<think>'),false);
   h.send('agent-messages','query.conversation.message.list',{conversation_id:conversation.id});const messages=(await response('agent-messages')).result;assert.deepEqual(messages.map((message)=>message.role),['USER','ASSISTANT']);assert.equal(messages.filter((message)=>message.role==='ASSISTANT'&&message.invocation_id===run.id).length,1);assert.match(messages[1].content,/completed the task/i);assert.equal(messages[1].invocation_id,run.id);assert.equal(narratives.some((event)=>/completed the task/i.test(event.payload.text)),false);
   h.send('delegate-start','command.agent.start',{field_id:project.field_id,conversation_id:conversation.id,provider_config_id:provider.id,model_id:'__fielora_agent_fixture__',task:'FIELORA_AGENT_FIXTURE_DELEGATE',permission:'FULL_CONTROL',max_steps:8});const delegated=(await response('delegate-start')).result;

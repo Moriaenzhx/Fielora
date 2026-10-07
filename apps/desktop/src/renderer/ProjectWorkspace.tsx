@@ -381,6 +381,11 @@ function reasonMessage(reason: unknown): string {
   if (/unknown field [`']attachments[`']|expected one of [`']field_id/i.test(raw)) return '当前桌面与 Agent Runtime 版本不一致。请重新打开最新 Fielora 后重试；已输入的内容仍保留在当前对话中。';
   if (raw.includes('FILE_CHANGED_SINCE_REVIEW')) return '文件在 review 后已被其他程序修改，请重新载入再确认。';
   if (raw.includes('CREDENTIAL_REJECTED')) return '模型凭据无效，请在设置中更新。';
+  if (raw.includes('CREDENTIAL_REENTRY_REQUIRED')) return '旧 API Key 无法从系统凭据库静默迁移，请到设置 → 模型配置重新保存一次 Key。保存后测试连接和任务会直接复用，无需系统密码。';
+  if (raw.includes('CREDENTIAL_MISSING')) return '尚未保存 API Key，请到设置 → 模型配置保存后重试。';
+  if (raw.includes('PROVIDER_DISABLED')) return '模型服务当前不可用，请到设置 → 模型配置检查服务和 API Key。';
+  if (raw.includes('PROVIDER_MODEL_MISMATCH')) return '模型与协议不匹配，请到设置 → 模型配置选择对应服务商和套餐。';
+  if (raw.includes('AGENT_START_STATUS_UNKNOWN')) return '任务启动回执超时，暂时无法确认后台状态。请先查看本对话的执行记录，避免重复发送；已输入内容保留。';
   if (raw.includes('PROVIDER_RATE_LIMITED')) return '模型服务当前限流，请稍后重试。';
   if (raw.includes('AGENT_RUN_ALREADY_ACTIVE')) return '本对话还有未结束的任务，请继续或停止当前任务后再发送。输入内容已保留。';
   return raw;
@@ -703,6 +708,8 @@ export function ProjectWorkspace({ onNow, onBrowse, onFields, onSettings, newCon
   const [environmentLoading, setEnvironmentLoading] = useState(false);
   const [environmentError, setEnvironmentError] = useState(false);
   const [environmentRefresh, setEnvironmentRefresh] = useState(0);
+  const [environmentLayout, setEnvironmentLayout] = useState<'MENU' | 'SUMMARY' | 'PANEL'>('MENU');
+  const [environmentPanelDismissed, setEnvironmentPanelDismissed] = useState(false);
   const [dockProjectLauncherOpen, setDockProjectLauncherOpen] = useState(false);
   const [projectOpenTargets, setProjectOpenTargets] = useState<WorkspaceProjectOpenTargetView[]>([{ target: 'FILE_EXPLORER', label: '文件资源管理器', icon_data_url: null }]);
   const [dockFileTreeCollapsed, setDockFileTreeCollapsed] = useState(false);
@@ -927,6 +934,8 @@ export function ProjectWorkspace({ onNow, onBrowse, onFields, onSettings, newCon
   const agentTurn = useMemo(() => agentRun ? agentTurnOwnership(messages, agentRun, agentEvents) : null, [agentEvents, agentRun, messages]);
   const agentReview = useMemo(() => agentFileRevisions.length > 0 ? buildDurableAgentReview(agentFileRevisions) : buildAgentReview(agentTools), [agentFileRevisions, agentTools]);
   const displayedAgentReview = historicalReview?.review ?? agentReview;
+  const hasEnvironmentChanges = displayedAgentReview.files.length > 0 || Boolean(environment?.changed_files);
+  const environmentPinned = environmentLayout === 'PANEL' && hasEnvironmentChanges && !environmentPanelDismissed && !workspaceOpen;
   const agentRunIsTerminal = agentRun ? ['COMPLETED', 'FAILED', 'CANCELLED'].includes(agentRun.status) : false;
   const agentExecuting = agentRun?.status === 'RUNNING' || agentRun?.status === 'QUEUED';
   const awaitingAgentAnswer = agentRun?.status === 'PAUSED' && agentRun.error_code === 'AGENT_USER_INPUT_REQUIRED';
@@ -956,6 +965,8 @@ export function ProjectWorkspace({ onNow, onBrowse, onFields, onSettings, newCon
     const terminal = document.getElementById('desktop-terminal-layer');
     const syncControlEdge = () => {
       const columnRect = column?.getBoundingClientRect();
+      const width = columnRect?.width ?? 0;
+      setEnvironmentLayout(width >= 1120 ? 'PANEL' : width >= 820 ? 'SUMMARY' : 'MENU');
       const navigationEdge = Math.round(columnRect?.left ?? 0);
       if (navigationEdge !== lastNavigationEdge) {
         lastNavigationEdge = navigationEdge;
@@ -1256,6 +1267,7 @@ export function ProjectWorkspace({ onNow, onBrowse, onFields, onSettings, newCon
     if (!projectId) { setConversations([]); setConversationId(''); setFiles([]); setEnvironment(null); setDockTabs([]); setArtifactSessions({}); setActiveDockTabId(''); setWorkspaceOpen(false); setDockFocused(false); foregroundAgentRunsRef.current.clear(); return; }
     setProjectDraftProviderId(null);
     setEnvironment(null);
+    setEnvironmentPanelDismissed(false);
     setSelectedFile(null); setFilePreview(null); setEditorContent(''); setDraft(null); setUndoChange(null);
     setWorkspaceOpen(false); setDockTabs([]); setArtifactSessions({}); setActiveDockTabId(''); setFileDockSessions({}); setFileTreeSelection(''); setEnvironmentOpen(false); setDockProjectLauncherOpen(false); setDockFocused(false); handledArtifactToolCallsRef.current.clear(); foregroundAgentRunsRef.current.clear();
     void Promise.all([
@@ -1266,16 +1278,24 @@ export function ProjectWorkspace({ onNow, onBrowse, onFields, onSettings, newCon
   }, [projectId, refreshConversations]);
 
   useEffect(() => {
-    if (!environmentOpen || !projectId) return;
+    if (!projectId) return;
     let cancelled = false;
-    setEnvironmentLoading(true);
-    setEnvironmentError(false);
-    void window.fielora.workspace.getEnvironment({ field_id: projectId })
-      .then((value) => { if (!cancelled) setEnvironment(value); })
-      .catch(() => { if (!cancelled) { setEnvironment(null); setEnvironmentError(true); } })
-      .finally(() => { if (!cancelled) setEnvironmentLoading(false); });
-    return () => { cancelled = true; };
-  }, [environmentOpen, environmentRefresh, projectId]);
+    let loading = false;
+    const refresh = () => {
+      if (loading || document.visibilityState === 'hidden') return;
+      loading = true;
+      setEnvironmentLoading(true);
+      void window.fielora.workspace.getEnvironment({ field_id: projectId })
+        .then((value) => { if (!cancelled) { setEnvironment(value); setEnvironmentError(false); } })
+        .catch(() => { if (!cancelled) { setEnvironment(null); setEnvironmentError(true); } })
+        .finally(() => { loading = false; if (!cancelled) setEnvironmentLoading(false); });
+    };
+    refresh();
+    window.addEventListener('focus', refresh);
+    document.addEventListener('visibilitychange', refresh);
+    const timer = window.setInterval(refresh, 15_000);
+    return () => { cancelled = true; window.clearInterval(timer); window.removeEventListener('focus', refresh); document.removeEventListener('visibilitychange', refresh); };
+  }, [environmentOpen, environmentRefresh, projectId, agentRun?.status, terminalRunId]);
 
   useEffect(() => {
     selectedConversationRef.current = conversationId;
@@ -1665,6 +1685,7 @@ export function ProjectWorkspace({ onNow, onBrowse, onFields, onSettings, newCon
     sendingRef.current = true;
     setBusy(true); setError('');
     try {
+      await prepareProviderSend(provider.id, agentRun.model_id);
       const ownership = agentTurnOwnership(messages, agentRun, agentEvents);
       const retryImages = await restoredAgentImages(agentRun.task, agentRun.conversation_id, ownership.userMessageId);
       const started = await window.fielora.agent.start({
@@ -1684,6 +1705,7 @@ export function ProjectWorkspace({ onNow, onBrowse, onFields, onSettings, newCon
       activeAgentRef.current = { runId: started.id, conversationId: conversation.id, output: '', step: 0 };
       agentRunIdRef.current = started.id; agentEventsRef.current = []; agentToolsRef.current = []; agentFileRevisionsRef.current = [];
       setAgentRun(started); setAgentEvents([]); setAgentTools([]); setAgentFileRevisions([]); setMcpRuntime(null); setStreamingOutput(''); setStreamingStep(0);
+      await loadAgentRun(await window.fielora.agent.get({ run_id: started.id }), true);
       scrollToLatestAnswer();
     } catch (reason) { setError(reasonMessage(reason)); }
     finally { sendingRef.current = false; setBusy(false); }
@@ -1850,10 +1872,16 @@ export function ProjectWorkspace({ onNow, onBrowse, onFields, onSettings, newCon
       width: item.width!, height: item.height!, source: item.source, data_url: item.data_url! }));
   }
 
+  async function prepareProviderSend(providerId: string, modelId: string) {
+    try { await window.fielora.provider.prepareSend({ provider_config_id: providerId, model_id: modelId }); }
+    catch (reason) { throw new Error(`尚未发送：${reasonMessage(reason)}`, { cause: reason }); }
+  }
+
   async function startQueuedFollowUp(item: QueuedFollowUp) {
     if (!project || !conversation || activeAgentRef.current || !agentRunIsTerminal) return;
     const provider = effectiveConversationProvider;
     if (!provider || !provider.credential_present) throw new Error('追加任务对应的模型服务当前不可用，请在设置中检查。');
+    await prepareProviderSend(provider.id, provider.default_model);
     let messageId = item.messageId;
     if (!messageId) {
       const message = await window.fielora.conversation.createMessage({
@@ -1882,6 +1910,7 @@ export function ProjectWorkspace({ onNow, onBrowse, onFields, onSettings, newCon
     activeAgentRef.current = { runId: started.id, conversationId: conversation.id, output: '', step: 0 };
     agentRunIdRef.current = started.id; agentEventsRef.current = []; agentToolsRef.current = []; agentFileRevisionsRef.current = [];
     setAgentRun(started); setAgentEvents([]); setAgentTools([]); setAgentFileRevisions([]); setMcpRuntime(null); setStreamingOutput(''); setStreamingStep(0);
+    await loadAgentRun(await window.fielora.agent.get({ run_id: started.id }), true);
     scrollToLatestAnswer();
     setQueuedFollowUps((current) => {
       const next = current.filter((queued) => queued.id !== item.id);
@@ -1897,6 +1926,7 @@ export function ProjectWorkspace({ onNow, onBrowse, onFields, onSettings, newCon
     sendingRef.current = true;
     setBusy(true); setError('');
     try {
+      await prepareProviderSend(run.provider_config_id, run.model_id);
       let submission = clarificationSubmissionRef.current;
       if (!submission || submission.runId !== run.id || submission.text !== text) {
         const message = await window.fielora.conversation.createMessage({ conversation_id: run.conversation_id, role: 'USER', content: text, status: 'COMPLETED', provider_config_id: null, model_id: null, invocation_id: null, references: [] });
@@ -1934,6 +1964,9 @@ export function ProjectWorkspace({ onNow, onBrowse, onFields, onSettings, newCon
     sendingRef.current = true;
     setBusy(true); setError('');
     try {
+      // Resolve the actual credential before creating a conversation or message.
+      // A legacy credential-present flag is not evidence that it can be read.
+      await prepareProviderSend(provider.id, provider.default_model);
       let activeConversation = conversation ?? await createConversationFor(project, { provider, preserveComposer: true });
       if (!activeConversation) return;
       const targetConversationId = activeConversation.id;
@@ -2001,6 +2034,10 @@ export function ProjectWorkspace({ onNow, onBrowse, onFields, onSettings, newCon
       agentRunIdRef.current = started.id; agentEventsRef.current = []; agentToolsRef.current = []; agentFileRevisionsRef.current = [];
       setAgentRun(started); setAgentEvents([]); setAgentTools([]); setAgentFileRevisions([]); setMcpRuntime(null);
       setStreamingOutput(''); setStreamingStep(0); clearComposerDraft(composerDraftKey(project.field_id, targetConversationId));
+      // A reconciled acknowledgement may follow already-persisted tools or a
+      // question. Hydrate that history instead of showing an empty run.
+      await loadAgentRun(await window.fielora.agent.get({ run_id: started.id }), true);
+      await refreshMessages(targetConversationId);
       scrollToLatestAnswer();
     } catch (reason) { setError(reasonMessage(reason)); }
     finally { sendingRef.current = false; setBusy(false); }
@@ -2587,18 +2624,29 @@ export function ProjectWorkspace({ onNow, onBrowse, onFields, onSettings, newCon
   const environmentSources = [...attachments, ...messages.flatMap((message) => messageAttachments(message.id))]
     .filter((source, index, all) => all.findIndex((candidate) => candidate.id === source.id) === index)
     .reverse();
-  const environmentControl = project && projectActionsLayer ? createPortal(<>
-    <div className="environment-menu" ref={environmentMenuRef}>
-      <ToolbarAction label="工作区信息" icon={<AppIcon name="environment"/>} active={environmentOpen} onClick={() => { setDockProjectLauncherOpen(false); setEnvironmentOpen((open) => !open); }} aria-expanded={environmentOpen} testId="environment-menu-toggle" />
-      {environmentOpen && <div className="environment-popover" data-surface="overlay" data-testid="environment-popover">
-        <header><strong>工作区信息</strong><IconButton size="sm" label="刷新工作区信息" icon={<AppIcon name="refresh"/>} disabled={environmentLoading} onClick={() => setEnvironmentRefresh((value) => value + 1)} testId="environment-refresh"/></header>
+  function toggleEnvironment() {
+    setDockProjectLauncherOpen(false);
+    if (environmentLayout === 'PANEL' && hasEnvironmentChanges && !workspaceOpen) {
+      setEnvironmentPanelDismissed((value) => !value);
+      setEnvironmentOpen(false);
+    } else setEnvironmentOpen((open) => !open);
+  }
+  function openEnvironmentChanges() {
+    setEnvironmentOpen(false);
+    if (displayedAgentReview.files.length > 0) {
+      if (historicalReview) openHistoricalAgentReview({ ...historicalReview, path: '' });
+      else openAgentReview();
+    } else if (environment?.is_git_repository) runEnvironmentCommand('git status --short');
+  }
+  const environmentContent = project ? <>
+        <header><strong>环境信息</strong><IconButton size="sm" label="刷新工作区信息" icon={<AppIcon name="refresh"/>} disabled={environmentLoading} onClick={() => setEnvironmentRefresh((value) => value + 1)} testId="environment-refresh"/></header>
         <div className="environment-repository" role="status" aria-busy={environmentLoading}>
           <AppIcon name={environment?.is_git_repository ? 'branch' : 'folder'}/>
-          <span><strong>{environmentLoading ? '正在读取工作区…' : environmentError ? '暂时无法读取工作区' : environment?.is_git_repository ? environment.branch || '未检出分支' : '本地文件夹'}</strong>
-            <small>{environmentError ? '点击右上角刷新以重试' : environmentLoading ? project.title : environment?.is_git_repository ? environment.upstream || '没有上游分支' : '此文件夹未使用 Git'}</small></span>
+          <span><strong>{!environment && environmentLoading ? '正在读取工作区…' : environmentError ? '暂时无法读取工作区' : environment?.is_git_repository ? environment.branch || '未检出分支' : '本地文件夹'}</strong>
+            <small>{environmentError ? '点击右上角刷新以重试' : !environment && environmentLoading ? project.title : environment?.is_git_repository ? `本地 · ${environment.upstream || '没有上游分支'}` : '本地 · 此文件夹未使用 Git'}</small></span>
           {environment?.upstream && <small className="environment-sync-state">{environment.ahead || environment.behind ? `领先 ${environment.ahead} · 落后 ${environment.behind}` : '已同步'}</small>}
         </div>
-        <button type="button" className="environment-action" data-testid="environment-task-changes" onClick={() => { setEnvironmentOpen(false); openWorkspace('DIFF'); }}>
+        <button type="button" className="environment-action" data-testid="environment-task-changes" disabled={displayedAgentReview.files.length === 0} onClick={openEnvironmentChanges}>
           <AppIcon name="diff"/><span><strong>任务改动</strong><small>{displayedAgentReview.files.length ? `${displayedAgentReview.files.length} 个文件 · 打开审阅` : '本次任务暂无文件改动'}</small></span>
           {displayedAgentReview.files.length > 0 && <span className="environment-diff-stat"><em>+{displayedAgentReview.additions}</em><del>−{displayedAgentReview.deletions}</del></span>}
         </button>
@@ -2627,7 +2675,19 @@ export function ProjectWorkspace({ onNow, onBrowse, onFields, onSettings, newCon
           </button>)}
           {environmentSources.length === 0 && selectedFile ? <button type="button" className="environment-source" data-testid="environment-current-file" title={selectedFile.relative_path} onClick={() => { setEnvironmentOpen(false); void openFile(selectedFile); }}><FileTypeIcon path={selectedFile.relative_path}/><span>{selectedFile.relative_path}</span></button> : environmentSources.length === 0 ? <small className="environment-empty">添加文件或图片作为对话参考。</small> : null}</div>
         </section>
-      </div>}
+  </> : null;
+  const environmentControl = project && projectActionsLayer ? createPortal(<>
+    {hasEnvironmentChanges && environmentLayout !== 'MENU' && <div className="environment-summary" data-testid="environment-summary">
+      <button type="button" className="environment-changes-summary" onClick={openEnvironmentChanges} aria-label={displayedAgentReview.files.length > 0 ? '审核任务变更' : '查看 Git 工作区变更'} title={displayedAgentReview.files.length > 0 ? '审核任务变更' : '在终端查看 Git 工作区变更'} data-testid="environment-changes-summary">
+        <AppIcon name="diff"/>
+        {displayedAgentReview.files.length > 0 ? <span className="environment-diff-stat"><em>+{displayedAgentReview.additions.toLocaleString()}</em><del>−{displayedAgentReview.deletions.toLocaleString()}</del></span> : <span>{environment?.changed_files} 个变更</span>}
+      </button>
+      <span className="environment-summary-location">本地</span>
+      {environment?.is_git_repository && <span className="environment-summary-branch" title={environment.branch ?? '未检出分支'}><AppIcon name="branch"/><span>{environment.branch ?? '未检出分支'}</span></span>}
+    </div>}
+    <div className="environment-menu" ref={environmentMenuRef}>
+      <ToolbarAction label="工作区信息" icon={<AppIcon name="environment"/>} active={environmentPinned || environmentOpen} onClick={toggleEnvironment} aria-expanded={environmentPinned || environmentOpen} testId="environment-menu-toggle" />
+      {environmentOpen && !environmentPinned && <div className="environment-popover" data-surface="overlay" data-testid="environment-popover">{environmentContent}</div>}
     </div>
   </>, projectActionsLayer) : null;
 
@@ -2782,9 +2842,10 @@ export function ProjectWorkspace({ onNow, onBrowse, onFields, onSettings, newCon
       />}
     >
 
-      <section className={`conversation-column${visibleMessages.length === 0 && !streamingOutput ? ' is-empty-conversation' : ''}`} data-surface="content">
+      <section className={`conversation-column${environmentPinned ? ' has-environment-panel' : ''}${visibleMessages.length === 0 && !streamingOutput ? ' is-empty-conversation' : ''}`} data-surface="content">
         {!project ? newConversationStart ? <div className="new-conversation-start" data-testid="new-conversation-start"><div><p className="eyebrow">新对话</p><h2>开始一条新对话</h2><p>先选择一个本地文件夹建立 Project，然后即可创建第一条对话。Project 与对话各自独立，不会修改文件夹内容。</p><button className="secondary-button" onClick={() => void addProject()} data-testid="new-conversation-choose-project"><AppIcon name="folder"/>选择 Project 文件夹</button></div></div> : <div className="project-overview" data-testid="project-overview"><header><div><p className="eyebrow">PROJECTS</p><h1>项目</h1><p>本地文件夹、持久对话、文件变更和运行结果。</p></div><button className="secondary-button" onClick={() => void addProject()}><AppIcon name="folder"/>打开文件夹</button></header><div className="project-overview-empty"><h2>还没有项目</h2><p>使用左侧“项目”旁的 ＋ 或上方“打开文件夹”添加第一个本地 Project。</p></div></div> : <>
           <header className="conversation-header conversation-context-header"><div className="conversation-heading"><AppIcon name="folder"/><div className="conversation-title-line"><h2 title={conversation?.title ?? '新对话'}>{conversation?.title ?? '新对话'}</h2>{conversation && <ConversationActionsMenu onRename={() => setConversationDialog({ kind: 'RENAME', value: conversation.title })} onDelete={() => setConversationDialog({ kind: 'DELETE' })}/>}</div></div></header>
+          {environmentPinned && <aside className="environment-popover environment-panel" aria-label="环境信息" data-surface="floating" data-testid="environment-panel">{environmentContent}</aside>}
           <div className="message-list" ref={messageListRef} onClickCapture={(event) => {
             if (!(event.target instanceof Element) || !event.target.closest('.operation-summary, .operation-list button, .agent-terminal-runtime, summary')) return;
             // An explicit disclosure is reading, not a request to follow new output.
@@ -2852,7 +2913,7 @@ export function ProjectWorkspace({ onNow, onBrowse, onFields, onSettings, newCon
             <div className="composer-footer">
               <div className="composer-left-actions">
                 <TooltipButton type="button" className="composer-icon-button" tooltip="添加附件" placement="top" variant="default" onClick={() => void pickAttachments()} aria-label="添加附件" data-testid="composer-add-attachment"><AppIcon name="plus"/></TooltipButton>
-                <SelectMenu className="composer-menu-picker permission-picker" value={permission} ariaLabel="权限" testId="composer-permission" placement="top" hideChevron leading={<PermissionIcon permission={permission}/>} options={[{ value: 'READ_ONLY', label: '请求批准', description: '编辑外部文件和使用互联网时始终询问', icon: <PermissionIcon permission="READ_ONLY"/> }, { value: 'REVIEW_CHANGES', label: '帮我批准', description: '仅对检测到的风险操作请求批准', icon: <PermissionIcon permission="REVIEW_CHANGES"/> }, { value: 'FULL_CONTROL', label: '完全访问权限', triggerLabel: '完全访问', description: '可不受限制地访问互联网和你电脑上的任何文件', icon: <PermissionIcon permission="FULL_CONTROL"/>, tone: 'warning' }]} onChange={updatePermission} />
+                <SelectMenu className="composer-menu-picker permission-picker" value={permission} ariaLabel="权限" testId="composer-permission" placement="top" hideChevron leading={<PermissionIcon permission={permission}/>} options={[{ value: 'READ_ONLY', label: '请求批准', description: '读取自动进行；修改文件、运行命令和联网前询问', icon: <PermissionIcon permission="READ_ONLY"/> }, { value: 'REVIEW_CHANGES', label: '帮我批准', description: '自动修改项目；支持时隔离执行普通命令，安装和风险操作仍需批准', icon: <PermissionIcon permission="REVIEW_CHANGES"/> }, { value: 'FULL_CONTROL', label: '完全访问权限', triggerLabel: '完全访问', description: '符合条件的项目依赖可自动安装，其他安装仍需批准；普通命令不使用沙箱', icon: <PermissionIcon permission="FULL_CONTROL"/>, tone: 'warning' }]} onChange={updatePermission} />
               </div>
               <div className="composer-right-actions">
                 {activeProviders.length > 1 ? <SelectMenu className="composer-menu-picker configured-model-picker" value={effectiveConversationProvider?.id ?? ''} ariaLabel="模型" testId="conversation-model" placement="top" options={[{ value: '', label: '选择模型' }, ...activeProviders.map((provider) => ({ value: provider.id, label: provider.default_model, description: `${provider.display_name}${provider.credential_present ? '' : ' · 需要凭据'}`, disabled: !provider.credential_present }))]} onChange={(value) => void updateConversationSelection(value)} /> : effectiveConversationProvider && <span className="composer-model-label" title={effectiveConversationProvider.display_name}>{effectiveConversationProvider.default_model}</span>}

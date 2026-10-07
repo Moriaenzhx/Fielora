@@ -181,7 +181,7 @@ mod tests {
                         json!({"choices":[{"delta":{"reasoning_content":"PRIVATE_PROTOCOL_SENTINEL","encrypted_content":"opaque-","reasoning_details":[{"index":0,"id":"r1","type":"reasoning.text","format":"MiniMax-response-v1","text":"PRIVATE_"}]}}]}),
                         json!({"choices":[{"delta":{"encrypted_content":"block","reasoning_details":[{"index":0,"id":"r1","text":"DETAIL"}]}}]}),
                         json!({"choices":[{"delta":{"tool_calls":[{"index":0,"id":format!("call_{index}"),"function":{"name":"fielora_compatibility_echo","arguments":"{\"value\":"}}]}}]}),
-                        json!({"choices":[{"delta":{"tool_calls":[{"index":0,"function":{"arguments":if malformed {"!}"} else if index==1 {"\"FIRST\"}"} else {"\"RETRY\"}"}}}]},"finish_reason":"tool_calls"}]}),
+                        json!({"choices":[{"delta":{"tool_calls":[{"index":0,"id":null,"type":null,"function":{"name":null,"arguments":if malformed {"!}"} else if index==1 {"\"FIRST\"}"} else {"\"RETRY\"}"}}}]},"finish_reason":"tool_calls"}]}),
                     ]
                 };
                 let data = frames
@@ -431,8 +431,10 @@ mod tests {
                     &mut result,
                     "FIELORA_TEST_RESULT"
                 )
-                .await,
-            Err(ModelError::ProviderProtocolError)
+                .await
+                .unwrap_err()
+                .code(),
+            "PROVIDER_INVALID_TOOL_CALL"
         );
         worker.join().unwrap();
         assert_eq!(requests.lock().unwrap().len(), 2);

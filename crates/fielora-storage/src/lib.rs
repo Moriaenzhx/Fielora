@@ -5,6 +5,7 @@
 //! Harness.Verification & Evidence. Storage is infrastructure, not a separate
 //! Agent layer or an independent source of execution authority.
 
+pub mod credentials;
 pub mod idr;
 mod model_runtime;
 mod model_usage;
@@ -63,7 +64,8 @@ const MIGRATION_0005_FROZEN_SHA256: &str =
     "b7e1e586b47e50389502677e172741d69463e9518ed32211dfafe0dc910c1547";
 const MIGRATION_0006_FROZEN_SHA256: &str =
     "5257959801424a13426259ce10c9ed2d5037795ec7a3a207171c568bc80dbaae";
-const SCHEMA_VERSION: u32 = 18;
+const SCHEMA_VERSION: u32 = 19;
+const MIGRATION_0019: &str = include_str!("../migrations/0019_local_credentials.sql");
 const MIGRATION_0018: &str = include_str!("../migrations/0018_provider_optimization.sql");
 const MIGRATION_0017: &str = include_str!("../migrations/0017_model_runtime.sql");
 const MIGRATION_0016: &str = include_str!("../migrations/0016_agent_continuation_budget.sql");
@@ -4630,6 +4632,27 @@ fn run_worker(mut connection: Connection, receiver: Receiver<StorageCommand>) {
 }
 
 pub fn open_connection(path: &Path) -> Result<Connection, StorageError> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
+        // Create privately before SQLite opens it. WAL/SHM inherit the DB mode;
+        // also tighten sidecars belonging to older installations.
+        std::fs::OpenOptions::new()
+            .write(true)
+            .create(true)
+            .truncate(false)
+            .mode(0o600)
+            .open(path)?;
+        std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600))?;
+        for suffix in ["-wal", "-shm"] {
+            let sidecar = PathBuf::from(format!("{}{suffix}", path.to_string_lossy()));
+            match std::fs::set_permissions(sidecar, std::fs::Permissions::from_mode(0o600)) {
+                Ok(()) => {}
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+                Err(error) => return Err(error.into()),
+            }
+        }
+    }
     let connection = Connection::open(path)?;
     connection.execute_batch(
         "PRAGMA foreign_keys = ON;\nPRAGMA journal_mode = WAL;\nPRAGMA synchronous = FULL;\nPRAGMA busy_timeout = 5000;",
@@ -4839,6 +4862,14 @@ pub fn apply_migrations(connection: &mut Connection, now: i64) -> Result<(), Sto
         let tx = connection.transaction()?;
         tx.execute_batch(MIGRATION_0018)?;
         tx.execute("INSERT INTO schema_migrations(version,name,checksum,applied_at) VALUES(18,'provider_optimization',?1,?2)", params![checksum,now])?;
+        tx.commit()?;
+    }
+    let checksum = migration_checksum(MIGRATION_0019);
+    verify_applied_migration(connection, 19, "local_credentials", &checksum)?;
+    if !migration_exists(connection, 19)? {
+        let tx = connection.transaction()?;
+        tx.execute_batch(MIGRATION_0019)?;
+        tx.execute("INSERT INTO schema_migrations(version,name,checksum,applied_at) VALUES(19,'local_credentials',?1,?2)", params![checksum,now])?;
         tx.commit()?;
     }
     validate_schema(connection)?;
@@ -5141,6 +5172,14 @@ fn validate_base_schema(connection: &Connection) -> Result<(), StorageError> {
 }
 
 fn validate_schema(connection: &Connection) -> Result<(), StorageError> {
+    if migration_exists(connection, 19)? {
+        let count: i64 = connection.query_row("SELECT count(*) FROM pragma_table_info('local_credentials') WHERE name IN ('target','secret')", [], |row| row.get(0))?;
+        if count != 2 {
+            return Err(StorageError::OpenGate(
+                "missing local credentials table".into(),
+            ));
+        }
+    }
     // Older migration checkpoints validate their own schema before column 18 exists.
     if migration_exists(connection, 18)? {
         let count: i64 = connection.query_row("SELECT count(*) FROM pragma_table_info('provider_configs') WHERE name='model_optimization' AND \"notnull\"=1", [], |row| row.get(0))?;
@@ -5495,7 +5534,13 @@ fn validate_schema(connection: &Connection) -> Result<(), StorageError> {
             "provider credential_ref unique constraint missing".into(),
         ));
     }
-    let forbidden_table:i64=connection.query_row("SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND (lower(name) LIKE '%credential%' OR lower(name) LIKE '%prompt%' OR lower(name) LIKE '%response%' OR lower(name) LIKE '%session%')",[],|row|row.get(0))?;
+    // The user-authorized local credential store is the sole retention exception.
+    let credential_exception = if migration_exists(connection, 19)? {
+        "local_credentials"
+    } else {
+        ""
+    };
+    let forbidden_table:i64=connection.query_row("SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name!=?1 AND (lower(name) LIKE '%credential%' OR lower(name) LIKE '%prompt%' OR lower(name) LIKE '%response%' OR lower(name) LIKE '%session%')",[credential_exception],|row|row.get(0))?;
     if forbidden_table != 0 {
         return Err(StorageError::OpenGate(
             "forbidden retention table detected".into(),
@@ -7843,6 +7888,9 @@ pub fn create_portable_snapshot(source: &Path, target: &Path) -> Result<(), Stor
     transaction.execute("DELETE FROM surface_snapshots", [])?;
     transaction.execute("DELETE FROM device_bindings", [])?;
     transaction.execute("DELETE FROM screenshot_evidence", [])?;
+    if migration_exists(&transaction, 19)? {
+        transaction.execute("DELETE FROM local_credentials", [])?;
+    }
     transaction.execute(
         "UPDATE library_objects SET original_source=NULL WHERE kind='FILE'",
         [],
@@ -8810,7 +8858,7 @@ mod tests {
             frozen_migration_checksum(MIGRATION_0006),
             MIGRATION_0006_FROZEN_SHA256
         );
-        assert_eq!(schema_version(), 18);
+        assert_eq!(schema_version(), 19);
     }
 
     #[test]
@@ -8841,7 +8889,7 @@ mod tests {
                 row.get(0)
             })
             .unwrap();
-        assert_eq!((profile_before, version), (profile_after, 18));
+        assert_eq!((profile_before, version), (profile_after, 19));
         drop(connection);
         fs::remove_dir_all(&root).unwrap();
 
@@ -8998,7 +9046,7 @@ mod tests {
             .unwrap();
         assert_eq!(
             (version, migration_name.as_str()),
-            (18, MIGRATION_0009_NAME)
+            (19, MIGRATION_0009_NAME)
         );
         assert_eq!(
             artifacts_before,
@@ -9293,7 +9341,7 @@ mod tests {
                 |row| row.get(0),
             )
             .unwrap();
-        assert_eq!((max_version, assets_table), (18, 1));
+        assert_eq!((max_version, assets_table), (19, 1));
         assert_eq!(
             artifacts_before,
             query_json_rows(
@@ -9517,7 +9565,7 @@ mod tests {
             [&message_id],
             |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
         ).unwrap();
-        assert_eq!(migrated, (18, "# Existing Markdown".into(), "[]".into()));
+        assert_eq!(migrated, (19, "# Existing Markdown".into(), "[]".into()));
         apply_migrations(&mut connection, 21).unwrap();
         validate_schema(&connection).unwrap();
         drop(connection);
@@ -9564,7 +9612,7 @@ mod tests {
                 |row| Ok((row.get(0)?, row.get(1)?)),
             )
             .unwrap();
-        assert_eq!(migrated, (18, 1));
+        assert_eq!(migrated, (19, 1));
         apply_migrations(&mut connection, 21).unwrap();
         validate_schema(&connection).unwrap();
         drop(connection);
@@ -9791,7 +9839,7 @@ mod tests {
             [],
             |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
         ).unwrap();
-        assert_eq!(migrated, (18, 1, 1));
+        assert_eq!(migrated, (19, 1, 1));
         assert_eq!(
             revisions_before,
             query_json_rows(

@@ -486,7 +486,11 @@ export class BrowserRuntime {
       : null);
     if (image.isEmpty()) throw new Error('Browse screenshot is empty');
     const size = image.getSize();
-    const png = image.toPNG();
+    // Electron 43 toBitmap() converts pixels to sRGB. Recreate the native image
+    // from these pixels so macOS display ICC metadata is not carried into our
+    // deliberately metadata-free PNG evidence contract. Core still fully
+    // validates the newly encoded bytes; uploaded images are not transformed.
+    const png = nativeImage.createFromBitmap(image.toBitmap(), size).toPNG();
     assertScreenshotBounds(png.byteLength, size.width, size.height);
     return {
       png_data_url: `data:image/png;base64,${png.toString('base64')}`,

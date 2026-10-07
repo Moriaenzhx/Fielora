@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
-import { execFileSync } from 'node:child_process';
+import { execFileSync, spawnSync } from 'node:child_process';
+import { DatabaseSync } from 'node:sqlite';
 import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
@@ -18,6 +19,19 @@ await mkdir(projectRoot);
 execFileSync('git', ['init'], { cwd: projectRoot, stdio: 'ignore' });
 await mkdir(evidence, { recursive: true });
 let launched, cdp, providerId;
+const syntheticKey = `mac-fixture-${randomUUID()}`;
+async function verifyCredentialFlow() {
+  const db = new DatabaseSync(path.join(dataRoot, 'Fielora/data/fielora.db'), {readOnly:true});
+  const target = `Fielora/provider/${providerId}`;
+  assert.equal(Buffer.from(db.prepare('SELECT secret FROM local_credentials WHERE target=?').get(target).secret).toString(), syntheticKey);
+  db.close();
+  assert.notEqual(spawnSync('/usr/bin/security', ['find-generic-password', '-s', 'Fielora', '-a', target], {stdio:'ignore'}).status, 0, 'new key must not create an OS keychain entry');
+  const probe = await cdp.eval(`(async()=>{const events=[];let finish;const done=new Promise(resolve=>finish=resolve);const stop=window.fielora.core.subscribe(e=>{if(e.event==='event.model.invocation'){events.push(e);if(['COMPLETED','FAILED','CANCELLED'].includes(e.kind))finish();}});const began=performance.now();try{const started=await window.fielora.provider.probe({provider_config_id:${JSON.stringify(providerId)}});const acknowledgementMs=performance.now()-began;await done;return{started,events,acknowledgementMs};}finally{stop();}})()`);
+  assert.equal(probe.events.at(-1).kind, 'COMPLETED');
+  assert.ok(probe.acknowledgementMs < 5000, 'connection-test acknowledgement must not block on OS UI');
+  assert.equal(JSON.stringify(probe).includes(syntheticKey), false);
+  assert.equal(JSON.stringify(await cdp.eval('window.fielora.provider.list()')).includes(syntheticKey), false);
+}
 async function launch() {
   launched = await launchElectron({ root, dataRoot, executablePath: mode === 'packaged' ? packagedApplication(root) : '' });
   cdp = await connectToFieloraApp(launched);
@@ -42,8 +56,9 @@ try {
   await waitForExpression(cdp, `document.body.dataset.sidebarCollapsed==='true'`);
   await commandKey('b', 'KeyB', 66);
   await waitForExpression(cdp, `document.body.dataset.sidebarCollapsed==='false'`);
-  const identity = await cdp.eval(`(async()=>{const provider=await window.fielora.provider.create({provider_kind:'OPENAI_COMPATIBLE',display_name:'macOS synthetic fixture',base_url:'https://example.com/v1',default_model:'__fielora_agent_fixture__',custom_endpoint_acknowledged:true});await window.fielora.provider.storeCredential({provider_config_id:provider.id,secret:${JSON.stringify(`mac-fixture-${randomUUID()}`)}});const project=await window.fieloraTest.createProject({title:'Mac development acceptance',root_path:${JSON.stringify(projectRoot)},goal:null});const conversation=await window.fielora.conversation.create({field_id:project.field_id,title:'Mac native workflow',provider_config_id:provider.id,model_id:provider.default_model});return{provider,project,conversation};})()`);
+  const identity = await cdp.eval(`(async()=>{const provider=await window.fielora.provider.create({provider_kind:'OPENAI_COMPATIBLE',display_name:'macOS synthetic fixture',base_url:'https://example.com/v1',default_model:'__fielora_agent_fixture__',custom_endpoint_acknowledged:true});await window.fielora.provider.storeCredential({provider_config_id:provider.id,secret:${JSON.stringify(syntheticKey)}});const project=await window.fieloraTest.createProject({title:'Mac development acceptance',root_path:${JSON.stringify(projectRoot)},goal:null});const conversation=await window.fielora.conversation.create({field_id:project.field_id,title:'Mac native workflow',provider_config_id:provider.id,model_id:provider.default_model});return{provider,project,conversation};})()`);
   providerId = identity.provider.id;
+  await verifyCredentialFlow();
   const targets = await cdp.eval(`window.fielora.workspace.getOpenTargets({field_id:${JSON.stringify(identity.project.field_id)}})`);
   assert.equal(targets.find(target => target.target === 'FILE_EXPLORER')?.label, 'Finder');
   const user = await cdp.eval(`window.fielora.conversation.createMessage({conversation_id:${JSON.stringify(identity.conversation.id)},role:'USER',content:'FIELORA_AGENT_FIXTURE_CREATE',status:'COMPLETED',provider_config_id:null,model_id:null,invocation_id:null})`);
@@ -64,13 +79,14 @@ try {
   await captureScreenshot(cdp, path.join(evidence, `${mode}-macos-settings.png`));
   await quit();
   await launch();
+  await verifyCredentialFlow();
   const restored = await cdp.eval(`(async()=>({projects:await window.fielora.project.list(),provider:await window.fielora.provider.get({provider_config_id:${JSON.stringify(providerId)}}),run:await window.fielora.agent.get({run_id:${JSON.stringify(run.id)}})}))()`);
   assert.ok(restored.projects.some(project => project.id === identity.project.id));
   assert.equal(restored.provider.lifecycle_status, 'ACTIVE');
   assert.equal(restored.run.status, 'COMPLETED');
   await captureScreenshot(cdp, path.join(evidence, `${mode}-macos-restarted.png`));
   await quit();
-  await writeFile(path.join(evidence, `${mode}-MACOS_ACCEPTANCE.json`), JSON.stringify({ status: 'PASS', platform: process.platform, arch: process.arch, mode, external_model_requests: 0, checks: ['traffic-light-inset', 'command-sidebar', 'command-settings', 'keychain-backed-fixture', 'agent-file-command-verification', 'zsh-terminal-node', 'finder-target', 'persistent-project-provider-run', 'clean-quit-restart'] }, null, 2));
+  await writeFile(path.join(evidence, `${mode}-MACOS_ACCEPTANCE.json`), JSON.stringify({ status: 'PASS', platform: process.platform, arch: process.arch, mode, external_model_requests: 0, checks: ['traffic-light-inset', 'command-sidebar', 'command-settings', 'sqlite-backed-key-reused-by-probe-before-and-after-restart', 'no-new-keychain-entry', 'agent-file-command-verification', 'zsh-terminal-node', 'finder-target', 'persistent-project-provider-run', 'clean-quit-restart'] }, null, 2));
   console.log(`macOS development E2E (${mode}): PASS evidence=${evidence}`);
 } finally {
   cdp?.close();

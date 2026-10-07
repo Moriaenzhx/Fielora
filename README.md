@@ -4,7 +4,7 @@
 
 <p align="center"><strong>以项目为中心，把对话、代码、工具和可审阅的结果放在同一个桌面工作空间。</strong></p>
 
-<p align="center">Windows 11 x64 · 多模型服务 · Rust + React + Electron · Apache-2.0</p>
+<p align="center">Windows 11 x64 · macOS Apple Silicon 预览版 · 多模型服务 · Rust + React + Electron · Apache-2.0</p>
 
 <p align="center">
   <a href="#快速开始">快速开始</a> · <a href="#功能与体验">功能与体验</a> · <a href="#系统架构">系统架构</a> · <a href="#开发与贡献">开发与贡献</a> · <a href="#当前状态与路线">当前状态与路线</a>
@@ -18,7 +18,13 @@ Fielora 是一个 **本地优先、多模型服务的 AI 桌面工作空间**。
 
 *Fielora is a local-first, project-centered AI desktop workspace with provider-neutral model access, governed tool execution, and reviewable results.*
 
-> **开发状态：V0.1 持续迭代中。** 本页介绍截至 2026-09-29 的[开发分支](https://github.com/Moriaenzhx/Fielora/tree/phase/complete-agent-v0.1)，架构和截图对应源码基线 [7919a64](https://github.com/Moriaenzhx/Fielora/commit/7919a64c4b6aa8409a61fcf4d39aa1b027460415)。默认分支的产品代码可能滞后；体验最新实现请使用下方明确指定的分支。当前正式验证平台是 Windows 11 x64，尚不作稳定版或跨平台交付承诺。
+> **开发状态：V0.1 持续迭代中。** 最新源码位于[开发分支](https://github.com/Moriaenzhx/Fielora/tree/phase/complete-agent-v0.1)。现提供 [2026-10-07 macOS Apple Silicon 预览版下载](https://github.com/Moriaenzhx/Fielora/releases/tag/v0.1.0-preview.20261007)，尚非稳定版。下方架构图及 Windows 截图来自 [2026-09-29 基线](https://github.com/Moriaenzhx/Fielora/commit/7919a64c4b6aa8409a61fcf4d39aa1b027460415)；版本的具体改动与验证边界见发行说明。默认 `main` 可能滞后。
+
+### 下载 Mac 预览版
+
+**[下载 macOS Apple Silicon 安装包（DMG）](https://github.com/Moriaenzhx/Fielora/releases/download/v0.1.0-preview.20261007/Fielora-0.1.0-preview.20261007-macos-arm64.dmg)** · **[全部附件与 SHA-256](https://github.com/Moriaenzhx/Fielora/releases/tag/v0.1.0-preview.20261007)** · **[安装说明与已知限制](docs/releases/0.1.0-preview.20261007.md)**
+
+适用于 Apple Silicon（M 系列）Mac，未提供 Intel 版本。打开 DMG 后，将 `Fielora.app` 拖入 `Applications`；运行 App 无需预装 Rust、Node.js 或 Python，任务使用的外部工具需另行具备。本预览包没有 Apple Developer ID 签名和公证，首次打开可能需要在系统“隐私与安全性”中选择“仍要打开”，详见安装说明。
 
 ## 功能与体验
 
@@ -79,7 +85,7 @@ Fielora 的 Agent 采用 **Model + Harness + Capability**。桌面宿主、通�
 | Model | 理解、推理、生成、提出行动；统一不同供应商协议 | `fielora-model` |
 | Harness | 上下文、编排、执行控制、权限审批、连续性、验证恢复与诊断 | `fielora-core` + `fielora-agent` |
 | Capability | 工具定义和后端、Skill、资源读取、适配器与插件包装 | Rust 工具实现 + Electron 浏览器后端 |
-| 持久化与凭据 | 项目与对话、Run、工具回执和检查点；系统凭据存储 | SQLite / `fielora-storage` / Windows Credential Manager |
+| 持久化与凭据 | 项目与对话、Run、工具回执、检查点与当前设备 API Key | SQLite / `fielora-storage`；系统凭据库仅作为旧数据迁移来源 |
 
 Harness 按九类职责组织：**接入 → 上下文 → 模型调用 → 编排控制 → 能力调用与执行控制 → 连续性 → 治理 → 验证恢复 → 可观测性**。这是职责划分，不是九个服务，也不是固定的九步流水线。
 
@@ -89,7 +95,7 @@ Harness 按九类职责组织：**接入 → 上下文 → 模型调用 → 编�
 
 ## 快速开始
 
-当前建议从源码运行开发版。不要把仓库 `artifacts/` 下的历史阶段程序当作最新发行版。
+Mac 用户可以使用上方预览包；开发者也可以从源码运行。不要把仓库 `artifacts/` 下的历史阶段程序当作最新发行版。
 
 ### 开发环境
 
@@ -133,10 +139,12 @@ macOS Apple Silicon 的本地开发启动与平台适配边界见 [macOS 开发�
 ## 数据与执行边界
 
 - **本地优先**：项目、对话和执行状态由本地 Rust Core / SQLite 持久化。发送给模型的请求仍会离开本机，数据处理遵循你所选服务的政策。
-- **凭据独立存储**：API Key 使用 Windows Credential Manager，不应提交到仓库、截图或问题报告。
+- **本地凭据**：API Key 保存在当前设备的本地 SQLite 数据库，连接测试与任务直接复用，无需系统密码；可移植导出剔除密钥。本机数据库/备份包含凭据，不应提交到仓库或问题报告。
 - **模型不能自行授权**：权限、确认路由与结果验证分离；网页、Skill、MCP 元数据和模型输出不会自动扩大操作范围。
 - **浏览器隔离**：远程页面不获得 Node、应用 preload 或本地工作区桥接权限。
 - **工具安装按影响处理**：先发现已有运行时。可信官方来源、实际不超过 20 MiB、安装在隔离目录且不改系统 / PATH、不执行安装脚本的小工具可免安装确认；其他安装需要人工确认，网络准入仍单独判断。
+- **项目依赖与命令隔离**：macOS 上，“完全访问”可自动运行已确认项目虚拟环境内的 pip 依赖安装和直接 npm/pnpm/yarn 项目安装，同时限制命令及其子进程写入项目和专用临时目录。系统/全局/范围不明的安装仍需批准。自动执行的普通“审阅更改”命令另禁止联网；沙箱不可用时要求批准或停止，不静默取消隔离。普通“完全访问”命令及逐次批准的命令使用当前用户权限，无命令沙箱。
+- **隔离范围明确**：上述机制只覆盖 `run_command` 的写入和网络，不隔离本机文件读取，不覆盖独立 Terminal、Browser server、MCP 等其他进程入口；Windows 尚无此命令隔离后端。命令详情显示本次实际执行边界，不能用权限名称推断。
 - **恢复保留不确定性**：中断且结果未知的副作用不会被直接当成成功，也不会一律盲目重放。
 
 这些机制仍在持续测试和改进，不能理解为通用操作系统沙箱或所有模型行为的安全保证。
@@ -148,7 +156,8 @@ macOS Apple Silicon 的本地开发启动与平台适配边界见 [macOS 开发�
 | 项目 / 对话 / 多模型 / 文件与 Diff / 命令工作流 | 已实现，持续改进桌面体验 |
 | 长任务与恢复 | 已有时间额度、暂停继续、检查点与重启核对；真实复杂任务可靠性仍需持续验证 |
 | Skill、MCP 与产物能力 | 已有受限实现；具体范围见[能力清单](https://github.com/Moriaenzhx/Fielora/blob/7919a64c4b6aa8409a61fcf4d39aa1b027460415/docs/architecture/CAPABILITY_INVENTORY_V0.1.md) |
-| macOS / Linux、本地模型、远程分布式执行、完整插件市场 | 不属于当前 V0.1 交付承诺 |
+| macOS Apple Silicon | 提供开发预览包；仅报告实际验证的 Mac 场景，无稳定版或 Intel 兼容承诺 |
+| Linux、本地模型、远程分布式执行、完整插件市场 | 不属于当前 V0.1 交付承诺 |
 | Aegis、DXE、Personal Steward | 后续演进方向，依赖稳定工作状态与真实用户流程 |
 
 近期重点是 **完成真实任务、减少重复尝试、保留正确上下文、提高执行与恢复的可解释性**。IDR 已退出生产 Agent 链路，历史代码和数据保留用于兼容与追溯。
@@ -178,7 +187,7 @@ docs/                    产品、架构、工程记录与公开图片
 
 ```powershell
 pnpm dev                 # 开发运行
-pnpm build               # 类型检查、Rust Release 与 Windows 桌面打包
+pnpm build               # 类型检查、Rust Release 与当前平台桌面打包
 pnpm verify:dev:docs      # 文档与上下文清单
 pnpm verify:dev:ui        # TypeScript、Lint、界面单元测试
 pnpm verify:dev:core      # Rust 格式、测试、Clippy
@@ -195,7 +204,7 @@ pnpm verify:premerge      # main 准入检查，含真实桌面 E2E
 
 - [当前项目事实](https://github.com/Moriaenzhx/Fielora/blob/7919a64c4b6aa8409a61fcf4d39aa1b027460415/docs/context/02_PROJECT_REALITY.md)
 - [重要决策](https://github.com/Moriaenzhx/Fielora/blob/7919a64c4b6aa8409a61fcf4d39aa1b027460415/docs/context/03_DECISIONS.md)
-- [Agent 故障、修复与设计经验](https://github.com/Moriaenzhx/Fielora/blob/7919a64c4b6aa8409a61fcf4d39aa1b027460415/docs/engineering/AGENT_DESIGN_IMPLEMENTATION_LESSONS.md)
+- [Agent 故障、修复与设计经验（含面试案例）](docs/engineering/AGENT_DESIGN_IMPLEMENTATION_LESSONS.md)
 - [Fielora Glass 设计语言](https://github.com/Moriaenzhx/Fielora/blob/7919a64c4b6aa8409a61fcf4d39aa1b027460415/docs/product/FIELORA_DESIGN_LANGUAGE_V0.1.md)
 - [历史仓库首页与阶段记录](docs/context/REPOSITORY_CONTEXT_LEGACY.md)
 

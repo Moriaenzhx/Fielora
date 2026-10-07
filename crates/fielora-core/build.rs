@@ -44,6 +44,8 @@ fn main() {
         .expect("workspace root");
     let core = [
         "crates/fielora-core/src/agent_runtime.rs",
+        "crates/fielora-core/src/agent_model_repair.rs",
+        "crates/fielora-core/src/agent_command_policy_fixture.rs",
         "crates/fielora-core/src/agent_image_history.rs",
         "crates/fielora-core/src/agent_turn_context.rs",
         "crates/fielora-core/src/agent_user_input.rs",
@@ -56,15 +58,22 @@ fn main() {
         "crates/fielora-agent/src/skills.rs",
         "crates/fielora-core/src/agent_request_intent.rs",
         "crates/fielora-core/src/agent_request_scope.rs",
+        "crates/fielora-core/src/agent_task_outcome.rs",
+        "crates/fielora-core/src/agent_work_plan.rs",
         "crates/fielora-core/src/agent_work_state.rs",
+        "crates/fielora-core/src/agent_work_review.rs",
+        "crates/fielora-core/src/model_runtime.rs",
         "crates/fielora-core/src/agent_recovery.rs",
         "crates/fielora-agent/src/command_diagnostics.rs",
+        "crates/fielora-agent/src/command_policy.rs",
+        "crates/fielora-platform/src/command_sandbox.rs",
         "crates/fielora-agent/src/tool_acquisition.rs",
         "crates/fielora-agent/src/fonts.rs",
         "crates/fielora-platform/src/fonts.rs",
         "crates/fielora-core/src/agent_browser.rs",
         "crates/fielora-agent/src/lib.rs",
         "crates/fielora-model/src/lib.rs",
+        "crates/fielora-model/src/response.rs",
     ];
     let renderer = [
         "apps/desktop/src/renderer/ProjectWorkspace.tsx",

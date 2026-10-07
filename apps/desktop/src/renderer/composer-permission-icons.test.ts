@@ -32,10 +32,10 @@ test('composer permission uses three semantic icons without a trigger chevron', 
   assert.match(styles, /permission-icon\[data-permission-icon="FULL_CONTROL"\]/);
 });
 
-test('permission copy and compact trigger match the approved desktop wording', () => {
-  assert.match(workspace, /label: '请求批准', description: '编辑外部文件和使用互联网时始终询问'/);
-  assert.match(workspace, /label: '帮我批准', description: '仅对检测到的风险操作请求批准'/);
-  assert.match(workspace, /label: '完全访问权限', triggerLabel: '完全访问', description: '可不受限制地访问互联网和你电脑上的任何文件'/);
+test('permission copy distinguishes approval and actual command isolation', () => {
+  assert.match(workspace, /label: '请求批准', description: '读取自动进行；修改文件、运行命令和联网前询问'/);
+  assert.match(workspace, /label: '帮我批准', description: '自动修改项目；支持时隔离执行普通命令，安装和风险操作仍需批准'/);
+  assert.match(workspace, /label: '完全访问权限', triggerLabel: '完全访问', description: '符合条件的项目依赖可自动安装，其他安装仍需批准；普通命令不使用沙箱'/);
   assert.match(primitives, /selected\?\.triggerLabel \?\? selected\?\.label \?\? ariaLabel/);
 });
 

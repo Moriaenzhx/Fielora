@@ -56,6 +56,7 @@ export const channels = {
   clipboardWriteText: 'fielora:clipboard:write-text',
   windowTitlebarTheme: 'fielora:window:titlebar-theme',
   providerRuntimeUpdate: 'fielora:provider:runtime:update',
+  providerPrepareSend: 'fielora:provider:prepare-send',
   providerValidate: 'fielora:provider:validate',
   providerCreate: 'fielora:provider:create', providerUpdate: 'fielora:provider:update',
   providerStoreCredential: 'fielora:provider:store-credential', providerDeleteCredential: 'fielora:provider:delete-credential',

@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import type { AgentEventView, AgentRunView, AgentToolCallView } from '@fielora/contracts';
-import { agentModelIsActive, agentPausePresentation, agentCompletionTimeLabel, agentOpeningNarrative, agentRequestKind, agentTerminalBody, agentTerminalTitle, approvalActionLabel, buildAgentPresentation, buildAgentResultViewModel, stripTerminalHeading } from './agent-presentation.ts';
+import { agentActiveDurationMs, agentModelIsActive, agentPausePresentation, agentCompletionTimeLabel, agentOpeningNarrative, agentRequestKind, agentTerminalBody, agentTerminalTitle, approvalActionLabel, buildAgentPresentation, buildAgentResultViewModel, stripTerminalHeading } from './agent-presentation.ts';
 
 function run(status: AgentRunView['status'], errorCode: string | null = null): AgentRunView {
   return {
@@ -58,6 +58,28 @@ test('failure explains impact in plain language while technical codes stay out o
   assert.equal(presentation.headline, '这次没有完成');
   assert.match(presentation.narrative, /项目文件没有发生变化/);
   assert.doesNotMatch(presentation.narrative, /PROVIDER_PROTOCOL_ERROR/);
+});
+
+test('response failures give a cause without inventing changes or retry success', () => {
+  const legacy = agentPausePresentation(run('PAUSED', 'PROVIDER_PROTOCOL_ERROR'));
+  assert.match(legacy.reason, /无法确定具体原因/);
+  assert.doesNotMatch(legacy.reason, /已有修改|已恢复/);
+  const limit = agentPausePresentation(run('PAUSED', 'PROVIDER_OUTPUT_LIMIT'));
+  assert.match(limit.reason, /长度上限/);
+  assert.match(limit.reason, /已有进展会保留/);
+  assert.equal(limit.action, '继续工作');
+  for (const [code, cause] of [
+    ['PROVIDER_INVALID_TOOL_CALL', /工具调用未通过校验/],
+    ['PROVIDER_STREAM_INCOMPLETE', /结束标记/],
+    ['PROVIDER_STREAM_INTERRUPTED', /连接中断/],
+    ['PROVIDER_INVALID_RESPONSE', /数据格式/],
+    ['PROVIDER_STREAM_ERROR', /回复过程中返回了错误/],
+    ['PROVIDER_CONTENT_FILTERED', /拦截/],
+    ['PROVIDER_EMPTY_RESPONSE', /没有返回可用/],
+  ] as const) {
+    assert.match(agentPausePresentation(run('PAUSED', code)).reason, cause);
+    assert.match(buildAgentPresentation(run('FAILED', code), [], []).narrative, cause);
+  }
 });
 
 test('step-limit failure stays concise and counts every file in a batch patch', () => {
@@ -243,6 +265,7 @@ test('budget pauses expose the explicit allowance and do not promise completion'
   assert.equal(agentPausePresentation({ ...paused, current_step: 4096, max_steps: 4096 }).canResume, false);
   assert.equal(agentPausePresentation(run('PAUSED')).action, '继续工作');
   assert.match(agentPausePresentation(run('PAUSED', 'AGENT_VERIFICATION_REQUIRED')).reason, /尚未通过/);
+  assert.match(agentPausePresentation(run('PAUSED', 'AGENT_OUTCOME_EVIDENCE_INVALID')).reason, /完成依据未通过校验/);
   assert.match(agentPausePresentation(run('PAUSED', 'AGENT_TIME_BUDGET_EXHAUSTED')).reason, /60 分钟/);
   assert.match(agentPausePresentation(run('PAUSED', 'AGENT_REPEATED_ACTIONS')).reason, /重复相同操作/);
   assert.match(agentPausePresentation(run('PAUSED', 'AGENT_BROWSER_LOGIN_REQUIRED')).reason, /右侧浏览器完成登录/);
@@ -255,6 +278,28 @@ test('paused time does not accrue as execution time, including after continuatio
   assert.equal(buildAgentPresentation(paused, events, [], 6000).elapsed, buildAgentPresentation(paused, events, [], 66000).elapsed);
   events.push({ id: 'resume', run_id: paused.id, sequence: 2, schema_version: 1, kind: 'RUN_RESUMED', payload: {}, created_at: 66000 });
   assert.equal(buildAgentPresentation({ ...paused, status: 'RUNNING' }, events, [], 67000).elapsed, buildAgentPresentation(run('RUNNING'), [], [], 7000).elapsed);
+});
+
+test('approval waits freeze immediately and are excluded after resolution or cancellation', () => {
+  const event = (sequence: number, kind: AgentEventView['kind'], created_at: number): AgentEventView => ({id:`e-${sequence}`,run_id:'run-1',sequence,schema_version:1,kind,payload:{},created_at});
+  const waiting = run('WAITING_APPROVAL');
+  const events = [event(1, 'APPROVAL_REQUESTED', 6000)];
+  assert.equal(agentActiveDurationMs(waiting, events, 86_400_000), 5000);
+  assert.equal(agentActiveDurationMs(waiting, [], 86_400_000), 5000, 'Partial loading must not keep ticking');
+  assert.equal(agentActiveDurationMs({...waiting, status:'CANCELLED', finished_at:66000}, events), 5000);
+  events.push(event(2,'APPROVAL_RESOLVED',66000));
+  assert.equal(agentActiveDurationMs({...waiting,status:'RUNNING'}, events, 68000), 7000);
+  events.push(event(3,'APPROVAL_REQUESTED',68000),event(4,'RUN_PAUSED',69000),event(5,'APPROVAL_RESOLVED',70000),event(6,'RUN_RESUMED',80000));
+  assert.equal(agentActiveDurationMs({...waiting,status:'COMPLETED',finished_at:82000}, events.reverse()), 9000, 'Overlapping waits count once; ledger sequence wins over arrival order');
+});
+
+test('reported overnight Run totals 10m42s rather than a day of execution', () => {
+  const current = {...run('WAITING_APPROVAL'),created_at:1791121039561,updated_at:1791126984955};
+  const events: AgentEventView[] = [
+    ['RUN_PAUSED',1791121276881],['RUN_RESUMED',1791126580249],['APPROVAL_REQUESTED',1791126984955],
+  ].map(([kind,created_at],i)=>({id:`prod-shape-${i}`,run_id:current.id,sequence:i+1,schema_version:1,kind:kind as AgentEventView['kind'],payload:{},created_at:created_at as number}));
+  assert.equal(agentActiveDurationMs(current, events, current.updated_at+24*60*60*1000), 642026);
+  assert.equal(buildAgentPresentation(current, events, [], current.updated_at+24*60*60*1000).elapsed, '10 分 42 秒');
 });
 
 

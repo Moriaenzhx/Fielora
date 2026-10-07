@@ -1,5 +1,13 @@
 use super::*;
 
+/// Local admission check only; never invokes a model or returns credential bytes.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
+#[serde(deny_unknown_fields)]
+pub struct PrepareProviderSendRequest {
+    pub provider_config_id: ProviderConfigId,
+    pub model_id: Option<String>,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "SCREAMING_SNAKE_CASE")]
 #[ts(rename_all = "SCREAMING_SNAKE_CASE")]

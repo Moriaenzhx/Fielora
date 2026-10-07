@@ -54,9 +54,11 @@ try {
   const before=await cdp.eval(`window.fielora.fonts.list()`);
   assert.ok(before.families.some(f=>f.family==='PingFang SC'), 'native font list includes PingFang');
   await click('[data-testid=appearance-ui-font]');
-  const missing=await cdp.eval(`({segoe:document.querySelector('[data-testid=appearance-ui-font-option-SEGOE_UI]').disabled,pingfang:document.querySelector('[data-testid=appearance-ui-font-option-PINGFANG_SC]').disabled})`);
-  assert.equal(missing.pingfang,false); assert.equal(missing.segoe,!before.families.some(f=>['Segoe UI','Segoe UI Variable'].includes(f.family)));
-  await click('[data-testid=appearance-ui-font-option-PINGFANG_SC]');
+  const listed=await cdp.eval(`[...document.querySelectorAll('[data-testid^="appearance-ui-font-option-"]')].map(e=>e.textContent.trim())`);
+  assert.equal(listed.length,before.families.length+1);
+  assert.deepEqual(listed.slice(1),before.families.map(f=>f.family).sort((a,b)=>a.localeCompare(b,undefined,{sensitivity:'base',numeric:true})));
+  const missing={segoe:!listed.includes('Segoe UI'),yahei:!listed.includes('Microsoft YaHei')};
+  await click('[data-testid="appearance-ui-font-option-LOCAL:PingFang SC"]');
   await click('[data-testid=appearance-font-import]');
   await wait(`document.querySelector('.font-import-status')?.textContent.includes('Fielora Font Fixture')`);
   const status=await cdp.eval(`document.querySelector('.font-import-status').textContent`);
@@ -101,7 +103,27 @@ try {
   const receipt=state.tools.find(t=>t.name==='fonts.install').receipt;
   assert.equal(receipt.success,true);assert.equal(receipt.already_installed,true);assert.equal(receipt.verification_eligible,false);
   assert.ok(state.tools.find(t=>t.name==='fonts.list').receipt.families.some(f=>f.family==='Fielora Font Fixture'));
+  const typography=[];
+  for (const size of [12,15,18]) {
+    await click('[data-testid=settings-nav]');await click('[data-testid=settings-category-appearance]');
+    await click('[data-testid=appearance-ui-font-size]');await click(`[data-testid=appearance-ui-font-size-option-${size}]`);
+    await click('[data-testid=appearance-code-font-size]');await click('[data-testid=appearance-code-font-size-option-11]');
+    const settings=await cdp.eval(`(()=>{const px=s=>parseFloat(getComputedStyle(document.querySelector(s)).fontSize);return{label:px('.appearance-font-row strong'),sidebar:px('[data-testid=settings-category-appearance]'),code:px('.font-previews code')}})()`);
+    assert.equal(settings.code,11);
+    await click('[data-testid=settings-back]');
+    await click(`[data-testid="conversation-${ids.conversation.id}"]`);
+    await wait(`document.querySelector('.message-list .markdown-body')`);
+    const conversation=await cdp.eval(`(()=>{const px=s=>parseFloat(getComputedStyle(document.querySelector(s)).fontSize);return{body:px('.message-list .markdown-body'),sidebar:px('[data-testid=settings-nav]'),composer:px('.conversation-composer textarea')}})()`);
+    assert.equal(conversation.body,size,JSON.stringify(conversation));
+    typography.push({size,settings,conversation});
+    await captureScreenshot(cdp,path.join(evidence,`font-size-${size}.png`));
+  }
+  for (const group of ['settings','conversation']) for(const role of Object.keys(typography[0][group]).filter(key=>key!=='code')) {
+    const a=typography[0][group][role],b=typography[2][group][role];
+    assert.ok(Math.abs(b/a-1.5)<0.01,`${group}.${role} must track the UI scale: ${a} -> ${b}`);
+  }
   await writeFile(path.join(evidence,'result.json'),JSON.stringify({nativeFonts:before.families.length,missing,status,rendered,agent:state},null,2));
+  await writeFile(path.join(evidence,'typography.json'),JSON.stringify(typography,null,2));
   console.log(`FONTS_COLLECTIONS=PASS evidence=${evidence}`);
 } catch(error) { console.error(output.join('').slice(-6000)); if(cdp)await captureScreenshot(cdp,path.join(evidence,'failure.png')).catch(()=>{});throw error; }
 finally {

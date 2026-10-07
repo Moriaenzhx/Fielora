@@ -58,6 +58,8 @@ function normalizedCategory(category: SettingsCategory): SettingsCategory {
 function probeFailureLabel(provider: ProviderConfigView, t: UiTranslator, code?: string | null): string {
   if (provider.provider_kind === 'OPENAI' && /^qwen/i.test(provider.default_model)) return t('连接失败 · 当前是 OpenAI 官方协议，但模型像兼容服务；请检查协议与 Base URL', 'Connection failed · The selected protocol is official OpenAI, but the model appears to use a compatible service. Check the protocol and Base URL.');
   const labels: Record<string, string> = {
+    CREDENTIAL_REENTRY_REQUIRED: t('旧 Key 无法静默迁移，请编辑连接并重新保存一次 API Key；之后无需系统密码', 'The old key could not be migrated silently. Edit the connection and save the API key once; no system password will be needed afterwards.'),
+    CREDENTIAL_MISSING: t('请先编辑连接并保存 API Key', 'Edit the connection and save an API key first'),
     PROVIDER_MODEL_MISMATCH: t('模型与协议不匹配，请编辑连接并选择对应服务商和套餐', 'The model and protocol do not match. Edit the connection and choose the provider and plan.'),
     CREDENTIAL_REJECTED: t('API Key 无效或已失效', 'The API key is invalid or expired'),
     MODEL_NOT_AVAILABLE: t('模型不可用，请检查 Model ID', 'The model is unavailable. Check the Model ID'),
@@ -148,7 +150,9 @@ export function SettingsScreen({ providerSetupRequest, preferences, onChange, on
       const early=earlyProbeResults.current.get(result.invocation_id);
       if(early){earlyProbeResults.current.delete(result.invocation_id);finishProbe(early);}
     } catch (reason) {
-      setProviderProbe((current) => ({ ...current, [provider.id]: `连接失败 · ${reason instanceof Error ? reason.message : String(reason)}` }));
+      const raw = reason instanceof Error ? reason.message : String(reason);
+      const code = ['CREDENTIAL_REENTRY_REQUIRED', 'CREDENTIAL_MISSING'].find(code => raw.includes(code));
+      setProviderProbe((current) => ({ ...current, [provider.id]: code ? probeFailureLabel(provider, t, code) : t('连接测试未能启动，请检查配置后重试', 'The connection test could not start. Check the configuration and try again.') }));
     } finally {pendingProbeStarts.current-=1;if(pendingProbeStarts.current===0)earlyProbeResults.current.clear();}
   }
 

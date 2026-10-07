@@ -7,10 +7,15 @@
 
 mod compatibility;
 mod profile;
+mod response;
 use fielora_contracts::ModelRuntimeSettings;
 pub use profile::{
     effective_parameters, endpoint_identity, provider_catalog, resolve_profile,
     validate_provider_model,
+};
+pub use response::{
+    ArgumentJsonCategory, ArgumentJsonError, FinishReason, ResponseDiagnostics, ResponseFailure,
+    ResponseFailureStage,
 };
 
 use fielora_contracts::{
@@ -286,6 +291,11 @@ pub enum ModelError {
     ProviderUnavailable,
     #[error("PROVIDER_PROTOCOL_ERROR")]
     ProviderProtocolError,
+    #[error("{}", failure.code())]
+    Response {
+        failure: ResponseFailure,
+        diagnostics: ResponseDiagnostics,
+    },
     #[error("PROVIDER_REQUEST_REJECTED")]
     ProviderRequestRejected(u16),
     #[error("{category}")]
@@ -309,6 +319,7 @@ pub enum ModelError {
 impl ModelError {
     pub fn http_status(&self) -> Option<u16> {
         match self {
+            Self::Response { diagnostics, .. } => diagnostics.http_status,
             Self::ProviderRequestRejected(status) | Self::ProviderRequestInvalid { status, .. } => {
                 Some(*status)
             }
@@ -318,6 +329,7 @@ impl ModelError {
 
     pub fn code(&self) -> &'static str {
         match self {
+            Self::Response { failure, .. } => failure.code(),
             Self::CredentialRejected => "CREDENTIAL_REJECTED",
             Self::ModelNotAvailable => "MODEL_NOT_AVAILABLE",
             Self::ProviderRateLimited => "PROVIDER_RATE_LIMITED",
@@ -333,6 +345,28 @@ impl ModelError {
             Self::ProviderModelMismatch => "PROVIDER_MODEL_MISMATCH",
             Self::InvocationCancelled => "INVOCATION_CANCELLED",
         }
+    }
+
+    pub fn response_diagnostics(&self) -> Option<&ResponseDiagnostics> {
+        match self {
+            Self::Response { diagnostics, .. } => Some(diagnostics),
+            _ => None,
+        }
+    }
+
+    fn at_response_stage(mut self, stage: ResponseFailureStage) -> Self {
+        if let Self::Response { diagnostics, .. } = &mut self {
+            diagnostics.failure_stage = Some(stage);
+        }
+        self
+    }
+
+    fn with_argument_json_error(mut self, error: &serde_json::Error) -> Self {
+        if let Self::Response { diagnostics, .. } = &mut self {
+            diagnostics.failure_stage = Some(ResponseFailureStage::ToolArgumentsJson);
+            diagnostics.argument_json_error = Some(error.into());
+        }
+        self
     }
 }
 
@@ -583,15 +617,28 @@ impl ModelClient {
         };
         trace_provider_status("agent", response.status());
         let response = checked_response(response, &cancellation).await?;
+        let status = response.status().as_u16();
         let mut stream = response.bytes_stream();
         let mut decoder = SseDecoder::default();
         let mut accumulator = AgentStreamAccumulator::new(endpoint.kind);
+        accumulator.http_status = Some(status);
         while let Some(chunk) = tokio::select! {
             _ = cancellation.cancelled() => return Err(ModelError::InvocationCancelled),
             value = stream.next() => value,
         } {
-            let chunk = chunk.map_err(|_| ModelError::ProviderUnavailable)?;
-            for data in decoder.push(&chunk)? {
+            let chunk =
+                chunk.map_err(|_| accumulator.failure(ResponseFailure::InterruptedStream))?;
+            let events = decoder.push(&chunk).map_err(|error| {
+                if error == ModelError::ProviderProtocolError {
+                    accumulator.failure_at(
+                        ResponseFailure::InvalidEvent,
+                        ResponseFailureStage::StreamEncoding,
+                    )
+                } else {
+                    error
+                }
+            })?;
+            for data in events {
                 if data == "[DONE]" {
                     if endpoint.kind == ProviderKind::OpenaiCompatible {
                         accumulator.terminal = true;
@@ -600,13 +647,26 @@ impl ModelClient {
                 }
                 let value: Value = serde_json::from_str(&data).map_err(|error| {
                     trace_provider_parse_error("agent", data.len(), &error);
-                    ModelError::ProviderProtocolError
+                    accumulator.failure_at(
+                        ResponseFailure::InvalidEvent,
+                        ResponseFailureStage::EventJson,
+                    )
                 })?;
                 trace_provider_value("agent", &value);
                 if provider_failure(endpoint.kind, &value) {
-                    return Err(ModelError::ProviderProtocolError);
+                    return Err(accumulator.failure(ResponseFailure::ProviderError));
                 }
-                for delta in accumulator.push(&value)? {
+                let deltas = accumulator.push(&value).map_err(|error| {
+                    if error == ModelError::ProviderProtocolError {
+                        accumulator.failure_at(
+                            ResponseFailure::InvalidEvent,
+                            ResponseFailureStage::EventShape,
+                        )
+                    } else {
+                        error
+                    }
+                })?;
+                for delta in deltas {
                     emit_text(&delta);
                 }
             }
@@ -909,6 +969,9 @@ struct AgentStreamAccumulator {
     calls: BTreeMap<u64, PendingAgentToolCall>,
     usage: Option<ModelUsage>,
     terminal: bool,
+    http_status: Option<u16>,
+    event_count: usize,
+    finish_reason: Option<FinishReason>,
 }
 
 impl AgentStreamAccumulator {
@@ -922,10 +985,14 @@ impl AgentStreamAccumulator {
             calls: BTreeMap::new(),
             usage: None,
             terminal: false,
+            http_status: None,
+            event_count: 0,
+            finish_reason: None,
         }
     }
 
     fn push(&mut self, value: &Value) -> Result<Vec<String>, ModelError> {
+        self.event_count += 1;
         let mut deltas = Vec::new();
         match self.kind {
             ProviderKind::Openai => match value.get("type").and_then(Value::as_str).unwrap_or("") {
@@ -982,6 +1049,19 @@ impl AgentStreamAccumulator {
                 }
                 "response.completed" => {
                     self.terminal = true;
+                    self.finish_reason = Some(FinishReason::Stop);
+                    if let Some(usage) = value.pointer("/response/usage") {
+                        self.usage = Some(model_usage(usage, "input_tokens", "output_tokens"));
+                    }
+                }
+                "response.incomplete" => {
+                    self.terminal = true;
+                    self.finish_reason = Some(FinishReason::from_wire(
+                        value
+                            .pointer("/response/incomplete_details/reason")
+                            .and_then(Value::as_str)
+                            .unwrap_or("unknown"),
+                    ));
                     if let Some(usage) = value.pointer("/response/usage") {
                         self.usage = Some(model_usage(usage, "input_tokens", "output_tokens"));
                     }
@@ -1037,6 +1117,11 @@ impl AgentStreamAccumulator {
                         }
                     }
                     "message_delta" => {
+                        if let Some(reason) =
+                            value.pointer("/delta/stop_reason").and_then(Value::as_str)
+                        {
+                            self.finish_reason = Some(FinishReason::from_wire(reason));
+                        }
                         if let Some(usage) = value.get("usage") {
                             let delta = model_usage(usage, "input_tokens", "output_tokens");
                             let current = self.usage.get_or_insert(ModelUsage {
@@ -1120,10 +1205,29 @@ impl AgentStreamAccumulator {
                     .and_then(Value::as_array)
                 {
                     for item in calls {
-                        let index = item
-                            .get("index")
-                            .and_then(Value::as_u64)
-                            .ok_or(ModelError::ProviderProtocolError)?;
+                        let index = item.get("index").and_then(Value::as_u64).ok_or_else(|| {
+                            self.failure_at(
+                                ResponseFailure::InvalidEvent,
+                                ResponseFailureStage::ToolCallIndex,
+                            )
+                        })?;
+                        // Nullable identity fields mean "no update" in an SSE
+                        // delta. Other JSON types are still protocol errors.
+                        for (field, stage) in [
+                            (item.get("id"), ResponseFailureStage::ToolCallId),
+                            (
+                                item.pointer("/function/name"),
+                                ResponseFailureStage::ToolCallName,
+                            ),
+                            (
+                                item.pointer("/function/arguments"),
+                                ResponseFailureStage::ToolCallArguments,
+                            ),
+                        ] {
+                            if field.is_some_and(|value| !value.is_null() && !value.is_string()) {
+                                return Err(self.failure_at(ResponseFailure::InvalidEvent, stage));
+                            }
+                        }
                         let call = self.calls.entry(index).or_default();
                         merge_string(&mut call.id, item.get("id"))?;
                         merge_string(&mut call.name, item.pointer("/function/name"))?;
@@ -1139,12 +1243,12 @@ impl AgentStreamAccumulator {
                 {
                     self.usage = Some(model_usage(usage, "prompt_tokens", "completion_tokens"));
                 }
-                if value
+                if let Some(reason) = value
                     .pointer("/choices/0/finish_reason")
                     .and_then(Value::as_str)
-                    .is_some()
                 {
                     self.terminal = true;
+                    self.finish_reason = Some(FinishReason::from_wire(reason));
                 }
             }
         }
@@ -1168,15 +1272,42 @@ impl AgentStreamAccumulator {
     }
 
     fn finish(self) -> Result<AgentModelTurn, ModelError> {
-        if !self.terminal {
-            return Err(ModelError::ProviderProtocolError);
+        match self.finish_reason {
+            Some(FinishReason::OutputLimit) => {
+                return Err(self.failure(ResponseFailure::OutputLimit));
+            }
+            Some(FinishReason::ContentFiltered) => {
+                return Err(self.failure(ResponseFailure::ContentFiltered));
+            }
+            Some(FinishReason::Other) => return Err(self.failure(ResponseFailure::InvalidEvent)),
+            _ => {}
         }
+        if !self.terminal {
+            return Err(self.failure(ResponseFailure::MissingTerminal));
+        }
+        if self.calls.is_empty() && self.finish_reason == Some(FinishReason::ToolCalls) {
+            return Err(self.failure_at(
+                ResponseFailure::InvalidToolCall,
+                ResponseFailureStage::ToolCallMissing,
+            ));
+        }
+        if self.calls.is_empty() && sanitize_agent_text(&self.text).trim().is_empty() {
+            return Err(self.failure(ResponseFailure::EmptyResponse));
+        }
+        let invalid_tool = self.failure(ResponseFailure::InvalidToolCall);
         let tool_calls = self
             .calls
             .into_values()
             .map(|call| {
-                if call.id.is_empty() || call.name.is_empty() {
-                    return Err(ModelError::ProviderProtocolError);
+                if call.id.is_empty() {
+                    return Err(invalid_tool
+                        .clone()
+                        .at_response_stage(ResponseFailureStage::ToolCallId));
+                }
+                if call.name.is_empty() {
+                    return Err(invalid_tool
+                        .clone()
+                        .at_response_stage(ResponseFailureStage::ToolCallName));
                 }
                 let arguments = if let Some(value) = call.complete_arguments {
                     value
@@ -1184,10 +1315,12 @@ impl AgentStreamAccumulator {
                     json!({})
                 } else {
                     serde_json::from_str(&call.arguments)
-                        .map_err(|_| ModelError::ProviderProtocolError)?
+                        .map_err(|error| invalid_tool.clone().with_argument_json_error(&error))?
                 };
                 if !arguments.is_object() {
-                    return Err(ModelError::ProviderProtocolError);
+                    return Err(invalid_tool
+                        .clone()
+                        .at_response_stage(ResponseFailureStage::ToolArgumentsObject));
                 }
                 Ok(AgentModelToolCall {
                     id: call.id,
@@ -1205,6 +1338,33 @@ impl AgentStreamAccumulator {
             tool_calls,
             usage: self.usage,
         })
+    }
+
+    fn failure(&self, failure: ResponseFailure) -> ModelError {
+        ModelError::Response {
+            failure,
+            diagnostics: ResponseDiagnostics {
+                http_status: self.http_status,
+                event_count: self.event_count,
+                finish_reason: self.finish_reason,
+                text_bytes: self.text.len(),
+                private_bytes: self.private_bytes,
+                tool_call_count: self.calls.len(),
+                tool_argument_bytes: self.calls.values().map(|call| call.arguments.len()).sum(),
+                input_tokens: self.usage.as_ref().and_then(|usage| usage.input_tokens),
+                output_tokens: self.usage.as_ref().and_then(|usage| usage.output_tokens),
+                failure_stage: None,
+                argument_json_error: None,
+            },
+        }
+    }
+
+    fn failure_at(&self, failure: ResponseFailure, stage: ResponseFailureStage) -> ModelError {
+        let mut error = self.failure(failure);
+        if let ModelError::Response { diagnostics, .. } = &mut error {
+            diagnostics.failure_stage = Some(stage);
+        }
+        error
     }
 }
 
@@ -1274,7 +1434,7 @@ impl VisibleTextDeltaFilter {
 }
 
 fn merge_string(target: &mut String, value: Option<&Value>) -> Result<(), ModelError> {
-    if let Some(value) = value {
+    if let Some(value) = value.filter(|value| !value.is_null()) {
         let value = value.as_str().ok_or(ModelError::ProviderProtocolError)?;
         if !value.is_empty() {
             if target.is_empty() {
@@ -2214,6 +2374,53 @@ mod tests {
     }
 
     #[test]
+    fn compatible_nullable_tool_deltas_preserve_identity_and_arguments() {
+        // An absent/null optional delta is no update, not a missing identity
+        // on the completed call. Interleaved calls remain keyed by index.
+        let mut stream = AgentStreamAccumulator::new(ProviderKind::OpenaiCompatible);
+        for event in [
+            json!({"choices":[{"delta":{"reasoning_content":"private"}}]}),
+            json!({"choices":[{"delta":{"tool_calls":[{"index":0,"id":"call-a","function":{"name":"list_files","arguments":"{\"path\":"}},{"index":1,"id":"call-b","function":{"name":"read_file","arguments":"{\"path\":"}}]}}]}),
+            json!({"choices":[{"delta":{"tool_calls":[{"index":1,"id":null,"type":null,"function":{"name":null,"arguments":"\"README.md\"}"}},{"index":0,"id":null,"function":{"name":null,"arguments":"\".\"}"}}]}}]}),
+            json!({"choices":[{"delta":{"tool_calls":[{"index":0,"id":null,"function":null},{"index":1,"id":"","function":{"name":"","arguments":null}}]},"finish_reason":"tool_calls"}]}),
+        ] {
+            stream.push(&event).unwrap();
+        }
+        let turn = stream.finish().unwrap();
+        assert_eq!(turn.tool_calls.len(), 2);
+        assert_eq!(turn.tool_calls[0].id, "call-a");
+        assert_eq!(turn.tool_calls[0].name, "list_files");
+        assert_eq!(turn.tool_calls[0].arguments, json!({"path":"."}));
+        assert_eq!(turn.tool_calls[1].id, "call-b");
+        assert_eq!(turn.tool_calls[1].name, "read_file");
+        assert_eq!(turn.tool_calls[1].arguments, json!({"path":"README.md"}));
+    }
+
+    #[test]
+    fn nullable_deltas_do_not_invent_identity_or_accept_invalid_types() {
+        for field in ["id", "name"] {
+            let mut stream = AgentStreamAccumulator::new(ProviderKind::OpenaiCompatible);
+            let mut call =
+                json!({"index":0,"id":"call-a","function":{"name":"read_file","arguments":"{}"}});
+            if field == "id" {
+                call["id"] = Value::Null;
+            } else {
+                call["function"]["name"] = Value::Null;
+            }
+            stream.push(&json!({"choices":[{"delta":{"tool_calls":[call]},"finish_reason":"tool_calls"}]})).unwrap();
+            assert_eq!(
+                stream.finish().unwrap_err().code(),
+                "PROVIDER_INVALID_TOOL_CALL"
+            );
+            for invalid in [json!(5), json!(true), json!({}), json!([])] {
+                let mut target = "already-captured".to_owned();
+                assert!(merge_string(&mut target, Some(&invalid)).is_err());
+                assert_eq!(target, "already-captured");
+            }
+        }
+    }
+
+    #[test]
     fn qwen_compatible_tool_identifiers_accept_deltas_snapshots_and_repeats() {
         let mut compatible = AgentStreamAccumulator::new(ProviderKind::OpenaiCompatible);
         compatible
@@ -2437,7 +2644,10 @@ mod tests {
     fn incomplete_tool_json_never_becomes_a_tool_intent() {
         let mut accumulator = AgentStreamAccumulator::new(ProviderKind::OpenaiCompatible);
         accumulator.push(&json!({"choices":[{"delta":{"tool_calls":[{"index":0,"id":"call","function":{"name":"read_file","arguments":"{\"path\":"}}]},"finish_reason":"tool_calls"}]})).unwrap();
-        assert_eq!(accumulator.finish(), Err(ModelError::ProviderProtocolError));
+        assert_eq!(
+            accumulator.finish().unwrap_err().code(),
+            "PROVIDER_INVALID_TOOL_CALL"
+        );
     }
 
     #[test]

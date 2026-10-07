@@ -31,7 +31,7 @@ PERSONAL STEWARD: LONG-TERM
 - 消息 streaming、停止、重试、继续；
 - 设置中自由添加 Provider、Base URL、API Key、Model ID；
 - 至少支持 OpenAI-compatible 与 Anthropic-compatible 协议；
-- API Key 继续进入 Windows Credential Manager；
+- API Key 按 2026-10-03 用户决定直接保存在当前设备 SQLite，统一复用于连接测试和任务；系统凭据库仅作为无交互兼容迁移来源；
 - 重启后 Project、Conversation、Provider selection 与消息历史恢复。
 
 ### Build B — Codex-like Coding Loop

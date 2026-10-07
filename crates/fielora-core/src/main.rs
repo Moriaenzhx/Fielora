@@ -1,5 +1,7 @@
 mod agent_browser;
+mod agent_command_policy_fixture;
 mod agent_image_history;
+mod agent_model_repair;
 mod agent_recovery;
 mod agent_request_intent;
 mod agent_request_scope;
@@ -10,6 +12,7 @@ mod agent_turn_context;
 mod agent_user_input;
 mod agent_visual_context;
 mod agent_work_plan;
+mod agent_work_review;
 mod agent_work_state;
 mod build_provenance;
 pub mod idr_acquisition;
@@ -25,7 +28,8 @@ use fielora_field::{
 };
 use fielora_model::{ModelClient, ModelError, ProviderEndpoint};
 use fielora_platform::{
-    CredentialStore, DeviceIdentity, PlatformPaths, SecretBytes, SystemCredentialStore,
+    CredentialStore, DeviceIdentity, NonInteractiveSystemCredentialStore, PlatformPaths,
+    SecretBytes,
 };
 use fielora_storage::{
     ProviderConfigRecord, StorageHandle, StorageWorker, create_portable_snapshot, schema_version,
@@ -51,7 +55,8 @@ use uuid::Uuid;
 
 const MAX_FRAME_BYTES: usize = 8 * 1024 * 1024;
 const PROTOCOL: ProtocolVersion = ProtocolVersion { major: 1, minor: 0 };
-const CAPABILITIES: [&str; 97] = [
+const CAPABILITIES: [&str; 98] = [
+    "provider.prepare_send",
     "system.build_provenance",
     "provider.update_model_runtime",
     "provider.validate_model",
@@ -194,7 +199,7 @@ struct Runtime {
     health: HealthDTO,
     hello_completed: bool,
     storage: StorageHandle,
-    credentials: Arc<SystemCredentialStore>,
+    credentials: Arc<fielora_storage::credentials::LocalCredentialStore>,
     async_runtime: Option<tokio::runtime::Runtime>,
     cancellations: Arc<Mutex<HashMap<String, CancellationToken>>>,
     completed_invocations: Arc<Mutex<HashSet<String>>>,
@@ -283,7 +288,10 @@ fn run() -> Result<(), CoreError> {
             }
         })
         .map_err(|error| CoreError::Output(io::Error::other(error)))?;
-    let credentials = Arc::new(SystemCredentialStore);
+    let credentials = Arc::new(fielora_storage::credentials::LocalCredentialStore::new(
+        handle.clone(),
+        Arc::new(NonInteractiveSystemCredentialStore),
+    ));
     let async_runtime = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .worker_threads(4)
@@ -1197,6 +1205,10 @@ fn dispatch_request(
             )?;
             serialize(provider_reconciled(runtime, record)?)
         }
+        "command.provider.prepare_send" => {
+            model_runtime::prepare_send(runtime, parse_params(&request.params)?)?;
+            serialize(())
+        }
         "command.provider.validate_model" => serialize(model_runtime::start_validation(
             runtime,
             parse_params(&request.params)?,
@@ -1733,7 +1745,7 @@ fn start_model(
     let secret = runtime
         .credentials
         .read(&record.credential_ref)
-        .map_err(|_| DomainError::Validation("CREDENTIAL_MISSING".into()))?;
+        .map_err(|error| DomainError::Validation(error.user_code().into()))?;
     let invocation_id = ModelInvocationId::new(Uuid::now_v7().to_string());
     let context_package_id = ContextPackageId::new(Uuid::now_v7().to_string());
     let request = ModelInvocationRequest {

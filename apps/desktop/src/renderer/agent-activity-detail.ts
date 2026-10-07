@@ -1,4 +1,5 @@
 import type { AgentEventView, AgentRunView, AgentToolCallView } from '@fielora/contracts';
+import { providerResponseReason } from './provider-response-errors.ts';
 
 export function activityStatusLabel(status: AgentToolCallView['status']): string {
   return { PROPOSED: '等待执行', RUNNING: '执行中', WAITING_APPROVAL: '等待批准', COMPLETED: '已完成', FAILED: '执行失败', DENIED: '已拒绝', CANCELLED: '已停止', UNKNOWN: '执行状态待确认' }[status];
@@ -21,8 +22,18 @@ export function activityDetailFields(tool: AgentToolCallView): ActivityDetailFie
   add('操作对象', args.path ?? args.paths ?? args.url ?? receipt.path);
   add('工作目录', receipt.cwd ?? args.cwd);
   add('执行环境', receipt.environment ?? args.environment);
+  if (tool.name === 'run_command') {
+    if (receipt.execution_boundary === 'MACOS_WORKSPACE_WRITE_SANDBOX') {
+      add('命令隔离', 'macOS 项目写入沙箱：可写项目和临时目录；不隔离本机文件读取。');
+      add('命令网络', receipt.network_policy === 'DENIED' ? '禁止联网' : '允许联网');
+    } else if (receipt.execution_boundary === 'CURRENT_USER_HOST') {
+      add('命令隔离', '当前用户权限运行，不使用命令沙箱。');
+    } else if (receipt.execution_boundary === 'CONTROLLED_WORKSPACE_EXECUTION') {
+      add('命令隔离', '旧版受控执行记录；不能据此确认操作系统沙箱。');
+    }
+  }
   if (tool.name === 'run_command') add('命令', activityToolDescription(tool), true);
-  const remainingArgs = Object.fromEntries(Object.entries(args).filter(([key, value]) => present(value) && !['path', 'paths', 'url', 'cwd', 'environment', ...(tool.name === 'run_command' ? ['program', 'argv'] : [])].includes(key)));
+  const remainingArgs = Object.fromEntries(Object.entries(args).filter(([key, value]) => present(value) && !['path', 'paths', 'url', 'cwd', 'environment', '_command_policy', ...(tool.name === 'run_command' ? ['program', 'argv'] : [])].includes(key)));
   add('参数', remainingArgs, true);
   for (const [key, label] of [['stdout', '标准输出'], ['stderr', '标准错误'], ['output', '输出'], ['error', '错误']] as const) add(label, receipt[key], true);
   add('错误码', tool.error_code);
@@ -105,6 +116,8 @@ export function activityToolIssue(tool: AgentToolCallView): string | null {
   if (receipt?.error_code === 'BROWSER_SERVER_NOT_TRACKED' || receipt?.error_code === 'BROWSER_SERVER_NOT_STARTED') return '当前任务未关联服务进程；已有服务可能仍在运行，需要检查实际地址。';
   if (receipt?.error_code === 'BROWSER_NAVIGATION_FAILED') return '目标页面加载失败，未取得可验证的页面内容；这不能证明需要登录。';
   if (tool.name === 'browser_server' && receipt?.readiness === 'NOT_CHECKED') return '进程已启动，网站地址尚未检查。';
+  if (tool.name === 'browser_server' && receipt?.readiness === 'STARTING') return '服务进程已启动，正在初始化；稍后检查就绪状态。';
+  if (receipt?.error_code === 'BROWSER_SERVER_ALREADY_RUNNING') return '该任务的服务进程已在运行，无需重复启动。';
   if (tool.name === 'browser_server' && receipt?.readiness === 'NOT_LISTENING') return '该地址未接受连接，需要核对开发服务的地址和启动状态。';
   const labels: Record<string, string> = {
     AGENT_WORK_EVIDENCE_STALE: '引用对应的文件已变化；这条旧证据需要重新核对。',
@@ -150,5 +163,5 @@ export function activityFailureReason(run: AgentRunView | null): string | null {
     CREDENTIAL_REJECTED: '模型凭据未通过验证',
     AGENT_VERIFICATION_STALE: '当前修改尚未获得有效验证',
   };
-  return labels[run.error_code] ?? '执行中断，详情中保留了失败代码';
+  return providerResponseReason(run.error_code) ?? labels[run.error_code] ?? '执行中断，详情中保留了失败代码';
 }

@@ -63,7 +63,16 @@ fn reject(code: &'static str, detail: &str) -> AgentError {
 fn successful(tool: &AgentToolCallView) -> bool {
     tool.status == AgentToolStatus::Completed
         && tool.receipt.as_ref().is_some_and(|r| {
-            r["success"] != false && r.get("exit_code").is_none_or(|c| c.as_i64() == Some(0))
+            // An owned service can be alive after the tool call completes.
+            // Its null exit code is not a failed command, nor is it verification.
+            let live_service = tool.name == "browser_server"
+                && r["kind"] == "BROWSER"
+                && r["success"] == true
+                && r["status"] == "RUNNING"
+                && matches!(r["action"].as_str(), Some("server-start" | "server-status"));
+            r["success"] != false
+                && r.get("exit_code")
+                    .is_none_or(|c| c.as_i64() == Some(0) || (c.is_null() && live_service))
         })
 }
 
@@ -129,7 +138,7 @@ fn verification_recovery(facts: &[AgentToolCallView]) -> String {
     let checks = facts.iter().filter(|t| t.receipt.as_ref().is_some_and(|r| r["verification_eligible"] == true))
         .rev().take(8).map(|t| json!({"tool_call_id":t.id,"name":t.name,"status":t.status,"success":t.receipt.as_ref().map(|r|&r["success"])})).collect::<Vec<_>>();
     format!(
-        "Fresh verification is missing or failed for the CURRENT Run. Current writes: {}. Recorded checks: {}. Run a targeted test/check via run_command (or browser_verify for requested browser behavior); use verify_skill for Skill bundles. read_file/stat_path/list_files/git_read only observe and do not create verification receipts. Do not attribute these writes to historical Runs, retry an unchanged finish, downgrade intent, or commit Git to bypass verification.",
+        "Fresh verification is missing or failed for the CURRENT Run. Current writes: {}. Recorded checks: {}. Use run_command with the direct supported runner for a targeted assertion-based test (for Python: interpreter -m unittest/pytest), or browser_plan/browser_verify for requested rendered behavior; use verify_skill for Skill bundles. Plain python -c, print scripts, curl and server status do not create verification receipts even with exit 0. Assert the expected behavior using isolated test data; do not merely rename or wrap a print script. read_file/stat_path/list_files/git_read only observe. Retain per-case results with optional work_plan and recheck affected cases. Do not attribute these writes to historical Runs, retry an unchanged finish, downgrade intent, or commit Git to bypass verification.",
         json!(current_writes),
         json!(checks)
     )
@@ -219,7 +228,21 @@ pub fn record(
         }) {
             return Err(reject(
                 "AGENT_OUTCOME_EVIDENCE_INVALID",
-                "Failed or denied actions are not success evidence. Cite the successful recovery/check for an action task. Negative or failed observations may support an answer_only status report only when this Run has no action or acceptance obligations; report the finding or observation limit without claiming the underlying work succeeded.",
+                &format!(
+                    "These cited receipts do not establish successful actions: {}. Inspect each status/success/exit_code, then cite the actual successful recovery/check. Failed or denied actions are not success evidence. A running managed service's null exit code is valid service-state evidence, never business verification. Negative observations support answer_only reports only without action or acceptance obligations; do not claim unverified work succeeded.",
+                    json!(
+                        evidence
+                            .iter()
+                            .filter(|t| !successful(t))
+                            .take(8)
+                            .map(|t| json!({
+                                "tool_call_id":t.id,"name":t.name,"status":t.status,
+                                "success":t.receipt.as_ref().map(|r| &r["success"]),
+                                "exit_code":t.receipt.as_ref().map(|r| &r["exit_code"])
+                            }))
+                            .collect::<Vec<_>>()
+                    )
+                ),
             ));
         }
         if (change || browser_acceptance) && !verified {
@@ -269,6 +292,81 @@ mod tests {
     fn fact(id: &str, effect: &str, status: &str, receipt: Value) -> AgentToolCallView {
         serde_json::from_value(json!({"id":id,"run_id":"run","name":"fixture","effect":effect,"status":status,
             "policy_decision":"ALLOW","arguments":{},"receipt":receipt,"created_at":0,"updated_at":0})).unwrap()
+    }
+    #[test]
+    fn live_service_is_success_evidence_but_never_substitutes_for_verification() {
+        let mut service = fact(
+            "server",
+            "PROCESS",
+            "COMPLETED",
+            json!({
+                "kind":"BROWSER","action":"server-status","success":true,
+                "status":"RUNNING","exit_code":null,"verification_eligible":false
+            }),
+        );
+        service.name = "browser_server".into();
+        let write = fact(
+            "write",
+            "WORKSPACE_WRITE",
+            "COMPLETED",
+            json!({"success":true}),
+        );
+        let proposal = args("completed", "workspace_change", json!(["write", "server"]));
+        for action in ["server-start", "server-status"] {
+            service.receipt.as_mut().unwrap()["action"] = json!(action);
+            let facts = [write.clone(), service.clone()];
+            assert_eq!(
+                record(&run(), &proposal, &facts, false, false)
+                    .unwrap_err()
+                    .code(),
+                "AGENT_VERIFICATION_REQUIRED"
+            );
+            assert!(record(&run(), &proposal, &facts, true, false).is_ok());
+            assert_eq!(
+                service.receipt.as_ref().unwrap()["verification_eligible"],
+                false
+            );
+        }
+        for (name, status, success, exit, action) in [
+            ("run_command", "RUNNING", true, Value::Null, "server-status"),
+            (
+                "browser_server",
+                "FAILED",
+                true,
+                Value::Null,
+                "server-status",
+            ),
+            (
+                "browser_server",
+                "RUNNING",
+                false,
+                Value::Null,
+                "server-status",
+            ),
+            ("browser_server", "RUNNING", true, json!(1), "server-status"),
+            (
+                "browser_server",
+                "RUNNING",
+                true,
+                json!("0"),
+                "server-status",
+            ),
+            ("browser_server", "RUNNING", true, Value::Null, "unknown"),
+        ] {
+            let mut invalid = service.clone();
+            invalid.name = name.into();
+            let r = invalid.receipt.as_mut().unwrap();
+            r["status"] = json!(status);
+            r["success"] = json!(success);
+            r["exit_code"] = exit;
+            r["action"] = json!(action);
+            assert_eq!(
+                record(&run(), &proposal, &[write.clone(), invalid], true, false)
+                    .unwrap_err()
+                    .code(),
+                "AGENT_OUTCOME_EVIDENCE_INVALID"
+            );
+        }
     }
     #[test]
     fn negative_observations_can_complete_a_status_answer_without_passing_the_check() {

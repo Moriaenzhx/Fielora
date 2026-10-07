@@ -2,36 +2,79 @@
  * continue to come from the existing user preferences and semantic theme. */
 .conversation-column {
   --fl-layout-conversation-reading: 920px;
-  --fl-layout-conversation-gutter: 24px;
+  --fl-layout-conversation-gutter: clamp(20px, 5cqw, 48px);
+  --fl-conversation-gap: max(6px, calc(8px * var(--fl-ui-font-scale)));
+  --fl-conversation-section-gap: max(10px, calc(12px * var(--fl-ui-font-scale)));
+  --fl-conversation-turn-gap: max(16px, calc(20px * var(--fl-ui-font-scale)));
   container-name: conversation;
 }
 .conversation-column > .message-list {
-  --fl-font-size-agent-body: calc(18px * var(--fl-ui-font-scale));
-  --fl-type-body-size: var(--fl-font-size-agent-body);
-  --fl-line-height-agent-body: calc(28px * var(--fl-ui-font-scale));
-  --fl-type-body-line-height: var(--fl-line-height-agent-body);
-  --fl-font-size-agent-execution: calc(16px * var(--fl-ui-font-scale));
-  padding-inline: max(24px, calc((100cqw - 920px) / 2));
-  padding-right: calc(max(24px, (100cqw - 920px) / 2) - var(--fl-conversation-scrollbar, 0px));
-  padding-bottom: calc(var(--fl-composer-height, 116px) + var(--fl-queued-height, 0px) + 88px);
-  scroll-padding-bottom: calc(var(--fl-composer-height, 116px) + 80px);
+  /* Inherit the shared UI/body roles. A local 18px base made the selected
+   * 12px preference render as 14.4px here while settings kept shrinking. */
+  padding-inline: max(var(--fl-layout-conversation-gutter), calc((100cqw - var(--fl-layout-conversation-reading)) / 2));
+  padding-right: calc(max(var(--fl-layout-conversation-gutter), (100cqw - var(--fl-layout-conversation-reading)) / 2) - var(--fl-conversation-scrollbar, 0px));
+  padding-top: var(--fl-conversation-turn-gap);
+  padding-bottom: calc(var(--fl-composer-height, 96px) + var(--fl-queued-height, 0px) + 44px);
+  scroll-padding-bottom: calc(var(--fl-composer-height, 96px) + var(--fl-queued-height, 0px) + 28px);
 }
-.conversation-column > .conversation-composer { width: min(920px, calc(100% - 48px)); }
+.conversation-column > .conversation-composer { width: min(var(--fl-layout-conversation-reading), calc(100% - 2 * var(--fl-layout-conversation-gutter))); }
+.conversation-column.has-environment-panel > .conversation-composer,
+.conversation-column.has-environment-panel > .queued-follow-up-stack {
+  width: min(var(--fl-layout-conversation-reading), calc(100% - var(--environment-rail-width) - 2 * var(--fl-layout-conversation-gutter)));
+}
+.conversation-column.has-environment-panel > .message-list {
+  padding-inline: max(var(--fl-layout-conversation-gutter), calc((100% - var(--environment-rail-width) - var(--fl-layout-conversation-reading)) / 2));
+}
+.conversation-column > .conversation-composer textarea {
+  min-height: calc(1lh + 8px);
+  max-height: min(192px, 30vh);
+  padding-block: 4px;
+}
 @container conversation (max-width: 640px) {
-  .conversation-column > .message-list { padding-left: 16px; padding-right: calc(16px - var(--fl-conversation-scrollbar, 0px)); }
-  .conversation-column > .conversation-composer { width: calc(100% - 32px); }
+  .conversation-column > .message-list { padding-left: 20px; padding-right: calc(20px - var(--fl-conversation-scrollbar, 0px)); }
+  .conversation-column > .conversation-composer,
+  .conversation-column > .queued-follow-up-stack { width: calc(100% - 40px); }
 }
-.message-list .message { margin-bottom: 24px; }
+.message-list .message { margin-bottom: var(--fl-conversation-turn-gap); }
+.message-list .message.assistant { padding-block: 0; }
+.message-list .message:not(.agent-turn) { position: relative; }
+.message-list .message:has(> .message-actions) { margin-bottom: max(28px, var(--fl-conversation-turn-gap)); }
+.message-list .message:not(.agent-turn) > .message-actions {
+  position: absolute;
+  top: 100%;
+  right: 0;
+  left: 0;
+  margin-top: 0;
+}
+.message-list > .message:last-child { margin-bottom: 0; }
 .message-list .markdown-body { font-size: var(--fl-font-size-agent-body); line-height: var(--fl-line-height-agent-body); }
-.message-list .markdown-body p { margin-block: 0 16px; }
+.message-list .markdown-body p { margin-block: 0 var(--fl-conversation-section-gap); }
 .message-list .markdown-body > :last-child { margin-bottom: 0; }
 .message-list .markdown-body :not(pre) > code { white-space: break-spaces; overflow-wrap: anywhere; }
 .message-list .markdown-code-block { min-width: 0; max-width: 100%; }
 .message-list .markdown-code-block pre { overflow-x: auto; }
 .message-list .markdown-body pre, .message-list .markdown-body code { font-size: var(--fl-code-font-size); font-family: var(--fl-font-mono); }
-.message-list .conversation-activity-stream { gap: 16px; }
+.message-list .conversation-activity-stream { gap: var(--fl-conversation-gap); margin-bottom: 0; }
 .message-list .conversation-narrative { margin: 0; }
-.message-list .agent-terminal-result { margin-top: 24px; }
+.message-list .agent-terminal-result { margin-top: var(--fl-conversation-turn-gap); }
+.message-list .agent-running-header {
+  min-height: 0;
+  margin-bottom: var(--fl-conversation-section-gap);
+  padding-bottom: var(--fl-conversation-gap);
+  line-height: 1.55;
+}
+.message-list .agent-execution-detail.is-history { margin-block: 0; padding-bottom: 0; }
+.message-list .agent-current-action {
+  min-height: 0;
+  margin: var(--fl-conversation-section-gap) 0 var(--fl-conversation-gap);
+  line-height: 1.55;
+}
+.message-list .agent-progress-summary, .message-list .agent-pause-notice { margin-bottom: 0; }
+.message-list .agent-pause-notice { gap: var(--fl-conversation-gap); }
+.message-list .agent-pause-notice p { margin: 0; line-height: 1.65; }
+.message-list .agent-user-question { display: grid; gap: var(--fl-conversation-gap); }
+.message-list .agent-pause-notice > p { font-size: var(--fl-font-size-meta); }
+.message-list .agent-pause-actions { padding-top: 4px; }
 .message-list .operation-group { min-width: 0; width: 100%; color: var(--fl-color-text-muted); font-size: var(--fl-font-size-agent-execution); line-height: calc(24px * var(--fl-ui-font-scale)); }
 .message-list .operation-summary, .message-list .operation-list button {
   display: flex; align-items: center; gap: 8px; width: 100%; min-width: 0;
@@ -65,3 +108,46 @@
 .message-list .operation-detail footer { display: flex; flex-wrap: wrap; gap: 8px 16px; margin-top: 12px; color: var(--fl-color-text-muted); font-size: .8em; }
 .message-list .operation-detail p { margin: 8px 0; }
 .message-list .context-activity .compact-command-panel { padding: 8px 0; background: transparent; border: 0; border-radius: 0; }
+
+/* Finished turns lead with a quiet disclosure and give the result its own space. */
+.message-list .agent-history-toggle { width: 100%; cursor: pointer; gap: 8px; box-shadow: none; }
+.message-list .agent-history-toggle > .app-icon { width: 14px; height: 14px; flex: 0 0 14px; transform: rotate(-90deg); }
+.message-list .agent-history-toggle[aria-expanded="true"] > .app-icon { transform: none; }
+.message-list .agent-history-hint { font-size: var(--fl-font-size-meta); opacity: 0; }
+.message-list .agent-history-toggle:hover .agent-history-hint,
+.message-list .agent-history-toggle:focus-visible .agent-history-hint { opacity: 1; }
+.message-list .agent-execution-detail[hidden] { display: none; }
+.message-list .agent-history-toggle + .agent-execution-detail:not([hidden]) { margin-block: 8px 20px; }
+.message-list .is-terminal .agent-terminal-result { margin-top: 16px; }
+.message-list .agent-terminal-body .markdown-body > p:first-child { font-weight: 600; }
+.message-list .markdown-typed-reference { color: var(--fl-color-link); font-weight: 500; text-decoration: none; overflow-wrap: anywhere; }
+.message-list .markdown-typed-reference > .app-icon { display: inline-block; width: 1em; height: 1em; margin-right: .3em; vertical-align: -.12em; }
+.message-list .agent-terminal-body .markdown-typed-reference { color: var(--fl-color-result-link); }
+.message-list .file-delivery-totals { display: flex; gap: 6px; font-variant-numeric: tabular-nums; font-size: var(--fl-font-size-label); line-height: 1.5; }
+.message-list .file-delivery-totals b { color: var(--fl-color-file-card-addition); font-weight: 400; }
+.message-list .file-delivery-totals i { color: var(--fl-color-file-card-deletion); font-style: normal; }
+
+/* A selected action is one compact inspector; verbose receipts are secondary. */
+.message-list .operation-detail { margin: 8px 0 12px; padding: 14px; border: 1px solid var(--fl-color-border-soft); border-radius: 12px; background: var(--fl-color-surface); }
+.message-list .operation-detail-title { display: flex; align-items: center; gap: 8px; padding-bottom: 12px; margin-bottom: 12px; border-bottom: 1px solid var(--fl-color-border-soft); }
+.message-list .operation-detail-title > .app-icon { width: 16px; height: 16px; flex: 0 0 16px; }
+.message-list .operation-detail-title strong { font-size: inherit; font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.message-list .operation-detail-title > span { margin-left: auto; flex-shrink: 0; font-size: .85em; color: var(--fl-color-text-muted); }
+.message-list .operation-detail-title > [data-status="FAILED"] { color: var(--fl-color-text-danger); }
+.message-list .operation-detail-field:not(.is-code) { display: grid; grid-template-columns: minmax(72px, 100px) minmax(0, 1fr); gap: 12px; align-items: baseline; }
+.message-list .operation-detail-field + .operation-detail-field { margin-top: 8px; }
+.message-list .operation-detail-field.is-code { overflow: hidden; border: 1px solid var(--fl-color-border-soft); border-radius: 8px; margin-top: 12px; }
+.message-list .operation-detail-field.is-code .operation-detail-heading { padding: 6px 10px; background: var(--fl-color-surface-subtle); border-bottom: 1px solid var(--fl-color-border-soft); }
+.message-list .operation-detail-heading button { margin-left: auto; }
+.message-list .operation-detail-heading button + button { margin-left: 0; }
+.message-list .operation-detail pre { margin: 0; padding: 12px; max-height: 240px; background: var(--fl-color-surface); scrollbar-gutter: stable; }
+.message-list .operation-receipt { margin-top: 12px; }
+.message-list .operation-receipt > summary { display: flex; align-items: center; gap: 6px; width: fit-content; cursor: pointer; list-style: none; font-size: .85em; color: var(--fl-color-text-muted); }
+.message-list .operation-receipt > summary::-webkit-details-marker { display: none; }
+.message-list .operation-receipt > summary .app-icon { width: 13px; height: 13px; transform: rotate(-90deg); }
+.message-list .operation-receipt[open] > summary .app-icon { transform: none; }
+.message-list .operation-detail footer { padding-top: 10px; border-top: 1px solid var(--fl-color-border-soft); }
+@container conversation (max-width: 480px) {
+  .message-list .operation-detail-field:not(.is-code) { grid-template-columns: 1fr; gap: 2px; }
+  .message-list .operation-detail { padding: 10px; }
+}

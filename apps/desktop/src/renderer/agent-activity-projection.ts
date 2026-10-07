@@ -57,6 +57,7 @@ export interface ConversationActivityPhaseItem {
   occurredAt: number;
   title: string;
   phase: 'LOCATE' | 'EDIT' | 'VERIFY' | 'FINALIZE' | 'PAUSED' | 'RESUMED' | 'RECOVERY';
+  resumeAttempts?: number;
 }
 
 export interface ConversationActivityApprovalItem {
@@ -87,11 +88,18 @@ export type ConversationActivityItem = ConversationActivityGroupItem | Conversat
  * The first actual call owns the disclosure identity, regardless of later status.
  */
 export function compactOperationTimeline(items: readonly ConversationActivityItem[]): ConversationActivityItem[] {
-  return items.flatMap<ConversationActivityItem>(item => {
-    if (item.kind !== 'GROUP') return [item];
-    const entries = item.entries;
-    return entries.length ? [{ ...item, id: `operations-${entries[0]!.id}`, entries }] : [];
-  });
+  const result: ConversationActivityItem[] = [];
+  const isRetryMarker = (item: ConversationActivityItem | undefined): item is ConversationActivityPhaseItem => item?.kind === 'PHASE' && ['PAUSED', 'RESUMED'].includes(item.phase);
+  for (const item of items) {
+    const previous = result.at(-1);
+    if (isRetryMarker(item) && isRetryMarker(previous)) {
+      const resumeAttempts = (previous.resumeAttempts ?? Number(previous.phase === 'RESUMED')) + (item.resumeAttempts ?? Number(item.phase === 'RESUMED'));
+      result[result.length - 1] = { ...item, resumeAttempts, title: `${item.phase === 'PAUSED' ? '任务已暂停' : '任务已继续'}${resumeAttempts ? ` · 已尝试继续 ${resumeAttempts} 次` : ''}` };
+    } else if (item.kind === 'GROUP') {
+      if (item.entries.length) result.push({ ...item, id: `operations-${item.entries[0]!.id}` });
+    } else result.push(item);
+  }
+  return result;
 }
 
 export function reconcileLiveNarrative(
@@ -232,8 +240,15 @@ function approvalIdentity(event: AgentEventView): { approvalId: string; toolCall
 }
 
 function narrativeFor(event: AgentEventView): ConversationActivityNarrativeItem | null {
-  if (event.kind !== 'ASSISTANT_NARRATIVE') return null;
   const payload = payloadOf(event);
+  if (event.kind === 'CHECKPOINT_CREATED' && payload?.kind === 'WORK_REVIEW_V1' && payload.status === 'RECORDED') {
+    const review = payload.review;
+    const next = review && typeof review === 'object' && !Array.isArray(review) ? (review as EventPayload).next_check : null;
+    if (typeof next !== 'string' || !next.trim()) return null;
+    return { id: `review-${event.sequence}`, kind: 'NARRATIVE', sequence: event.sequence, occurredAt: event.created_at,
+      step: payloadNumber(payload, 'step'), text: `已复盘之前的尝试，接下来验证：${next}` };
+  }
+  if (event.kind !== 'ASSISTANT_NARRATIVE') return null;
   const text = payloadString(payload, 'text');
   if (!text.trim()) return null;
   return {

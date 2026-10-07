@@ -1,13 +1,20 @@
 import type { BrowserRuntime } from './browser-runtime';
 import type { WorkspaceRuntime } from './workspace-runtime';
 import { browserServerAddress, probeBrowserServer } from './agent-browser-health.ts';
+import { setTimeout as delay } from 'node:timers/promises';
 
 type Request = { request_id: string; run_id: string; conversation_id: string; tool_call_id: string; name: string; arguments: Record<string, unknown>; project_root?: string; field_id?: string };
 const actions = ['open', 'inspect', 'reload', 'click', 'fill', 'select', 'scroll', 'screenshot', 'resize', 'request_login'];
 const properties = ['text', 'value', 'visible', 'enabled', 'readonly', 'before', 'contains', 'absent'];
 function bounded(value: unknown, max: number): value is string { return typeof value === 'string' && value.length > 0 && value.length <= max; }
 export function browserServerCommand(args: Record<string, unknown>, platform: NodeJS.Platform = process.platform): string {
-  if (typeof args.program !== 'string' || !/^(node|npm|pnpm|yarn)(\.exe|\.cmd)?$/.test(args.program)
+  // Use the interpreter the model actually discovered (including project venvs).
+  // It is still a literal executable argument, never a shell command or install.
+  const programParts = typeof args.program === 'string' ? args.program.replaceAll('\\', '/').split('/') : [];
+  const python = /^python(?:3(?:\.\d+)?)?(?:\.exe)?$/.test(programParts.at(-1) ?? '')
+    && !programParts.includes('..');
+  if (typeof args.program !== 'string' || !args.program.length || args.program.length > 512 || /[\0\r\n]/.test(args.program)
+    || (!/^(node|npm|pnpm|yarn)(\.exe|\.cmd)?$/.test(args.program) && !python)
     || !Array.isArray(args.argv) || args.argv.length > 64 || !args.argv.every(a => typeof a === 'string' && a.length <= 2000 && !/[\0\r\n]/.test(a))) throw new Error('BROWSER_SERVER_ARGUMENTS');
   const program = platform === 'win32' && ['npm', 'pnpm', 'yarn'].includes(args.program) ? `${args.program}.cmd` : args.program;
   if (platform !== 'win32') return [program, ...args.argv].map(a => "'" + String(a).replaceAll("'", "'\"'\"'") + "'").join(' ');
@@ -24,6 +31,7 @@ export class AgentBrowserHost {
   private readonly pending = new Map<string, AbortController>();
   private readonly plans = new Map<string, { url: string; cases: { id: string; requirement: string }[] }>();
   private readonly servers = new Map<string, string>();
+  private readonly serverStartedAt = new Map<string, number>();
   private readonly workspace: (() => WorkspaceRuntime) | undefined;
   // Serializing native page actions prevents two runs switching the active view midway.
   private queue: Promise<unknown> = Promise.resolve();
@@ -35,7 +43,40 @@ export class AgentBrowserHost {
     reveal: (runId: string, conversationId: string) => void, workspace?: () => WorkspaceRuntime) { this.runtime = runtime; this.request = request; this.reveal = reveal; this.workspace = workspace; }
 
   cancel(id: string): void { this.pending.get(id)?.abort(); }
-  reset(): void { for (const controller of this.pending.values()) controller.abort(); this.plans.clear(); for (const id of this.servers.values()) void this.workspace?.().stopAgentServer(id).catch(() => undefined); this.servers.clear(); }
+  reset(): void { for (const controller of this.pending.values()) controller.abort(); this.plans.clear(); for (const id of this.servers.values()) void this.workspace?.().stopAgentServer(id).catch(() => undefined); this.servers.clear(); this.serverStartedAt.clear(); }
+
+  private async serverObservation(id: string, url: unknown, signal: AbortSignal, waitForStartup: boolean): Promise<Record<string, unknown>> {
+    const workspace = this.workspace!();
+    const deadline = Date.now() + (waitForStartup ? 1500 : 0);
+    let state: ReturnType<WorkspaceRuntime['agentServerStatus']>;
+    let probe: Record<string, unknown> = { readiness: 'NOT_CHECKED' };
+    do {
+      state = workspace.agentServerStatus(id);
+      if (state.status !== 'RUNNING' || url === undefined) break;
+      probe = await probeBrowserServer(url, signal);
+      // Read status again: the process may exit while a socket check is pending.
+      state = workspace.agentServerStatus(id);
+      if (probe.readiness === 'LISTENING' || state.status !== 'RUNNING' || Date.now() >= deadline) break;
+      try { await delay(100, undefined, { signal }); } catch { throw new Error('BROWSER_CANCELLED'); }
+    } while (!signal.aborted);
+    if (signal.aborted) throw new Error('BROWSER_CANCELLED');
+    const age = Date.now() - (this.serverStartedAt.get(id) ?? 0);
+    const phase = state.status !== 'RUNNING' ? 'EXITED'
+      : probe.readiness === 'LISTENING' ? 'LISTENING'
+        : url === undefined ? 'NOT_CHECKED' : age < 10_000 ? 'STARTING' : 'UNREACHABLE';
+    return { ...state, ...probe, process_tracking: 'MANAGED', service_phase: phase,
+      readiness: phase === 'EXITED' ? 'PROCESS_STOPPED' : phase === 'STARTING' ? 'STARTING' : probe.readiness,
+      guidance: phase === 'STARTING'
+        ? 'The managed process WAS spawned and is still alive; it is initializing. Use browser_server status with the same URL next. Do not start a duplicate, switch to nohup, or infer a crash from an initial closed port.'
+        : phase === 'EXITED'
+          ? 'The managed process exited. Inspect exit_code and output before choosing a repair; no server is kept alive by this process.'
+          : phase === 'UNREACHABLE'
+            ? 'The managed process is alive but this URL is still not listening after the startup grace period. Inspect its output and configured host/port; do not assume the tool failed to spawn or start a second server.'
+            : phase === 'LISTENING'
+              ? 'The managed process is alive and the socket is listening. start and status use the SAME TCP probe, not an HTTP status check. Open/inspect the intended page, then verify the required behavior.'
+              : 'The managed process was spawned; no URL was checked. Read its output/configuration and call status with the actual URL.',
+      page_verified: false, verification_eligible: false };
+  }
 
   handle(input: Request): void {
     if (!bounded(input.request_id, 100) || !bounded(input.run_id, 100) || !bounded(input.tool_call_id, 100)) return;
@@ -51,7 +92,9 @@ export class AgentBrowserHost {
         ? 'No input was dispatched. click/fill/select/scroll require an observed ref such as e12. scroll means reveal that element (scrollIntoView), not a direction: supply action=scroll, snapshot_id from the latest inspect, and ref. fill/select also require value.'
         : code === 'BROWSER_STALE_SNAPSHOT'
           ? 'No input was dispatched. Supply snapshot_id from the latest inspect and an observed element ref for input actions. An omitted snapshot_id is an argument error; repeating inspect without using its id cannot fix it.'
-          : undefined;
+          : code === 'BROWSER_SERVER_ARGUMENTS'
+            ? 'No process was started. Use program=node/npm/pnpm/yarn or a discovered python/python3 interpreter (an explicit interpreter path, including a project venv, is supported). argv must be literal arguments. For Python use -u and the project script or -m module; do not pass shell syntax or background the server through run_command.'
+            : undefined;
       return { kind: 'BROWSER', success: false, error_code: code, input_state: 'NOT_DISPATCHED', outcome_unknown: false, ...(guidance ? { guidance } : {}) };
     })
       .then(result => this.request('host.browser.complete', { request_id: input.request_id, result }))
@@ -68,10 +111,16 @@ export class AgentBrowserHost {
       const workspace = this.workspace();
       let id = this.servers.get(input.run_id);
       if (args.action === 'start') {
-        if (id && workspace.agentServerStatus(id).status === 'RUNNING') throw new Error('BROWSER_SERVER_ALREADY_RUNNING');
-        if (id) await workspace.stopAgentServer(id);
+        if (id && workspace.agentServerStatus(id).status === 'RUNNING') {
+          const observed = await this.serverObservation(id, args.url, signal, false);
+          return { kind: 'BROWSER', action: 'server-start', ...observed, success: false,
+            error_code: 'BROWSER_SERVER_ALREADY_RUNNING', input_state: 'NOT_DISPATCHED', outcome_unknown: false,
+            guidance: `No second process was started. This run already owns a managed server. Use status to observe it, or explicitly stop it before a deliberate configuration change. ${observed.guidance}` };
+        }
+        if (id) { await workspace.stopAgentServer(id); this.serverStartedAt.delete(id); }
         id = await workspace.startAgentServer(input.project_root, input.field_id, browserServerCommand(args));
         this.servers.set(input.run_id, id);
+        this.serverStartedAt.set(id, Date.now());
         if (signal.aborted) { await workspace.stopAgentServer(id); throw new Error('BROWSER_CANCELLED'); }
       } else if (args.action === 'stop') {
         if (id) await workspace.stopAgentServer(id);
@@ -84,11 +133,15 @@ export class AgentBrowserHost {
           process_tracking: 'NOT_MANAGED', readiness: 'NOT_CHECKED', verification_eligible: false,
           guidance: 'This host has no run-owned process handle, possibly after restart. This does not prove the development server is stopped. Check the configured address with status and url before starting another process; reuse the recorded startup command if a start is actually needed.' };
       }
-      const state = workspace.agentServerStatus(id);
-      const readiness = state.status === 'RUNNING' && args.url !== undefined
-        ? await probeBrowserServer(args.url, signal)
-        : { readiness: state.status === 'RUNNING' ? 'NOT_CHECKED' : 'PROCESS_STOPPED', guidance: 'RUNNING means the process is alive, not that a website is ready. Read the referenced dev-server configuration for its host, port and protocol; status with url checks a local listening socket. Do not guess the port from arbitrary flags.' };
-      return { kind: 'BROWSER', action: `server-${String(args.action)}`, success: state.status === 'RUNNING', ...state, ...readiness, verification_eligible: false };
+      let observed: Record<string, unknown>;
+      try { observed = await this.serverObservation(id, args.url, signal, args.action === 'start'); }
+      catch (error) {
+        if (signal.aborted && args.action === 'start') {
+          await workspace.stopAgentServer(id); this.servers.delete(input.run_id); this.serverStartedAt.delete(id);
+        }
+        throw error;
+      }
+      return { kind: 'BROWSER', action: `server-${String(args.action)}`, success: observed.status === 'RUNNING', ...observed };
     }
     if (input.name === 'browser_plan') {
       browserHttpUrl(args.url);

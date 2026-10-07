@@ -125,14 +125,14 @@ function renderInline(value: string, keyPrefix: string, context?: ReferenceRende
     if (match.kind === 'link' && match.target?.startsWith('fielora-reference:')) {
       const reference = context?.references.get(match.target.slice('fielora-reference:'.length));
       if (reference) {
-        result.push(<button key={key} type="button" className="markdown-typed-reference" data-reference-kind={reference.target.kind} data-reference-id={reference.id} onClick={() => context?.onOpenReference?.(reference)} disabled={!context?.onOpenReference}>{renderInline(match.label, key, context)}</button>);
+        result.push(<button key={key} type="button" className="markdown-typed-reference" data-reference-kind={reference.target.kind} data-reference-id={reference.id} onClick={() => context?.onOpenReference?.(reference)} disabled={!context?.onOpenReference}><AppIcon name={reference.target.kind === 'IMAGE' ? 'images' : reference.target.kind === 'WEB_REFERENCE' ? 'browse' : 'files'}/>{renderInline(match.label, key, context)}</button>);
       } else {
         result.push(<span key={key} className="markdown-reference-unavailable">{renderInline(match.label, key, context)}</span>);
       }
     } else if (match.kind === 'link' && match.target?.toLowerCase().startsWith('fielora-project-file:')) {
       const file = context?.activityFiles?.resolve(match.target);
       result.push(file && context?.activityFiles?.open
-        ? <button key={key} type="button" className="markdown-typed-reference" onClick={() => context.activityFiles?.open?.(file)}>{match.label}</button>
+        ? <button key={key} type="button" className="markdown-typed-reference" data-reference-kind="PROJECT_FILE" onClick={() => context.activityFiles?.open?.(file)}><AppIcon name="files"/>{match.label}</button>
         : <code key={key}>{match.label}</code>);
     } else if (match.kind === 'link') result.push(<a key={key} href={match.target} target="_blank" rel="noreferrer noopener">{renderInline(match.label, key, context)}</a>);
     remaining = remaining.slice(match.index + match.length);

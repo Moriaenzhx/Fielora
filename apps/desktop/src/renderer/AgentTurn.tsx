@@ -23,6 +23,7 @@ const ActivityDisclosureContext = createContext<{
 }>({ states: {}, update: () => undefined });
 import {
   agentRequestKind,
+  commandApprovalReason,
   agentModelIsActive,
   agentPausePresentation,
   agentCompletionTimeLabel,
@@ -196,15 +197,18 @@ function OperationDetail({ entry, activityFiles }: { entry: ConversationActivity
   const issue = entry.kind === 'TOOL' ? activityToolIssue(entry.tool) : null;
   const path = fields.find(field => field.label === '操作对象')?.text;
   const file = path ? activityFiles?.resolve(`fielora-project-file:${path}`) : null;
+  const renderField = (field: (typeof fields)[number]) => <div className={`operation-detail-field${field.code ? ' is-code' : ''}`} key={field.label}>
+    <div className="operation-detail-heading"><span>{field.label}</span><button type="button" aria-label={`复制${field.label}`} onClick={() => {
+      void window.fielora.clipboard.writeText(field.text).then(() => setCopied(`${field.label}已复制`), () => setCopied(`${field.label}复制失败`));
+    }}><AppIcon name="copy"/></button>{field.label === '操作对象' && file && activityFiles?.open && <button type="button" onClick={() => activityFiles.open?.(file)}>打开文件</button>}</div>
+    {field.code ? <pre tabIndex={0}>{field.text}</pre> : <div className="operation-detail-value">{field.text}</div>}
+  </div>;
   return <section className="operation-detail" id={`detail-${entry.id}`} data-testid="operation-detail" aria-label="操作详情">
+    <header className="operation-detail-title"><AppIcon name={operationIcon(entry)}/><strong>{operationLabel(entry)}</strong><span data-status={entry.status}>{activityStatusLabel(entry.status)}</span></header>
     {fields.length === 0 && <p>该历史记录未保存执行详情。</p>}
-    {fields.map(field => <div className="operation-detail-field" key={field.label}>
-      <div className="operation-detail-heading"><span>{field.label}</span><button type="button" aria-label={`复制${field.label}`} onClick={() => {
-        void window.fielora.clipboard.writeText(field.text).then(() => setCopied(`${field.label}已复制`), () => setCopied(`${field.label}复制失败`));
-      }}><AppIcon name="copy"/></button>{field.label === '操作对象' && file && activityFiles?.open && <button type="button" onClick={() => activityFiles.open?.(file)}>打开文件</button>}</div>
-      {field.code ? <pre tabIndex={0}>{field.text}</pre> : <div className="operation-detail-value">{field.text}</div>}
-    </div>)}
+    {fields.filter(field => field.label !== '回执').map(renderField)}
     {issue && <p>{issue}</p>}
+    {fields.filter(field => field.label === '回执').map(field => <details className="operation-receipt" key={field.label}><summary>原始回执<AppIcon name="chevronDown"/></summary>{renderField(field)}</details>)}
     <footer><span>{activityStatusLabel(entry.status)}</span>{entry.occurredAt > 0 && <time>开始于 {activityTimestamp(entry.occurredAt)}</time>}{entry.completedAt !== null && <time>结束于 {activityTimestamp(entry.completedAt)}</time>}</footer>
     {copied && <span role="status">{copied}</span>}
   </section>;
@@ -322,8 +326,9 @@ function durableRunPhase(events: readonly AgentEventView[]): string {
 function currentRunStateLabel(run: AgentRunView, events: readonly AgentEventView[], tools: readonly AgentToolCallView[], thinking: boolean): string {
   if (run.status === 'WAITING_APPROVAL') return '等待批准';
   if (run.status === 'PAUSED') return run.error_code === 'AGENT_USER_INPUT_REQUIRED' ? '等待你的回答' : '已暂停';
-  if (thinking) return '正在思考';
   const phase = durableRunPhase(events);
+  if (phase === 'REVIEW') return '正在复盘执行问题';
+  if (thinking) return '正在思考';
   if (phase === 'VERIFY') return '正在验证';
   if (phase === 'LOCATE') return '正在定位';
   if (phase === 'EDIT') return '正在编辑';
@@ -341,7 +346,7 @@ function AgentProgressSummary({ run, tools, busy, onResume, onStop }: {
     ? [...tools].reverse().find(tool => tool.name === 'request_user_input' && tool.status === 'COMPLETED')?.arguments as { question?: string; reason?: string } | undefined : undefined;
   return <div className="agent-progress-summary" data-testid="agent-execution-status" data-execution-stage={run.status}>
     <div className="agent-pause-notice" data-testid="agent-pause-notice">
-      {clarification?.question && <div data-testid="agent-visible-question">{clarification.reason && <p>{clarification.reason}</p>}<p>{clarification.question}</p></div>}
+      {clarification?.question && <div className="agent-user-question" data-testid="agent-visible-question">{clarification.reason && <p>{clarification.reason}</p>}<p>{clarification.question}</p></div>}
       <p>{(run.error_code === 'AGENT_VERIFICATION_REQUIRED' ? browserLoadPauseReason(tools) : null) ?? agentPausePresentation(run).reason}</p>
       <div className="agent-pause-actions" aria-busy={busy}>
         {onResume && agentPausePresentation(run).canResume && <button type="button" className="agent-resume-action is-primary" disabled={busy} onClick={onResume}>{agentPausePresentation(run).action}</button>}
@@ -358,6 +363,7 @@ function AgentApproval({ tool, summary, busy, onDecision }: {
   onDecision: (decision: 'DENY' | 'ALLOW_ONCE') => void;
 }) {
   const [detailsOpen, setDetailsOpen] = useState(false);
+  const commandReason = commandApprovalReason(tool);
   const mcpActivation = tool?.name === 'mcp.activate_connection';
   const install = tool?.name === 'tools.install' && tool.arguments && typeof tool.arguments === 'object'
     ? (tool.arguments as Record<string, unknown>)._installation_preview as Record<string, unknown> | undefined : undefined;
@@ -366,7 +372,8 @@ function AgentApproval({ tool, summary, busy, onDecision }: {
   const connectionId = mcpActivation && tool?.arguments && typeof tool.arguments === 'object' && 'connection_id' in tool.arguments
     ? String((tool.arguments as { connection_id?: unknown }).connection_id ?? '') : '';
   return <section className="agent-turn-approval" data-testid="agent-approval">
-    <p>{fontInstall ? `安装字体 ${fontInstall.font.families.map(f => f.family).join("、")}` : install ? `安装工具 ${String(install.name)}${install.version ? ` ${String(install.version)}` : ''}` : mcpActivation ? `Start local MCP Server “${connectionId}” for this Run` : '我已经定位到需要执行的下一步。'}</p>
+    <p>{fontInstall ? `安装字体 ${fontInstall.font.families.map(f => f.family).join("、")}` : install ? `安装工具 ${String(install.name)}${install.version ? ` ${String(install.version)}` : ''}` : mcpActivation ? `Start local MCP Server “${connectionId}” for this Run` : commandReason ? '此命令需要批准' : '我已经定位到需要执行的下一步。'}</p>
+    {commandReason && <p data-testid="command-approval-reason">{commandReason}</p>}
     {install && <dl className="agent-install-preview" data-testid="agent-install-preview">
       <dt>来源</dt><dd>{String(install.source_url)}</dd>
       <dt>下载大小</dt><dd>{Number(install.archive_bytes) < 1024 * 1024 ? `${Number(install.archive_bytes).toLocaleString()} 字节` : `${(Number(install.archive_bytes) / 1024 / 1024).toFixed(2)} MiB`}</dd>
@@ -382,7 +389,7 @@ function AgentApproval({ tool, summary, busy, onDecision }: {
     </dl>}
     {!install && !fontInstall && <p>{mcpActivation ? '这会启动已配置的本地进程并发现有界 Tools；不会授予后续 Tool 权限。' : summary || (tool ? `${toolTitle(tool.name)} · ${toolDetail(tool)}` : '只会执行当前列出的操作，不会扩大范围。')}</p>}
     {detailsOpen && tool && <OperationDetail entry={{ id: `tool-${tool.id}`, kind: 'TOOL', toolId: tool.id, tool, status: tool.status, activityKind: 'OTHER', sequence: 0, occurredAt: tool.created_at, completedAt: null }}/>}
-    <div><button type="button" aria-expanded={detailsOpen} onClick={() => setDetailsOpen(value => !value)}>{fontInstall ? '查看安装详情' : install ? '查看执行详情' : '查看修改范围'}</button><button type="button" onClick={() => onDecision('DENY')} disabled={busy}>拒绝</button><button type="button" className="agent-primary-action" onClick={() => onDecision('ALLOW_ONCE')} disabled={busy} data-testid="agent-allow-once">{install || fontInstall ? '允许本次安装' : approvalActionLabel(tool)}</button></div>
+    <div><button type="button" aria-expanded={detailsOpen} onClick={() => setDetailsOpen(value => !value)}>{fontInstall ? '查看安装详情' : install || commandReason ? '查看执行详情' : '查看修改范围'}</button><button type="button" onClick={() => onDecision('DENY')} disabled={busy}>拒绝</button><button type="button" className="agent-primary-action" onClick={() => onDecision('ALLOW_ONCE')} disabled={busy} data-testid="agent-allow-once">{install || fontInstall ? '允许本次安装' : approvalActionLabel(tool)}</button></div>
   </section>;
 }
 
@@ -403,7 +410,7 @@ function ChangedFiles({ review, onReview, onReviewFile }: {
   return <section className={`agent-result-changes file-delivery-card${expanded ? ' is-expanded' : ''}`} data-testid="agent-result-changed-files" data-file-count={review.files.length} data-additions={review.additions} data-deletions={review.deletions}>
     <header className="agent-result-changes-header">
       <span className="agent-result-changes-icon"><AppIcon name="reviewChanges"/></span>
-      <span className="agent-result-changes-title"><strong>已编辑 {review.files.length} 个文件</strong><button type="button" className="file-delivery-view" onClick={onReview} disabled={!onReview}>查看更改<AppIcon name="openAction"/></button></span>
+      <span className="agent-result-changes-title"><strong>已编辑 {review.files.length} 个文件</strong><span className="file-delivery-totals" aria-label={`新增 ${review.additions} 行，删除 ${review.deletions} 行`}><b>+{review.additions}</b><i>−{review.deletions}</i></span></span>
       <div className="file-delivery-actions">
         {undoFile && onReviewFile && <button type="button" className="file-delivery-undo" title="打开审阅，检查并撤销文件修改" onClick={() => onReviewFile(undoFile.path)}>撤销<AppIcon name="fileUndo"/></button>}
         {onReview && <button type="button" className="agent-full-review-action" onClick={onReview}>审核</button>}
@@ -420,7 +427,7 @@ function ChangedFiles({ review, onReview, onReviewFile }: {
   </section>;
 }
 
-function AgentTerminalResult({ run, status, message, presentation, tools, partial, review, onRetry, onReview, onReviewFile, onOpenReference, onOpenImage }: {
+function AgentTerminalResult({ run, status, message, presentation, tools, partial, review, onRetry, onReview, onReviewFile, onOpenReference, onOpenImage, activityFiles }: {
   run: AgentRunView | null;
   status: AgentTerminalStatus;
   message: ConversationMessageView | null;
@@ -433,6 +440,7 @@ function AgentTerminalResult({ run, status, message, presentation, tools, partia
   onReviewFile?: (path: string) => void;
   onOpenReference?: (reference: ResultReference) => void;
   onOpenImage?: (preview: ResultImagePreviewView) => void;
+  activityFiles?: ActivityFileContext;
 }) {
   const result = buildAgentResultViewModel(status, message?.content ?? '', presentation, tools);
   const editedReview = appliedAgentReview(review);
@@ -441,7 +449,7 @@ function AgentTerminalResult({ run, status, message, presentation, tools, partia
   return <div className="agent-terminal-result" data-testid="agent-terminal-result" data-result-outcome={presentation?.outcome ?? status}>
     {run?.error_code && <p className="agent-run-error-detail">结束原因：<code>{run.error_code}</code></p>}
     {failureReason && <p className="agent-failure-reason" data-testid="agent-failure-reason"><AppIcon name="info"/><span>{failureReason}</span></p>}
-    <TimestampHover timestamp={message?.created_at}><div className="agent-terminal-body"><MarkdownMessage content={markdown} references={message?.references ?? []} onOpenReference={onOpenReference} onOpenImage={onOpenImage} modernStatusMarkers/></div></TimestampHover>
+    <TimestampHover timestamp={message?.created_at}><div className="agent-terminal-body"><MarkdownMessage content={markdown} references={message?.references ?? []} onOpenReference={onOpenReference} onOpenImage={onOpenImage} activityFiles={activityFiles} modernStatusMarkers/></div></TimestampHover>
     {editedReview && editedReview.files.length > 0 && <ChangedFiles review={editedReview} onReview={onReview} onReviewFile={onReviewFile}/>}
     <div className="agent-terminal-actions">
       {result.evidence.filter((item) => !editedReview?.files.length || !/文件/.test(item)).map((item) => <span className="agent-terminal-meta" key={item}>{item}</span>)}
@@ -462,6 +470,13 @@ export function AgentTurn({
     update: (id: string, value: OperationDisclosure) => setDisclosures(previous => ({ ...previous, [`${disclosureScope}:${id}`]: value })),
   };
   const terminal = Boolean(terminalMessage) || isTerminalRun(run);
+  // Keep the live stream mounted, but start each terminal result collapsed.
+  // A terminal message may arrive after the status event; neither should reset
+  // an explicit user disclosure or hide a later resumed/approval state.
+  const [historyDisclosures, setHistoryDisclosures] = useState<Record<string, boolean>>({});
+  const historyKey = `${disclosureScope}:${run?.finished_at ?? terminalMessage?.id ?? 'active'}`;
+  const historyOpen = !terminal || Boolean(historyDisclosures[historyKey]);
+  const historyId = `agent-history-${disclosureScope}`;
   const [now, setNow] = useState(() => Date.now());
   useEffect(() => {
     if (!run || terminal || run.status === 'PAUSED') return undefined;
@@ -502,8 +517,10 @@ export function AgentTurn({
       )}
     </div>}
     {!textOnlyAnswer && run && presentation && <>
-      <div className="agent-terminal-runtime agent-running-header" data-testid="agent-running-header"><span>{status === 'CANCELLED' ? '已停止 · ' : status === 'FAILED' ? '已中断 · ' : ''}已处理 {presentation.elapsed}</span></div>
-      <div className="agent-execution-detail is-history" data-testid="agent-execution-detail">
+      {terminal ? <button type="button" className="agent-terminal-runtime agent-running-header agent-history-toggle" data-testid="agent-history-toggle" aria-expanded={historyOpen} aria-controls={historyId} onClick={() => setHistoryDisclosures(previous => ({ ...previous, [historyKey]: !historyOpen }))}>
+        <span>{status === 'CANCELLED' ? '已停止 · ' : status === 'FAILED' ? '已中断 · ' : ''}用时 {presentation.elapsed}</span><AppIcon name="chevronDown"/><span className="agent-history-hint">{historyOpen ? '收起过程' : '查看过程'}</span>
+      </button> : <div className="agent-terminal-runtime agent-running-header" data-testid="agent-running-header"><span>已处理 {presentation.elapsed}</span></div>}
+      <div className="agent-execution-detail is-history" data-testid="agent-execution-detail" id={historyId} hidden={!historyOpen}>
         <ConversationActivityStream items={activityItems} tools={tools} approval={approval} approvalSummary={approvalSummary} busy={busy} onDecision={onDecision} liveNarrative={liveNarrative} activityFiles={activityFiles}/>
       </div>
       {!terminal && <div className="agent-current-action" data-testid="agent-current-action"><span className={thinking && !stopping ? 'agent-running-label is-working' : 'agent-running-label'} data-testid="agent-running-label">{stopping ? '正在停止' : run.status === 'RUNNING' ? currentCompactAction(activityItems, tools, events) : currentRunStateLabel(run, events, tools, false)}</span></div>}
@@ -512,7 +529,7 @@ export function AgentTurn({
       {!terminal && <CurrentRunMcp runtime={mcpRuntime} busyConnectionId={mcpBusyConnectionId} onActivate={onActivateMcp}/>}
     </>}
     {!textOnlyAnswer && terminal && status && (
-      <AgentTerminalResult run={run} status={status} message={terminalMessage} presentation={presentation} tools={tools} partial={partial} review={review} onRetry={onRetry} onReview={onReview} onReviewFile={onReviewFile} onOpenReference={onOpenReference} onOpenImage={onOpenImage}/>
+      <AgentTerminalResult run={run} status={status} message={terminalMessage} presentation={presentation} tools={tools} partial={partial} review={review} onRetry={onRetry} onReview={onReview} onReviewFile={onReviewFile} onOpenReference={onOpenReference} onOpenImage={onOpenImage} activityFiles={activityFiles}/>
     )}
     {terminalMessage && onCopy && <footer className={`message-actions agent-turn-message-actions ${copied ? 'copy-confirmed' : ''}`}><button type="button" className={copied ? 'copied' : ''} aria-label={copied ? '消息已复制' : '复制消息'} title={copied ? '已复制' : '复制'} onClick={onCopy} data-testid="message-copy"><AppIcon name={copied ? 'check' : 'copy'}/>{copied && <span role="status" aria-live="polite">已复制</span>}</button></footer>}
   </section></ActivityDisclosureContext.Provider></ActivityNarrativeTimeContext.Provider></ActivityActiveToolContext.Provider></ActivityRunningContext.Provider>;

@@ -19,6 +19,7 @@ export const rendererConfig: Configuration = {
   },
   resolve: {
     extensions: ['.js', '.ts', '.tsx'],
+    extensionAlias: { '.js': ['.js', '.ts', '.tsx'] },
     alias: {
       react: path.resolve(__dirname, '../../node_modules/react'),
       'react-dom': path.resolve(__dirname, '../../node_modules/react-dom'),

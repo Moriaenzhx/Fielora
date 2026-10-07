@@ -3,6 +3,21 @@ import test from 'node:test';
 import type { AgentEventKind, AgentEventView, AgentToolCallView } from '@fielora/contracts';
 import { buildConversationActivityProjection, compactOperationTimeline, reconcileLiveNarrative } from './agent-activity-projection.ts';
 
+test('consecutive retries occupy one row without erasing execution boundaries or durable history', () => {
+  const events = [event(1,'RUN_PAUSED'),event(2,'RUN_RESUMED'),event(3,'RUN_PAUSED'),event(4,'RUN_RESUMED'),event(5,'RUN_PAUSED')];
+  const raw = buildConversationActivityProjection(events, []);
+  const saved = JSON.stringify(raw);
+  const compact = compactOperationTimeline(raw);
+  assert.equal(compact.length, 1);
+  assert.equal(compact[0]?.kind === 'PHASE' && compact[0].resumeAttempts, 2);
+  assert.equal(compact[0]?.kind === 'PHASE' && compact[0].title, '任务已暂停 · 已尝试继续 2 次');
+  assert.equal(compact[0]?.sequence, 5);
+  assert.deepEqual(compactOperationTimeline(compact), compact);
+  assert.equal(JSON.stringify(raw), saved);
+  const separated = buildConversationActivityProjection([...events,event(6,'ASSISTANT_NARRATIVE',{text:'已有新的检查结果',step:4}),event(7,'RUN_RESUMED')], []);
+  assert.deepEqual(compactOperationTimeline(separated).map(item=>item.kind), ['PHASE','NARRATIVE','PHASE']);
+});
+
 test('compact process preserves narrative order and stable operation identity as results arrive', () => {
   const events = [event(1, 'TOOL_PROPOSED', { tool_call_id: 'a' }), event(2, 'ASSISTANT_NARRATIVE', { text: 'A progress note', step: 1 }), event(3, 'TOOL_PROPOSED', { tool_call_id: 'b' })];
   const raw = buildConversationActivityProjection(events, [tool('a','read_file','OBSERVE','COMPLETED'), tool('b','read_file','OBSERVE','RUNNING')]);
@@ -202,4 +217,14 @@ test('live narrative is replaced by the matching durable model turn without dupl
   assert.equal(reconcileLiveNarrative([
     { id: 'narrative-4', kind: 'NARRATIVE', sequence: 4, occurredAt: 4, step: 1, text: '上一轮说明' },
   ], live, 2), live);
+});
+
+test('corrective review shows its next check without claiming verification or exposing internal fields', () => {
+  const projected = buildConversationActivityProjection([
+    event(1,'CHECKPOINT_CREATED',{kind:'WORK_REVIEW_V1',status:'RECORDED',review:{next_check:'只重跑编码查询用例',lessons:[{failed_assumption:'private operational data'}]},verification_eligible:false}),
+    event(2,'CHECKPOINT_CREATED',{kind:'WORK_REVIEW_V1',status:'INVALID_REVIEW',review:{next_check:'must not appear'}}),
+  ],[]);
+  assert.equal(projected.length,1);
+  assert.equal(projected[0]?.kind === 'NARRATIVE' && projected[0].text,'已复盘之前的尝试，接下来验证：只重跑编码查询用例');
+  assert.ok(!JSON.stringify(projected).includes('private operational data'));
 });

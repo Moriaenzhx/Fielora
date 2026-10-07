@@ -42,6 +42,13 @@
 .settings-model-runtime-controls { display:flex; flex-wrap:wrap; align-items:end; gap:12px; margin:20px 0; }
 .settings-model-runtime-controls label { display:flex; flex-direction:column; gap:8px; flex:1 1 170px; min-width:0; margin:0; font-size:var(--fl-font-size-meta); }
 .settings-model-runtime-controls input { width:100%; min-width:0; }
+.settings-model-runtime-controls { align-items:start; }
+.settings-reasoning-control { flex:1 1 240px; min-width:0; --fl-surface-overlay:var(--fl-surface-overlay-solid); --fl-effect-backdrop-overlay:none; }
+.settings-reasoning-control .ui-select { max-width:360px; }
+.settings-reasoning-help { margin:8px 0 0; font-size:var(--fl-font-size-meta); }
+.settings-model-runtime-controls > .ui-button { margin-top:25px; }
+.settings-reasoning-default { padding:10px 0; color:var(--fl-color-text); }
+.settings-model-output-limit label { display:flex; flex-direction:column; gap:8px; margin:12px 0; max-width:360px; }
 .settings-model-runtime pre { overflow:auto; font-size:var(--fl-font-size-meta); }
 .settings-model-runtime > .ui-button { margin-right:8px; }
 .settings-model-runtime li { padding:4px 0; font-size:var(--fl-font-size-meta); }

@@ -133,6 +133,7 @@ const bridge: FieloraBridge = {
   provider: {
     catalog: () => ipcRenderer.invoke(channels.providerCatalog),
     updateRuntime: (request) => ipcRenderer.invoke(channels.providerRuntimeUpdate, request),
+    prepareSend: (request) => ipcRenderer.invoke(channels.providerPrepareSend, request),
     validate: (request) => ipcRenderer.invoke(channels.providerValidate, request),
     create: (request) => ipcRenderer.invoke(channels.providerCreate, request),
     update: (request) => ipcRenderer.invoke(channels.providerUpdate, request),

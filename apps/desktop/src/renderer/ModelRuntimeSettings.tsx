@@ -33,7 +33,15 @@ export function ModelRuntimeSettings({ provider }: { provider: ProviderConfigVie
     return () => { off(); clearInterval(timer); const id = invocation.current; if (id) void window.fielora.model.cancel({invocation_id:id}).catch(() => undefined); };
   }, [provider.id, t]);
   if (!view) return null;
-  const labels: Record<ReasoningMode,string> = { PROVIDER_DEFAULT:t('服务默认','Provider default'), OFF:t('关闭','Off'), ON:t('开启','On'), LOW:t('低','Low'), MEDIUM:t('中','Medium'), HIGH:t('高','High'), MAX:t('最高','Max') };
+  const hasEffort = view.profile.reasoning_modes.some(mode => ['LOW','MEDIUM','HIGH','MAX'].includes(mode));
+  const hasToggle = view.profile.reasoning_modes.includes('ON');
+  const reasoningLabel = hasEffort ? t('推理强度','Reasoning effort') : t('深度思考','Thinking');
+  const labels: Record<ReasoningMode,string> = { PROVIDER_DEFAULT:t('模型默认','Model default'), OFF:t('关闭思考','Thinking off'), ON:t('开启思考','Thinking on'), LOW:t('低','Low'), MEDIUM:t('中','Medium'), HIGH:t('高','High'), MAX:t('最高','Max') };
+  const reasoningHelp = hasEffort
+    ? t('仅显示当前模型支持的档位。强度越高，通常会花更多时间和 Token 思考。','Only levels supported by this model are shown. Higher effort generally uses more time and tokens.')
+    : hasToggle
+      ? t('当前模型支持开启或关闭思考，没有低、中、高强度档位。模型默认由服务商决定。','This model offers a thinking switch, not low, medium or high effort levels. Model default follows the provider.')
+      : t('当前配置没有可选的思考开关或强度档位，沿用模型默认行为。','This configuration exposes no thinking switch or effort levels. It uses the model default.');
   const dirty = draft.reasoning !== view.settings.reasoning || draft.max_output_tokens !== view.settings.max_output_tokens;
   const valid = Number.isInteger(draft.max_output_tokens) && draft.max_output_tokens >= 256 && draft.max_output_tokens <= 16384;
   async function save() {
@@ -55,11 +63,20 @@ export function ModelRuntimeSettings({ provider }: { provider: ProviderConfigVie
     <p>{t('工具','Tools')}: {support(view.profile.tools)} · {t('图片','Images')}: {support(view.profile.images)} · {t('结构化输出','Structured output')}: {support(view.profile.structured_output)}</p>
     <p className="muted">{view.profile.source === 'OFFICIAL_DOCUMENTATION' ? t('能力来源：官方文档声明，尚不能代替当前连接的实测结果。','Source: official documentation; this does not replace testing this connection.') : view.profile.source === 'CUSTOM_OPENAI' ? t('自定义模型使用所选标准协议，不添加厂商优化。推理采用服务默认行为；工具能力可通过兼容性检查确认。','Custom models use the selected standard protocol without vendor optimization. Reasoning follows provider defaults; use compatibility checks for tool evidence.') : t('暂无此地址与模型的能力声明，可使用兼容性检查获取有限测试证据。','No declaration for this endpoint and model. Compatibility checks can provide limited evidence.')}</p>
     <div className="settings-model-runtime-controls">
-      <label>{t('推理模式','Reasoning mode')}<SelectMenu<ReasoningMode> ariaLabel={t('推理模式','Reasoning mode')} value={draft.reasoning} options={view.profile.reasoning_modes.map(value => ({value,label:labels[value],disabled:busy || running}))} onChange={reasoning => setDraft({...draft,reasoning})} testId={`reasoning-${provider.id}`}/></label>
-      <label>{t('每次回复 Token 上限','Output token limit per call')}<input type="number" min={256} max={16384} step={256} value={draft.max_output_tokens} onChange={e => setDraft({...draft,max_output_tokens:Number(e.target.value)})} disabled={busy || running} data-testid={`output-limit-${provider.id}`}/></label>
+      <div className="settings-reasoning-control">
+        <label>{reasoningLabel}{hasEffort || hasToggle
+          ? <SelectMenu<ReasoningMode> ariaLabel={reasoningLabel} value={draft.reasoning} options={view.profile.reasoning_modes.map(value => ({value,label:labels[value],disabled:busy || running}))} onChange={reasoning => setDraft({...draft,reasoning})} testId={`reasoning-${provider.id}`}/>
+          : <span className="settings-reasoning-default" data-testid={`reasoning-default-${provider.id}`}>{t('模型默认','Model default')}</span>}</label>
+        <p className="muted settings-reasoning-help" data-testid={`reasoning-help-${provider.id}`}>{reasoningHelp}</p>
+      </div>
       <Button variant="secondary" onClick={() => void save()} disabled={!dirty || !valid || busy || running} data-testid={`runtime-save-${provider.id}`}>{t('保存','Save')}</Button>
     </div>
-    <p className="muted">{t('保存后用于新任务；已有任务继续沿用首次调用时的设置。服务默认沿用模型的思考方式。','Applies to new tasks. Existing tasks keep their initial settings. Provider default uses the model’s own reasoning behavior.')}</p>
+    <details className="settings-model-output-limit">
+      <summary>{t('回复长度上限','Output length limit')} · {draft.max_output_tokens} Token</summary>
+      <label>{t('每次调用的输出 Token 上限','Output token limit per call')}<input type="number" min={256} max={16384} step={256} value={draft.max_output_tokens} onChange={e => setDraft({...draft,max_output_tokens:Number(e.target.value)})} disabled={busy || running} data-testid={`output-limit-${provider.id}`}/></label>
+      <p className="muted">{t('这是输出长度限制，不是推理强度。部分模型会把思考内容计入输出 Token。修改后点击上方“保存”。','This limits output length, not reasoning effort. Some models count thinking as output tokens. Save changes above.')}</p>
+    </details>
+    <p className="muted">{t('保存后用于新任务；暂停的任务点击“继续工作”时也会使用新设置。正在执行的这一段保持原设置。','Applies to new tasks and when you continue a paused task. The current execution segment keeps its settings.')}</p>
     <details><summary>{t('已保存的请求参数','Saved request parameters')}</summary><pre data-testid={`runtime-parameters-${provider.id}`}>{JSON.stringify(view.effective_parameters,null,2)}</pre><small>{t('这是发送参数，不代表服务端已证明执行了相同推理强度。','These are request parameters, not proof of server-side reasoning intensity.')}</small></details>
     <p>{t('兼容性检查最多发送 4 次请求，每次最多 1024 个输出 Token，可能产生费用；不访问项目文件。','Compatibility checks send up to 4 requests with at most 1024 output tokens each and may incur charges; no project files are accessed.')}</p>
     <Button variant="secondary" disabled={running || busy || dirty || !provider.credential_present} onClick={() => void validate()} data-testid={`runtime-validate-${provider.id}`}>{running ? t('正在检查…','Checking…') : t('检查 Agent 兼容性','Check Agent compatibility')}</Button>

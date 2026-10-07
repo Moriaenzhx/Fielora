@@ -3936,6 +3936,7 @@ impl AgentCoordinator {
             run.error_code.as_deref(),
             Some("AGENT_NO_PROGRESS" | "AGENT_REPEATED_ACTIONS")
         );
+        let model_repair_note = crate::agent_model_repair::resume_note(run.error_code.as_deref());
         let prepared = self.prepare(run)?;
         let pending_approval = self
             .storage
@@ -3991,6 +3992,8 @@ impl AgentCoordinator {
             Continuation {
                 user_note: Some(if stalled {
                     REPLAN_INSTRUCTION.into()
+                } else if let Some(note) = model_repair_note {
+                    format!("Recovery facts: {} {note}", recovery.notes.join(" "))
                 } else if recovery.notes.is_empty() {
                     "Continue from the durable AgentRun state. Do not repeat a receipt-backed side effect.".into()
                 } else {
@@ -4110,7 +4113,7 @@ impl AgentCoordinator {
         }
         self.credentials
             .read(credential_ref)
-            .map_err(|_| DomainError::Validation("CREDENTIAL_MISSING".into()))
+            .map_err(|error| DomainError::Validation(error.user_code().into()))
     }
 
     fn prepare(&self, run: AgentRunView) -> Result<PreparedRun, DomainError> {
@@ -5261,6 +5264,28 @@ impl AgentCoordinator {
         }
 
         let mut progress = WorkProgress::restored(&existing_tools);
+        let mut reviews = crate::agent_work_review::Reviews::default();
+        let mut review_cursor = 0;
+        loop {
+            let events = match self.storage.list_agent_events(ListAgentEventsRequest {
+                run_id: run_id.clone(),
+                after_sequence: Some(review_cursor),
+                limit: Some(500),
+            }) {
+                Ok(events) => events,
+                Err(_) => {
+                    self.pause_general_work(&run_id, "AGENT_WORK_STATE_READ_FAILED");
+                    return;
+                }
+            };
+            for event in &events {
+                reviews.observe_event(event);
+                review_cursor = event.sequence;
+            }
+            if events.len() < 500 {
+                break;
+            }
+        }
         let mut resources = RunResources::default();
         let access_question = self.access_question_task(&prepared.run).is_some();
         let mut rejected_outcomes = crate::agent_task_outcome::RejectedOutcomes::default();
@@ -5268,6 +5293,8 @@ impl AgentCoordinator {
         let effective_max_steps = prepared.run.max_steps;
         for step in start_step..=effective_max_steps {
             let mut request_intent = None;
+            let mut review_due = None;
+            let mut review_facts = Vec::new();
             if access_question
                 && self.finish_access_question(
                     &prepared,
@@ -5388,6 +5415,13 @@ impl AgentCoordinator {
                     return;
                 }
                 messages.retain(|message| !matches!(message, AgentModelMessage::User(text) if text.starts_with(crate::agent_work_plan::CONTEXT_MARKER) || text.starts_with(crate::agent_work_plan::RESUME_MARKER) || text.starts_with(crate::agent_browser::LOAD_CONTEXT_MARKER) || text.starts_with(crate::agent_work_state::DIAGNOSTIC_CONTEXT_MARKER) || text == REPLAN_INSTRUCTION || text.starts_with(REFERENCE_CONTEXT_MARKER) || text.starts_with(crate::agent_recovery::CONTEXT_MARKER)));
+                if !access_question {
+                    review_due = reviews.due(
+                        &facts,
+                        progress.stalled_turns >= 3 || progress.needs_search_replan(),
+                    );
+                }
+                messages.retain(|message| !matches!(message, AgentModelMessage::User(text) if text.starts_with(crate::agent_work_review::MARKER)));
                 let coalesced =
                     crate::agent_work_state::coalesce_observation_exchanges(&mut messages);
                 if coalesced > 0 {
@@ -5424,9 +5458,13 @@ impl AgentCoordinator {
                         fail_run(&self.storage, &self.sender, run_id, "AGENT_WORK_STATE_PERSIST_FAILED");
                         return;
                 }
-                if let Some(context) =
-                    crate::agent_work_plan::context(&facts, wrote_workspace, verification_passed)
-                {
+                if let Some(context) = crate::agent_work_plan::current_context(
+                    &facts,
+                    &prepared.project_root,
+                    &self.artifact_root,
+                    wrote_workspace,
+                    verification_passed,
+                ) {
                     messages.push(AgentModelMessage::User(context));
                 }
                 if prepared.run.current_step > 0 {
@@ -5455,7 +5493,10 @@ impl AgentCoordinator {
                 {
                     messages.push(AgentModelMessage::User(instruction.into()));
                 }
-                if let Some(context) = progress.diagnostic_context(&facts, &prepared.run.task) {
+                if let Some(context) = progress
+                    .diagnostic_context(&facts, &prepared.run.task)
+                    .filter(|_| review_due.is_some())
+                {
                     messages.push(AgentModelMessage::User(context));
                     let _ = append_event(
                         &self.storage,
@@ -5466,6 +5507,18 @@ impl AgentCoordinator {
                         AgentProjectionUpdate::default(),
                     );
                 }
+                if let Some(context) = reviews.context() {
+                    messages.push(AgentModelMessage::User(context));
+                }
+                if !access_question {
+                    messages.push(AgentModelMessage::User(reviews.live_context(&facts)));
+                }
+                if let Some(reason) = review_due {
+                    messages.push(AgentModelMessage::User(
+                        crate::agent_work_review::Reviews::request(reason),
+                    ));
+                }
+                review_facts = facts;
                 if effective_max_steps.saturating_sub(step) == 4 {
                     messages.push(AgentModelMessage::User("Five model turns remain in this allowance, including this turn. Reserve time for error recovery and verification. Continue the most useful bounded action; if the goal remains unresolved, preserve the next step and exact blocker. Budget exhaustion does not authorize a completion claim.".into()));
                 }
@@ -5487,7 +5540,9 @@ impl AgentCoordinator {
                 cancel_run(&self.storage, &self.sender, run_id);
                 return;
             }
-            let phase = if wrote_workspace && !verification_passed {
+            let phase = if review_due.is_some() {
+                "REVIEW"
+            } else if wrote_workspace && !verification_passed {
                 "VERIFY"
             } else if verification_passed {
                 "FINALIZE"
@@ -5517,6 +5572,11 @@ impl AgentCoordinator {
                     .any(|tool| tool.name == IDR_PRIMARY_SEMANTIC_PROJECTION_TOOL)
             {
                 tools.push(idr_primary_semantic_projection_tool());
+            }
+            if review_due.is_some() {
+                tools = vec![crate::agent_work_review::definition()];
+            } else if task_class == AgentTaskClass::General && !access_question {
+                tools.push(crate::agent_work_review::definition());
             }
             if append_event(
                 &self.storage,
@@ -5562,12 +5622,18 @@ impl AgentCoordinator {
                         active_work_surface.as_ref(),
                     ),
                 ),
-                messages: messages.clone(),
+                messages: if review_due.is_some() {
+                    crate::agent_work_review::focused_messages(&messages, &turn_context.history)
+                } else {
+                    messages.clone()
+                },
                 tools: tools.clone(),
                 max_output_tokens: DEFAULT_MAX_OUTPUT_TOKENS,
             };
             request.system.push_str("\n\n");
             request.system.push_str(crate::agent_task_outcome::GUIDANCE);
+            request.system.push('\n');
+            request.system.push_str(crate::agent_work_review::GUIDANCE);
             let mut prompt_shape = prompt_shape(&request);
             prompt_shape["context"] = turn_context.manifest(&prepared.run);
             prompt_shape["user_input"] = reply_manifest;
@@ -5588,15 +5654,52 @@ impl AgentCoordinator {
                         &self.sender,
                         run_id.clone(),
                         AgentEventKind::ModelFailed,
-                        json!({"step":step,"error_code":code,"http_status":error.http_status(),"duration_ms":model_started.elapsed().as_millis(),"prompt":prompt_shape}),
+                        json!({"step":step,"error_code":code,"http_status":error.http_status(),"response_diagnostics":error.response_diagnostics(),"duration_ms":model_started.elapsed().as_millis(),"prompt":prompt_shape}),
                         AgentProjectionUpdate::default(),
                     );
                     // A successful verification may cover only part of a general task.
+                    // A malformed review cannot create another blocking task phase.
+                    // Transport/auth/cancellation errors keep their normal handling.
+                    if let Some(reason) = review_due
+                        && matches!(
+                            error,
+                            ModelError::ProviderProtocolError
+                                | ModelError::Response {
+                                    failure: fielora_model::ResponseFailure::InvalidToolCall,
+                                    ..
+                                }
+                        )
+                    {
+                        let checkpoint = reviews.rejected_response(&review_facts, reason);
+                        if append_event(
+                            &self.storage,
+                            &self.sender,
+                            run_id.clone(),
+                            AgentEventKind::CheckpointCreated,
+                            checkpoint,
+                            AgentProjectionUpdate::default(),
+                        )
+                        .is_err()
+                        {
+                            fail_run(
+                                &self.storage,
+                                &self.sender,
+                                run_id,
+                                "AGENT_WORK_STATE_PERSIST_FAILED",
+                            );
+                            return;
+                        }
+                        continue;
+                    }
                     // Retain those receipts on model failure; never infer whole-task
                     // completion without an accepted explicit outcome.
                     if task_class != AgentTaskClass::FastEdit
                         && (retryable_model_error(&error, false)
-                            || matches!(error, ModelError::ProviderRequestInvalid { .. }))
+                            || matches!(
+                                error,
+                                ModelError::ProviderRequestInvalid { .. }
+                                    | ModelError::Response { .. }
+                            ))
                     {
                         // No tool from the incomplete model turn has executed. Keep
                         // the accepted exchanges, receipts and original Run for resume.
@@ -5647,6 +5750,42 @@ impl AgentCoordinator {
             ).is_err() {
                 fail_run(&self.storage, &self.sender, run_id, "AGENT_MODEL_EVENT_PERSIST_FAILED");
                 return;
+            }
+            if let Some(reason) = review_due.or_else(|| {
+                (task_class == AgentTaskClass::General
+                    && !access_question
+                    && turn
+                        .tool_calls
+                        .iter()
+                        .any(|t| t.name == crate::agent_work_review::TOOL))
+                .then_some("MODEL_IDENTIFIED_CORRECTION")
+            }) {
+                let checkpoint = reviews.record(&turn, &review_facts, reason);
+                if append_event(
+                    &self.storage,
+                    &self.sender,
+                    run_id.clone(),
+                    AgentEventKind::CheckpointCreated,
+                    checkpoint,
+                    AgentProjectionUpdate::default(),
+                )
+                .is_err()
+                {
+                    fail_run(
+                        &self.storage,
+                        &self.sender,
+                        run_id,
+                        "AGENT_WORK_STATE_PERSIST_FAILED",
+                    );
+                    return;
+                }
+                // Review proposals never enter the executable tool dispatcher, even
+                // when a model ignores the restricted catalog and proposes a write.
+                if reviews.rejection_loop() {
+                    self.pause_general_work(&run_id, "AGENT_REPEATED_ACTIONS");
+                    return;
+                }
+                continue;
             }
             if persist_tool_turn_narrative(
                 &self.storage,
@@ -7403,7 +7542,7 @@ impl AgentCoordinator {
                     &self.sender,
                     prepared.run.id.clone(),
                     AgentEventKind::ModelFailed,
-                    json!({"step":step,"phase":phase,"error_code":error.code(),"duration_ms":started.elapsed().as_millis(),"prompt":shape,"pipeline":FAST_EDIT_PIPELINE_VERSION}),
+                    json!({"step":step,"phase":phase,"error_code":error.code(),"http_status":error.http_status(),"response_diagnostics":error.response_diagnostics(),"duration_ms":started.elapsed().as_millis(),"prompt":shape,"pipeline":FAST_EDIT_PIPELINE_VERSION}),
                     AgentProjectionUpdate::default(),
                 );
                 Err(error)
@@ -8473,9 +8612,78 @@ impl AgentCoordinator {
             &prepared.run,
             &prepared.endpoint,
         )?;
+        let repair_fixture = std::env::var("FIELORA_E2E").as_deref() == Ok("1")
+            && matches!(
+                prepared.run.model_id.as_str(),
+                "__fielora_agent_fixture_tool_repair__"
+                    | "__fielora_agent_fixture_tool_repair_rejected__"
+            );
         if std::env::var("FIELORA_E2E").as_deref() == Ok("1")
             && prepared.run.model_id.starts_with("__fielora_agent_fixture")
+            && !repair_fixture
         {
+            if prepared.run.model_id == "__fielora_agent_fixture_acceptance__" {
+                let facts = self
+                    .storage
+                    .list_agent_tool_calls(prepared.run.id.clone())
+                    .map_err(|_| ModelError::ProviderUnavailable)?;
+                return Ok(invoked_fixture_turn(
+                    crate::agent_work_plan::acceptance_fixture(
+                        &request,
+                        &facts,
+                        prepared.run.current_step > 0,
+                    )?,
+                    invocation_started,
+                ));
+            }
+            if matches!(
+                prepared.run.model_id.as_str(),
+                "__fielora_agent_fixture_review__"
+                    | "__fielora_agent_fixture_review_invalid__"
+                    | "__fielora_agent_fixture_review_live__"
+            ) {
+                let facts = self
+                    .storage
+                    .list_agent_tool_calls(prepared.run.id.clone())
+                    .map_err(|_| ModelError::ProviderUnavailable)?;
+                let turn = crate::agent_work_review::fixture_turn(
+                    &request,
+                    &facts,
+                    prepared.run.current_step > 0,
+                    prepared.run.model_id == "__fielora_agent_fixture_review_invalid__",
+                )?;
+                return Ok(invoked_fixture_turn(turn, invocation_started));
+            }
+            if prepared.run.model_id == "__fielora_agent_fixture_command_permissions__" {
+                let tools = self
+                    .storage
+                    .list_agent_tool_calls(prepared.run.id.clone())
+                    .map_err(|_| ModelError::ProviderUnavailable)?;
+                return Ok(invoked_fixture_turn(
+                    crate::agent_command_policy_fixture::turn(
+                        &prepared.run.task,
+                        &prepared.project_root,
+                        &tools,
+                    ),
+                    invocation_started,
+                ));
+            }
+            // Exercise the same failure persistence/pause/UI path with no
+            // network or tools. Wire parsing is tested in fielora-model.
+            if prepared.run.model_id == "__fielora_agent_fixture_output_limit__" {
+                return Err(ModelError::Response {
+                    failure: fielora_model::ResponseFailure::OutputLimit,
+                    diagnostics: fielora_model::ResponseDiagnostics {
+                        http_status: Some(200),
+                        event_count: 3,
+                        finish_reason: Some(fielora_model::FinishReason::OutputLimit),
+                        tool_call_count: 1,
+                        tool_argument_bytes: 12,
+                        output_tokens: Some(model_settings.max_output_tokens.into()),
+                        ..Default::default()
+                    },
+                });
+            }
             if prepared.run.model_id == "__fielora_agent_fixture_images__"
                 && !prepared.run.task.contains("FIELORA_AGENT_FIXTURE_")
             {
@@ -10116,29 +10324,48 @@ impl AgentCoordinator {
             let sender_for_callback = self.sender.clone();
             let run_id_for_callback = prepared.run.id.clone();
             let client = ModelClient::new()?.with_settings(model_settings.clone());
-            match client
-                .invoke_agent_turn(
-                    prepared.endpoint.clone(),
-                    request.clone(),
-                    prepared.secret.expose(),
-                    cancellation.clone(),
-                    move |delta| {
-                        emit_text_delta(&sender_for_callback, &run_id_for_callback, step, delta);
-                        emitted_delta_for_callback.store(true, Ordering::Relaxed);
-                        let elapsed = invocation_started
-                            .elapsed()
-                            .as_millis()
-                            .min(u64::MAX as u128) as u64;
-                        let _ = first_token_for_callback.compare_exchange(
-                            0,
-                            elapsed.saturating_add(1),
-                            Ordering::Relaxed,
-                            Ordering::Relaxed,
-                        );
-                    },
+            let model_result = if repair_fixture {
+                let facts = self
+                    .storage
+                    .list_agent_tool_calls(prepared.run.id.clone())
+                    .map_err(|_| ModelError::ProviderUnavailable)?;
+                crate::agent_model_repair::fixture_turn(
+                    &request,
+                    &prepared.run.task,
+                    &facts,
+                    prepared.run.model_id.ends_with("_rejected__"),
                 )
-                .await
-            {
+            } else {
+                client
+                    .invoke_agent_turn(
+                        prepared.endpoint.clone(),
+                        request.clone(),
+                        prepared.secret.expose(),
+                        cancellation.clone(),
+                        move |delta| {
+                            emit_text_delta(
+                                &sender_for_callback,
+                                &run_id_for_callback,
+                                step,
+                                delta,
+                            );
+                            emitted_delta_for_callback.store(true, Ordering::Relaxed);
+                            let elapsed = invocation_started
+                                .elapsed()
+                                .as_millis()
+                                .min(u64::MAX as u128)
+                                as u64;
+                            let _ = first_token_for_callback.compare_exchange(
+                                0,
+                                elapsed.saturating_add(1),
+                                Ordering::Relaxed,
+                                Ordering::Relaxed,
+                            );
+                        },
+                    )
+                    .await
+            };
+            match model_result {
                 Ok(turn) => {
                     return Ok(InvokedModelTurn {
                         turn,
@@ -10224,9 +10451,11 @@ impl AgentCoordinator {
                         }
                         request = compacted;
                     }
+                    let tool_validation_feedback =
+                        crate::agent_model_repair::apply(&mut request, &error);
                     append_event(&self.storage, &self.sender, prepared.run.id.clone(),
                         AgentEventKind::CheckpointCreated,
-                        json!({"kind":"MODEL_RETRY","attempt":attempt + 1,"error_code":error.code(),"http_status":error.http_status(),"previous_prompt":before,"retry_prompt":prompt_shape(&request)}),
+                        json!({"kind":"MODEL_RETRY","attempt":attempt + 1,"error_code":error.code(),"http_status":error.http_status(),"response_diagnostics":error.response_diagnostics(),"previous_prompt":before,"retry_prompt":prompt_shape(&request),"tool_validation_feedback":tool_validation_feedback}),
                         AgentProjectionUpdate::default()).map_err(|_| ModelError::ProviderUnavailable)?;
                     last_error = Some(error);
                     tokio::select! {
@@ -10431,6 +10660,19 @@ impl AgentCoordinator {
     ) -> Result<AgentToolCallView, DomainError> {
         let normalized_patch_hash =
             fielora_agent::normalize_single_patch_hash(&proposed.name, &mut proposed.arguments);
+        let command_policy = if proposed.name == "run_command" {
+            if let Some(args) = proposed.arguments.as_object_mut() {
+                args.remove(fielora_agent::command_policy::METADATA);
+            }
+            let project = self.storage.get_project(run.field_id.clone())?;
+            Some(fielora_agent::command_policy::preview(
+                Path::new(&project.root_path),
+                run.permission,
+                &proposed.arguments,
+            ))
+        } else {
+            None
+        };
         if proposed.name == "mcp.activate_connection" {
             self.ensure_mcp_snapshot(&run.id);
             let digest = self
@@ -10489,9 +10731,18 @@ impl AgentCoordinator {
                 }
                 Some(_) => AgentPolicyDecision::Ask,
             }
+        } else if let Some(facts) = command_policy.as_ref() {
+            if facts["automatic_project_install"] == true || facts["reason"] == "PRESET_ALLOWED" {
+                AgentPolicyDecision::Allow
+            } else {
+                AgentPolicyDecision::Ask
+            }
         } else {
             PolicyEngine.decide(run.permission, spec, &proposed.arguments)
         };
+        if let (Some(facts), Some(args)) = (command_policy, proposed.arguments.as_object_mut()) {
+            args.insert(fielora_agent::command_policy::METADATA.into(), facts);
+        }
         let tool = self.storage.create_agent_tool_call(
             run.id.clone(),
             proposed.name,
@@ -10579,6 +10830,49 @@ impl AgentCoordinator {
             });
         };
         let execution_source = spec.source.clone();
+        let mut command_arguments = tool.arguments.clone();
+        let mut project_install_sandbox = false;
+        if tool.name == "run_command" {
+            if let Some(args) = command_arguments.as_object_mut() {
+                args.remove(fielora_agent::command_policy::METADATA);
+            }
+            let current_policy = fielora_agent::command_policy::preview(
+                &prepared.project_root,
+                prepared.run.permission,
+                &command_arguments,
+            );
+            // Keep the required boundary fixed for this dispatch. If filesystem
+            // facts change later, ToolRuntime rejects the install; it must never
+            // turn a once-sandboxed install into an ordinary FullControl command.
+            project_install_sandbox =
+                !approved_once && current_policy["automatic_project_install"] == true;
+            if !approved_once
+                && tool.policy_decision == AgentPolicyDecision::Allow
+                && !project_install_sandbox
+                && current_policy["reason"] != "PRESET_ALLOWED"
+            {
+                let code = "AGENT_COMMAND_POLICY_CHANGED";
+                let _ = self.storage.update_agent_tool_call(
+                    tool.id.clone(),
+                    AgentToolStatus::Failed,
+                    None,
+                    Some(code.into()),
+                    now_ms(),
+                );
+                let _ = append_event(
+                    &self.storage,
+                    &self.sender,
+                    tool.run_id.clone(),
+                    AgentEventKind::ToolFailed,
+                    json!({"tool_call_id":tool.id,"name":tool.name,"error_code":code,"execution_source":execution_source.receipt_envelope()}),
+                    AgentProjectionUpdate::default(),
+                );
+                return ToolDisposition::Executed(ExecutedTool {
+                    message: AgentModelMessage::ToolResult { call_id:tool.id.0, name:tool.name, content:"Command permission facts changed before launch. No process was started. Inspect the current project environment and propose a new command through the normal approval path.".into(), is_error:true },
+                    wrote_workspace:false, verification_passed:false,
+                });
+            }
+        }
         if tool.policy_decision == AgentPolicyDecision::Deny {
             let receipt =
                 terminal_execution_source_receipt("TOOL_EXECUTION_DENIED", &execution_source);
@@ -10665,7 +10959,11 @@ impl AgentCoordinator {
         let artifact_root = self.artifact_root.clone();
         let content_blob_root = self.content_blob_root.clone();
         let name = tool.name.clone();
-        let arguments = tool.arguments.clone();
+        let arguments = if tool.name == "run_command" {
+            command_arguments
+        } else {
+            tool.arguments.clone()
+        };
         let command_cancellation = cancellation.command.clone();
         let providers = self.providers_for_run(&tool.run_id);
         let credentials = Arc::clone(&self.credentials);
@@ -10701,6 +10999,16 @@ impl AgentCoordinator {
             .flatten();
         let tool_started = Instant::now();
         let scoped_tools = self.storage.list_agent_tool_calls(tool.run_id.clone());
+        let work_plan_revision = (name == "work_plan")
+            .then(|| {
+                workspace_revision_for_run(
+                    &self.storage,
+                    &tool.run_id,
+                    &prepared.project_root,
+                    &self.artifact_root,
+                )
+            })
+            .flatten();
         let acquisition_fixture = std::env::var("FIELORA_E2E").as_deref() == Ok("1")
             && prepared.run.model_id == "__fielora_agent_fixture_outcomes__"
             && prepared.run.task == "完整 Skill 获取安装回归";
@@ -10751,17 +11059,19 @@ impl AgentCoordinator {
             tokio::task::spawn_blocking(move || {
                 let mut runtime =
                     ToolRuntime::with_skill_catalog(&root, &artifact_root, skill_catalog)?
-                        .with_reference_task(&reference_task);
+                        .with_reference_task(&reference_task)
+                        .with_project_install_sandbox(project_install_sandbox);
                 if let Some(content_blob_root) = content_blob_root {
                     runtime = runtime.with_content_blob_root(content_blob_root);
                 }
                 let scoped_tools = scoped_tools.map_err(|_| AgentError::IoFailed)?;
                 if name == "work_plan" {
-                    return crate::agent_work_plan::execute(
+                    return crate::agent_work_plan::execute_checked(
                         &runtime,
                         &arguments,
                         &scoped_tools,
                         &command_cancellation,
+                        work_plan_revision.as_deref(),
                     );
                 }
                 crate::agent_work_plan::guard(&runtime, &name, &arguments, &scoped_tools, ui_task)?;
@@ -12184,6 +12494,9 @@ fn task_requests_action(task: &str) -> bool {
 }
 
 fn retryable_model_error(error: &ModelError, _emitted_delta: bool) -> bool {
+    if let ModelError::Response { failure, .. } = error {
+        return failure.retryable();
+    }
     matches!(
         error,
         ModelError::ProviderUnavailable
@@ -12284,10 +12597,10 @@ fn agent_system_prompt(
             "Request approval: observing is automatic; file changes, commands, network access, destructive actions, and Git writes require user approval."
         }
         AgentPermission::ReviewChanges => {
-            "Help me approve: normal project edits and safe verification commands run automatically; risky commands, network access, destructive actions, and Git writes require user approval."
+            "Help me approve: normal project edits and verification commands run automatically when the host has an OS command sandbox. Automatic commands may read runtime files but may write only the project/private temporary directory and cannot access the network. Risky commands, installations, network actions, destructive actions, and Git writes require user approval. A sandbox failure is not authorization to bypass it."
         }
         AgentPermission::FullControl => {
-            "Full access: project edits, commands, network actions, destructive actions, and typed Git operations may run automatically. Stay within the user's task and keep every action receipt-backed."
+            "Full access: project edits, commands, network actions, destructive actions, and typed Git operations may run automatically with current-user host access. For Python project dependencies, first create a project-local virtual environment with a compatible interpreter, then use its absolute bin/python (Windows Scripts/python.exe) with -m pip install -r and a project requirements file. Never default to installing through system Python. Direct npm/pnpm/yarn manifest installs and recognized project-venv pip installs can run automatically only with the host OS write sandbox. Global/system/unknown installations and system font publication still require approval. Do not bypass a denied installation by changing command channels. Stay within the user's task and keep every action receipt-backed."
         }
     };
     let bounded_edit = if task_class == AgentTaskClass::FastEdit {
@@ -13717,6 +14030,54 @@ mod tests {
     struct CoreCredentialStore {
         values: Mutex<HashMap<String, Vec<u8>>>,
         reads: Mutex<Vec<String>>,
+    }
+
+    #[tokio::test]
+    async fn ordinary_agent_credential_preflight_reuses_persisted_database_key() {
+        use fielora_storage::credentials::LocalCredentialStore;
+        let paths = fielora_platform::PlatformPaths::from_root(
+            std::env::temp_dir().join(format!("fielora-agent-local-key-{}", Uuid::now_v7())),
+        )
+        .unwrap();
+        let device =
+            fielora_platform::DeviceIdentity::load_or_create(&paths.device_identity).unwrap();
+        let worker =
+            fielora_storage::StorageWorker::start(&paths.database, device.clone(), 1).unwrap();
+        let legacy = Arc::new(CoreCredentialStore::default());
+        let store = LocalCredentialStore::new(worker.handle(), legacy.clone());
+        store
+            .store(
+                "provider",
+                SecretBytes::new(b"synthetic-agent-key".to_vec()),
+            )
+            .unwrap();
+        drop(store);
+        worker.shutdown();
+        let worker = fielora_storage::StorageWorker::start(&paths.database, device, 2).unwrap();
+        let store = Arc::new(LocalCredentialStore::new(worker.handle(), legacy.clone()));
+        let (sender, _receiver) = mpsc::sync_channel(256);
+        let coordinator = AgentCoordinator::new(
+            worker.handle(),
+            store.clone(),
+            sender,
+            paths.data_dir.join("artifacts"),
+            Handle::current(),
+        );
+        // A normal model ID deliberately does not enter the E2E fixture bypass.
+        assert_eq!(
+            coordinator
+                .read_secret("provider", "qwen3.7-plus")
+                .unwrap()
+                .expose(),
+            b"synthetic-agent-key"
+        );
+        store.delete("provider").unwrap();
+        assert!(coordinator.read_secret("provider", "qwen3.7-plus").is_err());
+        assert!(legacy.reads.lock().unwrap().is_empty());
+        drop(coordinator);
+        drop(store);
+        worker.shutdown();
+        std::fs::remove_dir_all(paths.base_dir).unwrap();
     }
 
     impl CredentialStore for CoreCredentialStore {
@@ -20267,6 +20628,26 @@ mod tests {
         assert_eq!(compact.messages, request.messages);
         assert_eq!(compact.tools, request.tools);
         assert_eq!(compact.max_output_tokens, request.max_output_tokens);
+    }
+
+    #[test]
+    fn response_limits_pause_without_automatic_budget_changes_or_retry() {
+        for failure in [
+            fielora_model::ResponseFailure::OutputLimit,
+            fielora_model::ResponseFailure::ContentFiltered,
+        ] {
+            let error = ModelError::Response {
+                failure,
+                diagnostics: Default::default(),
+            };
+            assert!(!retryable_model_error(&error, false));
+            assert!(!retryable_model_error(&error, true));
+        }
+        let error = ModelError::Response {
+            failure: fielora_model::ResponseFailure::InvalidToolCall,
+            diagnostics: Default::default(),
+        };
+        assert!(retryable_model_error(&error, false));
     }
 
     #[test]

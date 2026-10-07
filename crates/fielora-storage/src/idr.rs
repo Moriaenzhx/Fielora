@@ -2819,7 +2819,7 @@ mod tests {
         let root = temporary_root();
         let worker = start(&root, 1);
         let handle = worker.handle();
-        assert_eq!(schema_version(), 18);
+        assert_eq!(schema_version(), 19);
         assert_eq!(handle.get_human_model_revision().unwrap(), 0);
         assert!(
             handle

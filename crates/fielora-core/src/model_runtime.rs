@@ -1,6 +1,33 @@
 //! Harness configuration projection and bounded, user-triggered compatibility checks.
 use super::*;
 
+pub fn prepare_send(
+    runtime: &Runtime,
+    params: PrepareProviderSendRequest,
+) -> Result<(), DomainError> {
+    let record = runtime
+        .storage
+        .get_provider_config(params.provider_config_id)?;
+    if record.view.lifecycle_status != ProviderLifecycle::Active {
+        return Err(DomainError::Validation("PROVIDER_DISABLED".into()));
+    }
+    let model = params
+        .model_id
+        .as_deref()
+        .unwrap_or(&record.view.default_model);
+    validate_text("model_id", model, 256)?;
+    fielora_model::validate_provider_model(record.view.provider_kind, model)
+        .map_err(|error| DomainError::Validation(error.code().into()))?;
+    view(&runtime.storage, &record.view, model)?;
+    // Existence metadata is insufficient: legacy entries may require interaction.
+    // The same store used by start/resume performs only non-interactive migration.
+    let _secret = runtime
+        .credentials
+        .read(&record.credential_ref)
+        .map_err(|error| DomainError::Validation(error.user_code().into()))?;
+    Ok(())
+}
+
 pub fn endpoint(provider: &ProviderConfigView) -> ProviderEndpoint {
     ProviderEndpoint {
         model_optimization: provider.model_optimization,
@@ -47,7 +74,7 @@ pub fn start_validation(
     let secret = runtime
         .credentials
         .read(&record.credential_ref)
-        .map_err(|_| DomainError::Validation("CREDENTIAL_MISSING".into()))?;
+        .map_err(|error| DomainError::Validation(error.user_code().into()))?;
     let id = ModelInvocationId::new(Uuid::now_v7().to_string());
     let cancellation = CancellationToken::new();
     let validation_key = format!("compatibility:{}", record.view.id.0);
@@ -154,7 +181,7 @@ pub fn start_validation(
     })
 }
 
-/// Snapshot once in the existing Harness event ledger; resume keeps the same policy.
+/// Pin settings within an execution segment; explicit resume adopts saved settings.
 pub fn settings_for_run(
     storage: &StorageHandle,
     sender: &SyncSender<Value>,
@@ -166,6 +193,7 @@ pub fn settings_for_run(
         Sha256::digest(fielora_model::endpoint_identity(endpoint).as_bytes())
     );
     let mut cursor = 0;
+    let mut snapshot = RuntimeSnapshot::default();
     loop {
         let events = storage
             .list_agent_events(ListAgentEventsRequest {
@@ -175,22 +203,15 @@ pub fn settings_for_run(
             })
             .map_err(|_| ModelError::ProviderUnavailable)?;
         for event in &events {
-            if event.kind == AgentEventKind::CheckpointCreated
-                && event.payload["kind"] == "MODEL_RUNTIME_SETTINGS_V1"
-            {
-                if event.payload["endpoint_fingerprint"] != endpoint_fingerprint
-                    || event.payload["model_id"] != run.model_id
-                {
-                    return Err(ModelError::ConfigurationUnsupported);
-                }
-                return serde_json::from_value(event.payload["settings"].clone())
-                    .map_err(|_| ModelError::ConfigurationUnsupported);
-            }
+            snapshot.observe(event.kind, event.sequence, &event.payload);
         }
         if events.len() < 500 {
             break;
         }
         cursor = events.last().unwrap().sequence;
+    }
+    if let Some(settings) = snapshot.settings(&endpoint_fingerprint, &run.model_id)? {
+        return Ok(settings);
     }
     let provider = storage
         .get_provider_config(run.provider_config_id.clone())
@@ -203,7 +224,7 @@ pub fn settings_for_run(
     let view = view(storage, &provider.view, &run.model_id)
         .map_err(|_| ModelError::ConfigurationUnsupported)?;
     // The values below are an allowlist of non-secret parameters, never a raw request.
-    let payload = json!({"kind":"MODEL_RUNTIME_SETTINGS_V1","model_id":run.model_id,"endpoint_fingerprint":endpoint_fingerprint,"profile_id":view.profile.profile_id,"settings":view.settings,"effective_parameters":view.effective_parameters,"settings_revision":view.revision,"provider_revision":provider.view.revision});
+    let payload = json!({"kind":"MODEL_RUNTIME_SETTINGS_V1","model_id":run.model_id,"endpoint_fingerprint":endpoint_fingerprint,"profile_id":view.profile.profile_id,"settings":view.settings,"effective_parameters":view.effective_parameters,"settings_revision":view.revision,"provider_revision":provider.view.revision,"resume_sequence":snapshot.resume_sequence});
     crate::agent_runtime::append_event(
         storage,
         sender,
@@ -214,6 +235,46 @@ pub fn settings_for_run(
     )
     .map_err(|_| ModelError::ProviderUnavailable)?;
     Ok(view.settings)
+}
+
+#[derive(Default)]
+struct RuntimeSnapshot {
+    resume_sequence: u64,
+    latest: Option<(u64, Value)>,
+}
+impl RuntimeSnapshot {
+    fn observe(&mut self, kind: AgentEventKind, sequence: u64, payload: &Value) {
+        if kind == AgentEventKind::RunResumed
+            && payload["reason"] == "USER_RESUME"
+            && payload["restored_state"] != "WAITING_APPROVAL"
+        {
+            self.resume_sequence = sequence;
+        }
+        if kind == AgentEventKind::CheckpointCreated
+            && payload["kind"] == "MODEL_RUNTIME_SETTINGS_V1"
+        {
+            self.latest = Some((sequence, payload.clone()));
+        }
+    }
+    fn settings(
+        &self,
+        endpoint: &str,
+        model: &str,
+    ) -> Result<Option<ModelRuntimeSettings>, ModelError> {
+        let Some((sequence, payload)) = &self.latest else {
+            return Ok(None);
+        };
+        // Resume may change reasoning, never silently change the connection identity.
+        if payload["endpoint_fingerprint"] != endpoint || payload["model_id"] != model {
+            return Err(ModelError::ConfigurationUnsupported);
+        }
+        if *sequence < self.resume_sequence {
+            return Ok(None);
+        }
+        serde_json::from_value(payload["settings"].clone())
+            .map(Some)
+            .map_err(|_| ModelError::ConfigurationUnsupported)
+    }
 }
 
 async fn validate(
@@ -235,4 +296,57 @@ async fn validate(
             &format!("FIELORA_{}", Uuid::now_v7().simple()),
         )
         .await
+}
+
+#[cfg(test)]
+mod resume_settings_tests {
+    use super::*;
+    fn pinned(reasoning: &str) -> Value {
+        json!({"kind":"MODEL_RUNTIME_SETTINGS_V1","endpoint_fingerprint":"ep","model_id":"model",
+            "settings":{"reasoning":reasoning,"max_output_tokens":4096}})
+    }
+    #[test]
+    fn only_explicit_resume_refreshes_saved_settings_and_latest_snapshot_wins() {
+        let mut s = RuntimeSnapshot::default();
+        s.observe(AgentEventKind::CheckpointCreated, 1, &pinned("OFF"));
+        assert_eq!(
+            s.settings("ep", "model").unwrap().unwrap().reasoning,
+            ReasoningMode::Off
+        );
+        s.observe(
+            AgentEventKind::RunResumed,
+            2,
+            &json!({"reason":"APPROVAL_RESOLVED"}),
+        );
+        assert!(s.settings("ep", "model").unwrap().is_some());
+        s.observe(
+            AgentEventKind::RunResumed,
+            3,
+            &json!({"reason":"USER_RESUME","restored_state":"WAITING_APPROVAL"}),
+        );
+        assert!(s.settings("ep", "model").unwrap().is_some());
+        s.observe(
+            AgentEventKind::RunResumed,
+            4,
+            &json!({"reason":"USER_RESUME"}),
+        );
+        assert!(s.settings("ep", "model").unwrap().is_none());
+        s.observe(AgentEventKind::CheckpointCreated, 5, &pinned("ON"));
+        assert_eq!(
+            s.settings("ep", "model").unwrap().unwrap().reasoning,
+            ReasoningMode::On
+        );
+    }
+    #[test]
+    fn resume_does_not_allow_connection_identity_drift() {
+        let mut s = RuntimeSnapshot::default();
+        s.observe(AgentEventKind::CheckpointCreated, 1, &pinned("OFF"));
+        s.observe(
+            AgentEventKind::RunResumed,
+            2,
+            &json!({"reason":"USER_RESUME"}),
+        );
+        assert!(s.settings("other", "model").is_err());
+        assert!(s.settings("ep", "other").is_err());
+    }
 }

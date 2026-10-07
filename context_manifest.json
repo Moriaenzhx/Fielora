@@ -31,8 +31,8 @@
       "bytes": 2973
     },
     "README.md": {
-      "sha256": "c7fdd5acab42c181067dd30e27c74f8e82481a314ac62fdc6bd2ca38382bcd4d",
-      "bytes": 14533
+      "sha256": "ee41a5cd28141ae35425faa844ea88b49abe3bd67990a534589afd7f0f2fe11e",
+      "bytes": 16454
     },
     "AGENTS.md": {
       "sha256": "671767e52f880a99ff7f76548907fce0c4860118b0af1135d6c1d102c5a753fd",
@@ -47,12 +47,12 @@
       "bytes": 12955
     },
     "docs/context/02_PROJECT_REALITY.md": {
-      "sha256": "524db6878d99849eb79b3db53e29b94773fd8fbdecd961738cf51e6db228f05a",
-      "bytes": 328721
+      "sha256": "ccd39011ebaeea96589a17a99fb33080c30a7624241443986030b164ce4c4d50",
+      "bytes": 343361
     },
     "docs/context/03_DECISIONS.md": {
-      "sha256": "4f733ce15ad174b9c744b745771368490bdc70653d36b34caeb36789e5fd57b4",
-      "bytes": 160860
+      "sha256": "4af1b9eea9926e1b002a756e04be44418256d9c8364d68f7f6d72326367c29ee",
+      "bytes": 168294
     },
     "docs/context/04_REJECTED_DEFERRED.md": {
       "sha256": "0b4f9bd00ad5b9a198e4f3a6523503aaacbf8b5630aaa5d029577ee08abbc160",
@@ -75,12 +75,12 @@
       "bytes": 12918
     },
     "docs/architecture/TECHNICAL_BASELINE_V0.1.md": {
-      "sha256": "0e3edcbfa24e6fe9e0c810dc33f269e5e0488eff3b648e318077571aa4fdf6bb",
-      "bytes": 16316
+      "sha256": "ff509329bb8d6fa728a60803ead5beb5507a9af5af849eefcea14cfe2a22622e",
+      "bytes": 18107
     },
     "docs/architecture/FIELORA_V0.1_AGENT_ARCHITECTURE_SPEC.md": {
-      "sha256": "0f041657cf7b7707927ed820e5ad64f3f34bb5c50c05c8c0ea23ae3d47cfb822",
-      "bytes": 121329
+      "sha256": "9c4bb8bc2a30ad985916c43e02bc7856fc4e74d9cf9ffd3b45aca1e3537974ae",
+      "bytes": 135612
     },
     "docs/architecture/FIELORA_IDR_V2_DESIGN_CANDIDATE.md": {
       "sha256": "5c390ed9f03013de0d8e277089d6900f7163f26b26fc73943a93e97054dad0a6",
@@ -375,12 +375,12 @@
       "bytes": 3980
     },
     "docs/product/RAPID_DESKTOP_EXECUTION_V0.1.md": {
-      "sha256": "54f14733a05587fb2019671c2e562bb1cd930091584bb70bbe2e490aeb536ee0",
-      "bytes": 5318
+      "sha256": "da24da2d6f31407b2cd6907550971e278f1fa5b17d7072ee08c833f13ab58e90",
+      "bytes": 5433
     },
     "docs/engineering/AGENT_DESIGN_IMPLEMENTATION_LESSONS.md": {
-      "sha256": "88f9b3265a428da34955725aee1e9c6fd08ecbf6444ccd08e8b40f7edf880f0a",
-      "bytes": 127559
+      "sha256": "8b17b064445cc96a5137eb31427e001cf2ff56824b5d5e9938e3588bfef08f51",
+      "bytes": 196891
     },
     "LICENSE": {
       "sha256": "cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30",
