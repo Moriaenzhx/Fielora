@@ -1,0 +1,33 @@
+name: Assemble verified macOS preview
+
+on:
+  push:
+    branches: [phase/complete-agent-v0.1]
+    paths:
+      - .github/workflows/assemble-macos-preview.yml
+      - scripts/assemble-macos-preview.mjs
+
+# This upload fallback only reassembles already-tested binaries. It does not
+# execute downloaded content, build the app, or publish the draft release.
+permissions:
+  contents: write
+
+concurrency:
+  group: assemble-macos-preview-20261007
+  cancel-in-progress: false
+
+jobs:
+  assemble:
+    if: contains(github.event.head_commit.message, '[assemble-macos-preview]')
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Read assembler from the exact triggering commit
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh api "repos/$GITHUB_REPOSITORY/contents/scripts/assemble-macos-preview.mjs?ref=$GITHUB_SHA" --jq .content | base64 --decode > "$RUNNER_TEMP/assemble-macos-preview.mjs"
+      - name: Reassemble, verify, upload and remove temporary parts
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: node "$RUNNER_TEMP/assemble-macos-preview.mjs"
