@@ -4,7 +4,7 @@
 
 <p align="center"><strong>以项目为中心，把对话、代码、工具和可审阅的结果放在同一个桌面工作空间。</strong></p>
 
-<p align="center">Windows 11 x64 · macOS Apple Silicon 预览版 · 多模型服务 · Rust + React + Electron · Apache-2.0</p>
+<p align="center">Windows 11 x64 · macOS Apple Silicon 开发中 · 多模型服务 · Rust + React + Electron · Apache-2.0</p>
 
 <p align="center">
   <a href="#快速开始">快速开始</a> · <a href="#功能与体验">功能与体验</a> · <a href="#系统架构">系统架构</a> · <a href="#开发与贡献">开发与贡献</a> · <a href="#当前状态与路线">当前状态与路线</a>
@@ -18,13 +18,13 @@ Fielora 是一个 **本地优先、多模型服务的 AI 桌面工作空间**。
 
 *Fielora is a local-first, project-centered AI desktop workspace with provider-neutral model access, governed tool execution, and reviewable results.*
 
-> **开发状态：V0.1 持续迭代中。** 最新源码位于[开发分支](https://github.com/Moriaenzhx/Fielora/tree/phase/complete-agent-v0.1)。现提供 [2026-10-07 macOS Apple Silicon 预览版下载](https://github.com/Moriaenzhx/Fielora/releases/tag/v0.1.0-preview.20261007)，尚非稳定版。下方架构图及 Windows 截图来自 [2026-09-29 基线](https://github.com/Moriaenzhx/Fielora/commit/7919a64c4b6aa8409a61fcf4d39aa1b027460415)；版本的具体改动与验证边界见发行说明。默认 `main` 可能滞后。
+> **开发状态：V0.1 持续迭代中。** 最新源码位于[开发分支](https://github.com/Moriaenzhx/Fielora/tree/phase/complete-agent-v0.1)。源码继续公开；Mac 安装包暂不开放下载，现有预览发行已转为草稿，待核心流程验收后再决定发布。下方架构图及 Windows 截图来自 [2026-09-29 基线](https://github.com/Moriaenzhx/Fielora/commit/7919a64c4b6aa8409a61fcf4d39aa1b027460415)；版本的具体改动与验证边界见发行说明。默认 `main` 可能滞后。
 
-### 下载 Mac 预览版
+### Mac 测试状态
 
-**[下载 macOS Apple Silicon 安装包（DMG）](https://github.com/Moriaenzhx/Fielora/releases/download/v0.1.0-preview.20261007/Fielora-0.1.0-preview.20261007-macos-arm64.dmg)** · **[全部附件与 SHA-256](https://github.com/Moriaenzhx/Fielora/releases/tag/v0.1.0-preview.20261007)** · **[安装说明与已知限制](docs/releases/0.1.0-preview.20261007.md)**
+目前以本机验证和小范围测试为主，暂不提供面向普通用户的安装包下载。开发者可按 [macOS 开发指南](docs/engineering/MACOS_DEVELOPMENT.md) 从源码运行。
 
-适用于 Apple Silicon（M 系列）Mac，未提供 Intel 版本。打开 DMG 后，将 `Fielora.app` 拖入 `Applications`；运行 App 无需预装 Rust、Node.js 或 Python，任务使用的外部工具需另行具备。本预览包没有 Apple Developer ID 签名和公证，首次打开可能需要在系统“隐私与安全性”中选择“仍要打开”，详见安装说明。
+重新开放下载前，将完成核心工作流与真实模型任务验收、处理完整回归中的阻塞问题，并明确系统兼容性、签名公证和安装限制。已有预览包的验证记录保留在 [预览版本说明](docs/releases/0.1.0-preview.20261007.md)。
 
 ## 功能与体验
 
@@ -95,7 +95,7 @@ Harness 按九类职责组织：**接入 → 上下文 → 模型调用 → 编�
 
 ## 快速开始
 
-Mac 用户可以使用上方预览包；开发者也可以从源码运行。不要把仓库 `artifacts/` 下的历史阶段程序当作最新发行版。
+当前提供源码运行方式，Mac 安装包暂不开放下载。不要把仓库 `artifacts/` 下的历史阶段程序当作最新发行版。
 
 ### 开发环境
 
@@ -156,7 +156,7 @@ macOS Apple Silicon 的本地开发启动与平台适配边界见 [macOS 开发�
 | 项目 / 对话 / 多模型 / 文件与 Diff / 命令工作流 | 已实现，持续改进桌面体验 |
 | 长任务与恢复 | 已有时间额度、暂停继续、检查点与重启核对；真实复杂任务可靠性仍需持续验证 |
 | Skill、MCP 与产物能力 | 已有受限实现；具体范围见[能力清单](https://github.com/Moriaenzhx/Fielora/blob/7919a64c4b6aa8409a61fcf4d39aa1b027460415/docs/architecture/CAPABILITY_INVENTORY_V0.1.md) |
-| macOS Apple Silicon | 提供开发预览包；仅报告实际验证的 Mac 场景，无稳定版或 Intel 兼容承诺 |
+| macOS Apple Silicon | 开发与小范围测试阶段，公开安装包已转为草稿；无稳定版或 Intel 兼容承诺 |
 | Linux、本地模型、远程分布式执行、完整插件市场 | 不属于当前 V0.1 交付承诺 |
 | Aegis、DXE、Personal Steward | 后续演进方向，依赖稳定工作状态与真实用户流程 |
 
