@@ -170,10 +170,10 @@ Development Workflow Hardening 已从稳定 `main@e757d050b97a3f0dd3b6812bccefc1
 
 ### 6.2 Agent 错误与解决办法持续记录
 
-专门记录位于 [`docs/engineering/AGENT_DESIGN_IMPLEMENTATION_LESSONS.md`](docs/engineering/AGENT_DESIGN_IMPLEMENTATION_LESSONS.md)。
+专门记录仅在本机 `docs/local/AGENT_DESIGN_IMPLEMENTATION_LESSONS.md` 维护，不提交到 GitHub 或放入发布包。公开仓库只保留[维护约定](docs/engineering/AGENT_DESIGN_IMPLEMENTATION_LESSONS.md)。本地记录缺失不阻塞新克隆的开发，依据公开规范、代码及测试继续工作。
 
 - Agent 相关设计或修复前，查阅该记录索引和本次相关条目；不要求普通工作通读全部历史。
-- 调查发现新原因、实施修复、撤回错误方案、问题复发或完成真实任务验收时，在同一 changeset 更新对应条目；未修复也记录证据和待查项。没有新事实不制造流水账。
+- 调查发现新原因、实施修复、撤回错误方案、问题复发或完成真实任务验收时，在本机同步更新对应条目，但不纳入 Git changeset；未修复也记录证据和待查项。没有新事实不制造流水账。
 - 写清现象、已确认原因与推测、Model/Harness/Tools 责任、失败尝试、解决办法、验证证据及未验证范围；保留旧判断被推翻的过程。
 - 分别维护原因、机制修复、原始用户任务的状态。确定性模型替身/工程 PASS 不得写成真实模型已解决原任务；没有实际运行的解决办法标为待验证。
 - 重大决定仍同步 Project Reality、Decisions 与受影响 Spec。记录不增加审批或 Freeze 流程，不改变现有执行授权。

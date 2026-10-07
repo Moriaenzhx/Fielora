@@ -47,8 +47,9 @@ PreMerge Desktop E2E 将截图隔离到系统临时目录并在完成后清理�
 
 ### 4.1 Agent 故障记录随修复维护
 
-Agent 相关调查、修复、错误方案撤回、复发或真实任务验收，应在同一 changeset
-更新 [Agent 设计与实现错误记录](AGENT_DESIGN_IMPLEMENTATION_LESSONS.md) 的相关条目。
+Agent 相关调查、修复、错误方案撤回、复发或真实任务验收，应同步更新本机
+`docs/local/AGENT_DESIGN_IMPLEMENTATION_LESSONS.md` 的相关条目，不纳入 Git 提交。
+公开仓库只保留[维护约定](AGENT_DESIGN_IMPLEMENTATION_LESSONS.md)；本地记录缺失不阻塞开发。
 开始工作只查索引和相关案例；发现新事实时记录原因、责任域、解决办法、失败尝试、
 验证及剩余缺口。分别报告机制测试与真实用户任务结果，未运行的真实模型验收不能由
 fixture PASS 代替。这是轻量交付记录，不新增审批 Gate 或全量历史阅读要求。

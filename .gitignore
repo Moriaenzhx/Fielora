@@ -91,3 +91,6 @@ apps/desktop/out-*/
 # Local skill-install rollback journal and preserved historical app bundle
 .agents/.skill-transactions/
 Fielora-current-delivery-preserve/
+
+# Personal experience records and interview material stay local
+/docs/local/

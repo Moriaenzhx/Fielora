@@ -3804,7 +3804,7 @@ macOS run_command 接入 Seatbelt 写入/网络隔离：自动 ReviewChanges 命
 
 持久服务日志明确是POST/import302后POST/issues405；模型使用curl强制POST跟随跳转，却反复诊断为路由缺POST/旧进程。复盘保存了这一错误解释并推动重复重启，说明记录与来源校验不等于语义纠错成功。verify.py只是查询打印，没有业务断言，exit0不能证明验收。另保留删除业务数据库、广泛终止进程的尝试，以及浏览器交互证据不足等未解决边界。
 
-已在AGENT_DESIGN_IMPLEMENTATION_LESSONS.md的AE-029追加真实证据、有效改动/未证实收益、错误方案与后续待实现项，补充经验检索和面试讲述素材。没有修改产品或业务代码、生产数据库，没有调用模型或继续/暂停用户任务。独立HTTP重定向复现与脱敏摘要见artifacts/agent-work-review-20261006/real-use-followup/；它们不替代真实CRUD、备份恢复及完整金额规则验收。
+已在AGENT_DESIGN_IMPLEMENTATION_LESSONS.md的AE-029追加真实证据、有效改动/未证实收益、错误方案与后续待实现项，补充诊断证据和经验检索。没有修改产品或业务代码、生产数据库，没有调用模型或继续/暂停用户任务。独立HTTP重定向复现与脱敏摘要见artifacts/agent-work-review-20261006/real-use-followup/；它们不替代真实CRUD、备份恢复及完整金额规则验收。
 
 
 ## 2026-10-06 — 运行中复盘反馈与新证据
@@ -3847,3 +3847,7 @@ macOS run_command 接入 Seatbelt 写入/网络隔离：自动 ReviewChanges 命
 ## 2026-10-07 — GitHub macOS 预览发行
 
 用户授权提交最新代码并提供打包 Mac App 下载。本次从现有开发分支发布 `v0.1.0-preview.20261007`，提供 Apple Silicon ARM64 DMG/ZIP 与 SHA-256；不合并 main，不提升为稳定版或 Intel/Universal 支持。缺少 Developer ID 证书，包仅使用 ad-hoc 完整性签名，未 Apple 公证。安装说明见 docs/releases/0.1.0-preview.20261007.md；构建、包检查与专项桌面证据保留于 artifacts/github-release-20261007/，实际结果同时写入发行页。
+
+## 2026-10-07 — 个人经验材料改为本地保存
+
+按用户要求，完整 Agent 经验记录、面试讲稿和选材索引已保存在本机 `docs/local/AGENT_DESIGN_IMPLEMENTATION_LESSONS.md`，目录由 Git 忽略。原公开文档仅保留维护约定，README 移除案例入口；公开工程文档继续保留必要的产品事实和验证边界。App 和现有 DMG/ZIP 未包含该经验文档，无需重新打包。当前版本清理不代表已重写历史提交或旧发布标签。

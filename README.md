@@ -204,7 +204,6 @@ pnpm verify:premerge      # main 准入检查，含真实桌面 E2E
 
 - [当前项目事实](https://github.com/Moriaenzhx/Fielora/blob/7919a64c4b6aa8409a61fcf4d39aa1b027460415/docs/context/02_PROJECT_REALITY.md)
 - [重要决策](https://github.com/Moriaenzhx/Fielora/blob/7919a64c4b6aa8409a61fcf4d39aa1b027460415/docs/context/03_DECISIONS.md)
-- [Agent 故障、修复与设计经验（含面试案例）](docs/engineering/AGENT_DESIGN_IMPLEMENTATION_LESSONS.md)
 - [Fielora Glass 设计语言](https://github.com/Moriaenzhx/Fielora/blob/7919a64c4b6aa8409a61fcf4d39aa1b027460415/docs/product/FIELORA_DESIGN_LANGUAGE_V0.1.md)
 - [历史仓库首页与阶段记录](docs/context/REPOSITORY_CONTEXT_LEGACY.md)
 

@@ -31,12 +31,12 @@
       "bytes": 2973
     },
     "README.md": {
-      "sha256": "ee41a5cd28141ae35425faa844ea88b49abe3bd67990a534589afd7f0f2fe11e",
-      "bytes": 16454
+      "sha256": "861dacd340a780da1247d1f691a78655f4c2dfaf89965c4c8cbe48ada4b3fa49",
+      "bytes": 16335
     },
     "AGENTS.md": {
-      "sha256": "671767e52f880a99ff7f76548907fce0c4860118b0af1135d6c1d102c5a753fd",
-      "bytes": 26871
+      "sha256": "945ab1688386cf1f28525b9ecedb455717be64acbb6447e73a2e632bae5cb02b",
+      "bytes": 27078
     },
     "docs/context/00_CONVERSATION_INDEX.md": {
       "sha256": "6e0836ba596c315d50cf1af8e2fe6b914f6642215e04a6e21b3d26b910433850",
@@ -47,12 +47,12 @@
       "bytes": 12955
     },
     "docs/context/02_PROJECT_REALITY.md": {
-      "sha256": "ccd39011ebaeea96589a17a99fb33080c30a7624241443986030b164ce4c4d50",
-      "bytes": 343361
+      "sha256": "9c6ec3d3330cf65b75444220028fa60df7ad4bf86529f89ec70aa6c32f2c402a",
+      "bytes": 343857
     },
     "docs/context/03_DECISIONS.md": {
-      "sha256": "4af1b9eea9926e1b002a756e04be44418256d9c8364d68f7f6d72326367c29ee",
-      "bytes": 168294
+      "sha256": "95404fc4318357fda290f58cf5d1661720d8557153a6d88737a579890686fd59",
+      "bytes": 168808
     },
     "docs/context/04_REJECTED_DEFERRED.md": {
       "sha256": "0b4f9bd00ad5b9a198e4f3a6523503aaacbf8b5630aaa5d029577ee08abbc160",
@@ -231,8 +231,8 @@
       "bytes": 7452
     },
     "docs/engineering/DEVELOPMENT_WORKFLOW_V0.1.md": {
-      "sha256": "9395518e53b6b52052de0c1fba08946d77435d4e8319eabd2f497e296726817c",
-      "bytes": 9544
+      "sha256": "529d5b3517063b66b29da5eff839cd4326c9264f27a3710e1aec2ff77d52ad89",
+      "bytes": 9650
     },
     "artifacts/workflow/DEVELOPMENT_WORKFLOW_HARDENING_REPORT.md": {
       "sha256": "b5c7f0406034afff6ba65cc499544054948483f6842fcbdca565aaad5ef23e11",
@@ -379,8 +379,8 @@
       "bytes": 5433
     },
     "docs/engineering/AGENT_DESIGN_IMPLEMENTATION_LESSONS.md": {
-      "sha256": "8b17b064445cc96a5137eb31427e001cf2ff56824b5d5e9938e3588bfef08f51",
-      "bytes": 196891
+      "sha256": "71655bd5281f8fee2b67ef6c9ddaf46c8a90cb0b6434462e7ae3667d7a19612a",
+      "bytes": 1227
     },
     "LICENSE": {
       "sha256": "cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30",

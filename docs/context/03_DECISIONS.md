@@ -609,3 +609,7 @@ Use the Core catalog, matching exact model IDs case-insensitively, to reject kno
 ## 2026-10-07 — 通过 GitHub Releases 提供 Mac 开发预览包
 
 按用户明确要求公开提交当前开发分支，并发布可下载的 macOS Apple Silicon App。采用带日期的预览标签、DMG/ZIP、校验和及明确安装/限制说明；预览发行不等于 main 合入、稳定版、Apple 签名公证或真实模型任务验收通过。构建应对应明确提交，安装包不包含用户数据和凭据。Developer ID 公证与 Intel 构建后续另行补齐。
+
+## 2026-10-07 — 个人经验记录不参与公开分发
+
+用户要求面试案例仅留本地。完整经验记录迁至 Git 忽略的 `docs/local/`；后续调查继续维护本机记录，公开 changeset 仅包含产品维护必需的代码、测试、规范和诊断说明。本条覆盖 D-326 中将完整个人记录随 changeset 提交的要求。新克隆缺少本地材料不阻塞工作，发布时不得为补齐历史 AE 引用重新上传。此次不重写已有 Git 历史或移动发布标签。
