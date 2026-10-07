@@ -19,8 +19,12 @@ assert.ok(process.env.RUNNER_TEMP);
 const work = path.join(process.env.RUNNER_TEMP, 'fielora-preview-parts');
 mkdirSync(work, { recursive: true });
 const gh = (...args) => execFileSync('gh', args, { encoding: 'utf8' });
-const getRelease = () => JSON.parse(gh('api', `repos/${repo}/releases/tags/${tag}`));
+// Draft releases are addressed by ID: tag lookup can hide drafts from the
+// Actions installation token even when contents:write can read the draft ID.
+const releaseId = 405373624;
+const getRelease = () => JSON.parse(gh('api', `repos/${repo}/releases/${releaseId}`));
 const release = getRelease();
+assert.equal(release.tag_name, tag);
 assert.equal(release.draft, true, 'Never replace an already-public release');
 assert.equal(release.prerelease, true);
 const temporary = release.assets.filter(a => /^macos-upload-9790077-(dmg|zip)\.part\d{4}$/.test(a.name));
@@ -33,7 +37,11 @@ for (const item of expected) {
     assert.equal(part.size, Math.min(4 * 1024 * 1024, item.size - index * 4 * 1024 * 1024), name);
   }
 }
-gh('release', 'download', tag, '--repo', repo, '--pattern', `${prefix}*`, '--dir', work);
+for (const asset of temporary) {
+  const bytes = execFileSync('gh', ['api', '-H', 'Accept: application/octet-stream', `repos/${repo}/releases/assets/${asset.id}`], { maxBuffer: 6 * 1024 * 1024 });
+  assert.equal(bytes.length, asset.size);
+  writeFileSync(path.join(work, asset.name), bytes);
+}
 const assembled = [];
 for (const item of expected) {
   const destination = path.join(work, `Fielora-0.1.0-preview.20261007-macos-arm64.${item.ext}`);
@@ -54,7 +62,16 @@ for (const item of expected) {
   console.log(`ASSEMBLED_VERIFIED ${path.basename(destination)}`);
 }
 assert.equal(getRelease().draft, true);
-execFileSync('gh', ['release', 'upload', tag, '--repo', repo, '--clobber', ...assembled], { stdio: 'inherit' });
+for (const file of assembled) {
+  const existing = getRelease().assets.find(a => a.name === path.basename(file));
+  const expectedHash = `sha256:${createHash('sha256').update(readFileSync(file)).digest('hex')}`;
+  if (existing) {
+    assert.equal(existing.digest, expectedHash, 'Never replace different release content');
+    continue;
+  }
+  const response = JSON.parse(gh('api', '--method', 'POST', '-H', 'Content-Type: application/octet-stream', '--input', file, `https://uploads.github.com/repos/${repo}/releases/${releaseId}/assets?name=${path.basename(file)}`));
+  assert.equal(response.digest, expectedHash);
+}
 const uploaded = getRelease();
 for (const item of expected) {
   const asset = uploaded.assets.find(a => a.name === `Fielora-0.1.0-preview.20261007-macos-arm64.${item.ext}`);
