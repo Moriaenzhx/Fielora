@@ -33,6 +33,11 @@ use std::{
 };
 use tokio::{net::lookup_host, runtime::Runtime};
 
+mod exa;
+pub use exa::{EXA_SEARCH_PROVIDER_ID, ExaSearchBackend};
+mod searxng;
+pub use searxng::{SEARXNG_SEARCH_PROVIDER_ID, validate_search_endpoint};
+
 pub const WEB_PROVIDER_ID: &str = "fielora.web";
 pub const WEB_SEARCH_TOOL_ID: &str = "web.search";
 pub const WEB_FETCH_TOOL_ID: &str = "web.fetch";
@@ -133,6 +138,9 @@ pub struct WebSearchRequest {
     pub count: usize,
     pub country: Option<String>,
     pub search_lang: Option<String>,
+    pub domains: Vec<String>,
+    pub published_after: Option<String>,
+    pub published_before: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -202,6 +210,7 @@ pub trait WebFetcher: Send + Sync {
 pub struct WebToolProvider {
     search_backend: Arc<dyn SearchBackend>,
     fetcher: Arc<dyn WebFetcher>,
+    search_enabled: bool,
 }
 
 impl WebToolProvider {
@@ -209,7 +218,16 @@ impl WebToolProvider {
         Self {
             search_backend,
             fetcher,
+            search_enabled: true,
         }
+    }
+
+    /// Public reading needs no search credential. Do not advertise search until
+    /// a trusted caller actually configures that backend and its binding.
+    pub fn public_fetch() -> Result<Self, WebFailure> {
+        let mut provider = Self::with_brave()?;
+        provider.search_enabled = false;
+        Ok(provider)
     }
 
     /// Construct the production Brave adapter without retaining secret bytes.
@@ -219,6 +237,25 @@ impl WebToolProvider {
         let search_backend = Arc::new(BraveSearchBackend::new(http.clone()));
         let fetcher = Arc::new(PublicWebFetcher::new(http));
         Ok(Self::new(search_backend, fetcher))
+    }
+
+    /// Default public search; an optional key is resolved only by the existing
+    /// exact credential mediator at execution, never by this backend.
+    pub fn with_exa(credentialed: bool) -> Result<Self, WebFailure> {
+        let http = Arc::new(SafePublicHttpClient::production()?);
+        Ok(Self::new(
+            Arc::new(ExaSearchBackend::new(http.clone(), credentialed)),
+            Arc::new(PublicWebFetcher::new(http)),
+        ))
+    }
+
+    pub fn with_searxng(endpoint: &str) -> Result<Self, WebFailure> {
+        Ok(Self::new(
+            Arc::new(searxng::SearxngSearchBackend::new(endpoint)?),
+            Arc::new(PublicWebFetcher::new(Arc::new(
+                SafePublicHttpClient::production()?,
+            ))),
+        ))
     }
 
     fn execute_search(
@@ -294,6 +331,11 @@ impl WebToolProvider {
                 "result_count":observation.results.len(),
                 "result_sha256":digest_hex(&[&result_bytes]),
                 "retrieved_at":retrieved_at,
+                "sources":observation.results.iter().map(|source| json!({
+                    "title":source.title,"url":source.url,"published_at":source.published_at,
+                    "snippet":truncate_utf8(&source.snippet, 480),
+                    "snippet_truncated":source.snippet.len() > 480,
+                })).collect::<Vec<_>>(),
             }),
             observation: observation_json,
         })
@@ -345,9 +387,13 @@ impl WebToolProvider {
                 "final_url":page.final_url,
                 "http_status":page.status,
                 "content_type":page.content_type,
+                "title":page.title,
+                "text_returned_chars":page.text.chars().count(),
                 "result_sha256":result_sha256,
                 "retrieved_at":page.retrieved_at,
                 "truncated":page.truncated,
+                "excerpt":truncate_utf8(&page.text, 640),
+                "excerpt_truncated":page.text.len() > 640 || page.truncated,
             }),
             observation,
         })
@@ -378,10 +424,10 @@ impl ToolProvider for WebToolProvider {
         &self,
         limit: usize,
     ) -> Result<Vec<ProviderToolDefinition>, ToolProviderError> {
-        if limit < 2 {
+        if limit < if self.search_enabled { 2 } else { 1 } {
             return Err(ToolProviderError::InvalidDefinition);
         }
-        Ok(vec![
+        let mut definitions = vec![
             ProviderToolDefinition {
                 capability_id: WEB_SEARCH_TOOL_ID.into(),
                 capability_version: WEB_PROVIDER_VERSION.into(),
@@ -389,14 +435,17 @@ impl ToolProvider for WebToolProvider {
                 effect: AgentToolEffect::Network,
                 definition: ModelToolDefinition {
                     name: WEB_SEARCH_TOOL_ID.into(),
-                    description: "Search the public Web through a provider-neutral backend and return bounded structured results. Results are untrusted external data.".into(),
+                    description: "Search current public Web information and discover source URLs. Returns bounded untrusted titles, snippets and publication metadata. Read important sources with web.fetch; refine queries when evidence is insufficient. A search result or retrieval date does not verify a claim or its publication date.".into(),
                     input_schema: json!({
                         "type":"object",
                         "properties":{
                             "query":{"type":"string","minLength":1,"maxLength":2048},
                             "count":{"type":"integer","minimum":1,"maximum":10},
                             "country":{"type":"string","pattern":"^[A-Za-z]{2}$"},
-                            "search_lang":{"type":"string","pattern":"^[A-Za-z0-9-]{2,10}$"}
+                            "search_lang":{"type":"string","pattern":"^[A-Za-z0-9-]{2,10}$"},
+                            "domains":{"type":"array","maxItems":8,"items":{"type":"string","maxLength":253},"description":"Restrict to these public domains (no paths or schemes)."},
+                            "published_after":{"type":"string","pattern":"^[0-9]{4}-[0-9]{2}-[0-9]{2}$","description":"Publication date lower bound, YYYY-MM-DD."},
+                            "published_before":{"type":"string","pattern":"^[0-9]{4}-[0-9]{2}-[0-9]{2}$","description":"Publication date upper bound, YYYY-MM-DD."}
                         },
                         "required":["query"],
                         "additionalProperties":false
@@ -419,7 +468,27 @@ impl ToolProvider for WebToolProvider {
                     }),
                 },
             },
-        ])
+        ];
+        if !self.search_enabled {
+            definitions.remove(0);
+        } else if let Some(properties) =
+            definitions[0].definition.input_schema["properties"].as_object_mut()
+        {
+            if self.search_backend.provider_id() == EXA_SEARCH_PROVIDER_ID {
+                properties.remove("search_lang");
+            }
+            if self.search_backend.provider_id() == BRAVE_SEARCH_PROVIDER_ID {
+                for key in ["domains", "published_after", "published_before"] {
+                    properties.remove(key);
+                }
+            }
+            if self.search_backend.provider_id() == SEARXNG_SEARCH_PROVIDER_ID {
+                for key in ["country", "published_after", "published_before"] {
+                    properties.remove(key);
+                }
+            }
+        }
+        Ok(definitions)
     }
 
     fn required_static_credential(
@@ -427,7 +496,7 @@ impl ToolProvider for WebToolProvider {
         provider_tool_name: &str,
     ) -> Option<StaticCredentialRequirement> {
         match provider_tool_name {
-            "search" => self.search_backend.required_static_credential(),
+            "search" if self.search_enabled => self.search_backend.required_static_credential(),
             _ => None,
         }
     }
@@ -439,7 +508,7 @@ impl ToolProvider for WebToolProvider {
         cancellation: &CommandCancellation,
     ) -> Result<ToolExecution, ToolProviderError> {
         let result = match provider_tool_name {
-            "search" => self.execute_search(arguments, None, cancellation),
+            "search" if self.search_enabled => self.execute_search(arguments, None, cancellation),
             "fetch" => self.execute_fetch(arguments, cancellation),
             _ => return Err(ToolProviderError::InvalidDefinition),
         };
@@ -454,7 +523,9 @@ impl ToolProvider for WebToolProvider {
         cancellation: &CommandCancellation,
     ) -> Result<ToolExecution, ToolProviderError> {
         let result = match provider_tool_name {
-            "search" => self.execute_search(arguments, credential, cancellation),
+            "search" if self.search_enabled => {
+                self.execute_search(arguments, credential, cancellation)
+            }
             "fetch" if credential.is_none() => self.execute_fetch(arguments, cancellation),
             "fetch" => Err(WebFailure::InvalidInput),
             _ => return Err(ToolProviderError::InvalidDefinition),
@@ -470,6 +541,10 @@ struct SearchArguments {
     count: Option<usize>,
     country: Option<String>,
     search_lang: Option<String>,
+    #[serde(default)]
+    domains: Vec<String>,
+    published_after: Option<String>,
+    published_before: Option<String>,
 }
 
 impl SearchArguments {
@@ -495,13 +570,84 @@ impl SearchArguments {
         }) {
             return Err(WebFailure::InvalidInput);
         }
+        let domains = self
+            .domains
+            .into_iter()
+            .map(|domain| domain.to_ascii_lowercase())
+            .collect::<Vec<_>>();
+        if domains.len() > 8
+            || domains.iter().any(|domain| !valid_search_domain(domain))
+            || self
+                .published_after
+                .as_deref()
+                .is_some_and(|date| !valid_search_date(date))
+            || self
+                .published_before
+                .as_deref()
+                .is_some_and(|date| !valid_search_date(date))
+            || matches!((&self.published_after, &self.published_before), (Some(after), Some(before)) if after > before)
+        {
+            return Err(WebFailure::InvalidInput);
+        }
         Ok(WebSearchRequest {
             query,
             count,
             country,
             search_lang,
+            domains,
+            published_after: self.published_after,
+            published_before: self.published_before,
         })
     }
+}
+
+fn valid_search_domain(domain: &str) -> bool {
+    domain.len() <= 253
+        && domain.contains('.')
+        && domain.split('.').all(|label| {
+            !label.is_empty()
+                && label.len() <= 63
+                && !label.starts_with('-')
+                && !label.ends_with('-')
+                && label
+                    .bytes()
+                    .all(|b| b.is_ascii_alphanumeric() || b == b'-')
+        })
+        && parse_public_url(&format!("https://{domain}/")).is_ok()
+}
+
+fn valid_search_date(date: &str) -> bool {
+    if date.len() != 10
+        || date.as_bytes()[4] != b'-'
+        || date.as_bytes()[7] != b'-'
+        || date
+            .bytes()
+            .enumerate()
+            .any(|(i, b)| i != 4 && i != 7 && !b.is_ascii_digit())
+    {
+        return false;
+    }
+    let parts = date
+        .split('-')
+        .map(str::parse::<u32>)
+        .collect::<Result<Vec<_>, _>>();
+    let Ok(parts) = parts else { return false };
+    if parts.len() != 3 || parts[0] < 1970 || parts[0] > 9999 || !(1..=12).contains(&parts[1]) {
+        return false;
+    }
+    let leap = parts[0] % 4 == 0 && (parts[0] % 100 != 0 || parts[0] % 400 == 0);
+    let days = match parts[1] {
+        2 => {
+            if leap {
+                29
+            } else {
+                28
+            }
+        }
+        4 | 6 | 9 | 11 => 30,
+        _ => 31,
+    };
+    (1..=days).contains(&parts[2])
 }
 
 #[derive(Debug, Deserialize)]
@@ -664,6 +810,14 @@ impl SearchBackend for BraveSearchBackend {
         cancellation: &CommandCancellation,
     ) -> Result<SearchBackendResponse, WebFailure> {
         ensure_not_cancelled(cancellation)?;
+        // This legacy adapter has no published-range/domain mapping yet. Never
+        // silently ignore filters that the model assumes were applied.
+        if !request.domains.is_empty()
+            || request.published_after.is_some()
+            || request.published_before.is_some()
+        {
+            return Err(WebFailure::InvalidInput);
+        }
         let secret = credential.ok_or(WebFailure::CredentialMissing)?;
         if secret.expose().is_empty() {
             return Err(WebFailure::CredentialMissing);
@@ -814,6 +968,17 @@ struct RawHttpResponse {
 }
 
 trait WebHttpClient: Send + Sync {
+    fn post_json(
+        &self,
+        _url: Url,
+        _headers: Vec<(HeaderName, HeaderValue)>,
+        _body: &[u8],
+        _timeout: Duration,
+        _cancellation: &CommandCancellation,
+    ) -> Result<RawHttpResponse, WebFailure> {
+        Err(WebFailure::Unavailable)
+    }
+
     fn get(
         &self,
         url: Url,
@@ -861,6 +1026,59 @@ impl SafePublicHttpClient {
 }
 
 impl WebHttpClient for SafePublicHttpClient {
+    fn post_json(
+        &self,
+        url: Url,
+        mut headers: Vec<(HeaderName, HeaderValue)>,
+        body: &[u8],
+        timeout: Duration,
+        cancellation: &CommandCancellation,
+    ) -> Result<RawHttpResponse, WebFailure> {
+        let url = parse_public_url(url.as_str())?;
+        if url.scheme() != "https" || body.len() > 16 * 1024 {
+            return Err(WebFailure::InvalidInput);
+        }
+        ensure_not_cancelled(cancellation)?;
+        let started = Instant::now();
+        let addresses = resolve_and_validate(
+            self.resolver.as_ref(),
+            &url,
+            timeout.min(DNS_TIMEOUT),
+            cancellation,
+        )?;
+        headers.push((ACCEPT_ENCODING, HeaderValue::from_static("identity")));
+        headers.push((CONTENT_TYPE, HeaderValue::from_static("application/json")));
+        let remaining = timeout
+            .checked_sub(started.elapsed())
+            .filter(|v| !v.is_zero())
+            .ok_or(WebFailure::Timeout)?;
+        // A POST may already have reached the service. Do not replay it across
+        // addresses or redirects, and never forward a key to a redirected host.
+        let hop =
+            self.sender
+                .post_json(&url, &addresses, &headers, body, remaining, cancellation)?;
+        ensure_not_cancelled(cancellation)?;
+        if is_redirect(hop.status) {
+            return Err(WebFailure::RedirectRejected);
+        }
+        if hop.body.len() > self.max_body_bytes {
+            return Err(WebFailure::OversizedResponse);
+        }
+        if hop
+            .content_encoding
+            .as_ref()
+            .is_some_and(|v| !v.is_empty() && !v.eq_ignore_ascii_case("identity"))
+        {
+            return Err(WebFailure::UnsupportedContent);
+        }
+        Ok(RawHttpResponse {
+            final_url: url,
+            status: hop.status,
+            content_type: hop.content_type,
+            body: hop.body,
+        })
+    }
+
     fn get(
         &self,
         mut url: Url,
@@ -981,6 +1199,19 @@ struct HttpHopResponse {
 }
 
 trait PinnedRequestSender: Send + Sync {
+    #[allow(clippy::too_many_arguments)]
+    fn post_json(
+        &self,
+        _url: &Url,
+        _addresses: &[SocketAddr],
+        _headers: &[(HeaderName, HeaderValue)],
+        _body: &[u8],
+        _timeout: Duration,
+        _cancellation: &CommandCancellation,
+    ) -> Result<HttpHopResponse, WebFailure> {
+        Err(WebFailure::Unavailable)
+    }
+
     fn send(
         &self,
         url: &Url,
@@ -992,22 +1223,59 @@ trait PinnedRequestSender: Send + Sync {
 }
 
 struct ReqwestNetwork {
-    runtime: Mutex<Runtime>,
+    runtime: Mutex<Option<Runtime>>,
     max_body_bytes: usize,
     connect_timeout: Duration,
 }
 
 impl ReqwestNetwork {
+    fn lock_runtime(
+        &self,
+        timeout: Duration,
+        cancellation: &CommandCancellation,
+    ) -> Result<(std::sync::MutexGuard<'_, Option<Runtime>>, Duration), WebFailure> {
+        let started = Instant::now();
+        loop {
+            ensure_not_cancelled(cancellation)?;
+            let remaining = timeout
+                .checked_sub(started.elapsed())
+                .filter(|d| !d.is_zero())
+                .ok_or(WebFailure::Timeout)?;
+            match self.runtime.try_lock() {
+                Ok(runtime) => return Ok((runtime, remaining)),
+                Err(std::sync::TryLockError::Poisoned(_)) => return Err(WebFailure::Unavailable),
+                Err(std::sync::TryLockError::WouldBlock) => {
+                    std::thread::sleep(remaining.min(Duration::from_millis(10)));
+                }
+            }
+        }
+    }
+
     fn new() -> Result<Self, WebFailure> {
         let runtime = tokio::runtime::Builder::new_current_thread()
             .enable_all()
             .build()
             .map_err(|_| WebFailure::Unavailable)?;
         Ok(Self {
-            runtime: Mutex::new(runtime),
+            runtime: Mutex::new(Some(runtime)),
             max_body_bytes: MAX_HTTP_BODY_BYTES,
             connect_timeout: FETCH_CONNECT_TIMEOUT,
         })
+    }
+}
+
+impl Drop for ReqwestNetwork {
+    fn drop(&mut self) {
+        // Catalog/provider owners may be released from the async Coordinator.
+        // Do not run Tokio's blocking runtime shutdown on that host thread.
+        if let Some(runtime) = self
+            .runtime
+            .get_mut()
+            .unwrap_or_else(|e| e.into_inner())
+            .take()
+        {
+            runtime.shutdown_background();
+        }
     }
 }
 
@@ -1019,7 +1287,8 @@ impl DestinationResolver for ReqwestNetwork {
         timeout: Duration,
         cancellation: &CommandCancellation,
     ) -> Result<Vec<SocketAddr>, WebFailure> {
-        let runtime = self.runtime.lock().map_err(|_| WebFailure::Unavailable)?;
+        let (runtime, timeout) = self.lock_runtime(timeout, cancellation)?;
+        let runtime = runtime.as_ref().ok_or(WebFailure::Unavailable)?;
         runtime.block_on(async {
             tokio::select! {
                 result = tokio::time::timeout(timeout, lookup_host((host, port))) => {
@@ -1042,7 +1311,36 @@ impl PinnedRequestSender for ReqwestNetwork {
         timeout: Duration,
         cancellation: &CommandCancellation,
     ) -> Result<HttpHopResponse, WebFailure> {
+        self.send_request(url, addresses, headers, None, timeout, cancellation)
+    }
+
+    fn post_json(
+        &self,
+        url: &Url,
+        addresses: &[SocketAddr],
+        headers: &[(HeaderName, HeaderValue)],
+        body: &[u8],
+        timeout: Duration,
+        cancellation: &CommandCancellation,
+    ) -> Result<HttpHopResponse, WebFailure> {
+        self.send_request(url, addresses, headers, Some(body), timeout, cancellation)
+    }
+}
+
+impl ReqwestNetwork {
+    #[allow(clippy::too_many_arguments)]
+    fn send_request(
+        &self,
+        url: &Url,
+        addresses: &[SocketAddr],
+        headers: &[(HeaderName, HeaderValue)],
+        body: Option<&[u8]>,
+        timeout: Duration,
+        cancellation: &CommandCancellation,
+    ) -> Result<HttpHopResponse, WebFailure> {
         let host = url.host_str().ok_or(WebFailure::DestinationRejected)?;
+        let (runtime, timeout) = self.lock_runtime(timeout, cancellation)?;
+        let runtime = runtime.as_ref().ok_or(WebFailure::Unavailable)?;
         let client = reqwest::Client::builder()
             .no_proxy()
             .redirect(Policy::none())
@@ -1052,11 +1350,13 @@ impl PinnedRequestSender for ReqwestNetwork {
             .user_agent(concat!("Fielora/", env!("CARGO_PKG_VERSION"), " web-fetch"))
             .build()
             .map_err(|_| WebFailure::Unavailable)?;
-        let mut request = client.get(url.clone());
+        let mut request = match body {
+            Some(body) => client.post(url.clone()).body(body.to_vec()),
+            None => client.get(url.clone()),
+        };
         for (name, value) in headers {
             request = request.header(name, value);
         }
-        let runtime = self.runtime.lock().map_err(|_| WebFailure::Unavailable)?;
         runtime.block_on(async {
             let operation = async {
                 let response = request.send().await.map_err(classify_reqwest_send_error)?;
@@ -1683,6 +1983,40 @@ mod tests {
     }
 
     #[test]
+    fn research_receipts_keep_only_bounded_untrusted_previews() {
+        let mut backend = FixtureSearchBackend::success("fixture.search.v1");
+        backend.response.as_mut().unwrap().results[0].snippet = "资料".repeat(500);
+        let mut fetcher = FixtureFetcher::success();
+        fetcher.response.as_mut().unwrap().text =
+            format!("<script>untrusted</script>{}", "正文".repeat(1000));
+        let provider = provider_with(backend, fetcher);
+        let search = provider
+            .execute(
+                "search",
+                &json!({"query":"docs"}),
+                &CommandCancellation::default(),
+            )
+            .unwrap();
+        let snippet = search.receipt["sources"][0]["snippet"].as_str().unwrap();
+        assert!(snippet.len() <= 480);
+        assert!(snippet.starts_with("资料"));
+        assert_eq!(search.receipt["sources"][0]["snippet_truncated"], true);
+        let fetched = provider
+            .execute(
+                "fetch",
+                &json!({"url":"https://example.com/page"}),
+                &CommandCancellation::default(),
+            )
+            .unwrap();
+        let excerpt = fetched.receipt["excerpt"].as_str().unwrap();
+        assert!(excerpt.len() <= 640);
+        assert!(excerpt.starts_with("<script>untrusted</script>"));
+        assert_eq!(fetched.receipt["excerpt_truncated"], true);
+        assert!(!fetched.receipt.to_string().contains(&"正文".repeat(500)));
+        assert!(fetched.observation.contains("UNTRUSTED_WEB_CONTENT"));
+    }
+
+    #[test]
     fn search_rejects_invalid_input_and_malformed_backend_results() {
         let provider = provider_with(
             FixtureSearchBackend::success("fixture.search.v1"),
@@ -1914,7 +2248,10 @@ mod tests {
                         query: "x".into(),
                         count: 1,
                         country: None,
-                        search_lang: None
+                        search_lang: None,
+                        domains: vec![],
+                        published_after: None,
+                        published_before: None,
                     },
                     Some(SecretBytes::new(b"fixture-secret".to_vec())),
                     &CommandCancellation::default()
@@ -1930,6 +2267,9 @@ mod tests {
                     count: 1,
                     country: None,
                     search_lang: None,
+                    domains: vec![],
+                    published_after: None,
+                    published_before: None,
                 },
                 &CommandCancellation::default(),
             ),
@@ -1973,6 +2313,63 @@ mod tests {
             64
         );
         assert!(execution.receipt.get("verification").is_none());
+    }
+
+    #[tokio::test]
+    async fn public_fetch_provider_can_be_dropped_inside_host_runtime() {
+        let provider = WebToolProvider::public_fetch().unwrap();
+        assert_eq!(provider.discover_tools(1).unwrap().len(), 1);
+        drop(provider);
+    }
+
+    #[test]
+    fn public_fetch_catalog_does_not_advertise_or_execute_unconfigured_search() {
+        let provider = WebToolProvider::public_fetch().unwrap();
+        let tools = provider.discover_tools(1).unwrap();
+        assert_eq!(tools.len(), 1);
+        assert_eq!(tools[0].definition.name, WEB_FETCH_TOOL_ID);
+        assert!(provider.required_static_credential("search").is_none());
+        assert!(matches!(
+            provider.execute(
+                "search",
+                &json!({"query":"example"}),
+                &CommandCancellation::default()
+            ),
+            Err(ToolProviderError::InvalidDefinition)
+        ));
+        assert!(matches!(
+            provider.execute(
+                "fetch",
+                &json!({"url":"http://127.0.0.1/private"}),
+                &CommandCancellation::default()
+            ),
+            Err(ToolProviderError::ClassifiedFailure(
+                ToolProviderFailureKind::DestinationRejected
+            ))
+        ));
+    }
+
+    #[test]
+    #[ignore = "Explicit network smoke reading Rust documentation; never part of offline gates"]
+    fn public_fetch_live_documentation_source() {
+        let execution = WebToolProvider::public_fetch()
+            .unwrap()
+            .execute(
+                "fetch",
+                &json!({"url":"https://doc.rust-lang.org/book/"}),
+                &CommandCancellation::default(),
+            )
+            .unwrap();
+        let source: Value = serde_json::from_str(&execution.observation).unwrap();
+        assert_eq!(source["authority"], "UNTRUSTED_WEB_CONTENT");
+        assert_eq!(execution.receipt["http_status"], 200);
+        assert_eq!(source["final_url"], "https://doc.rust-lang.org/book/");
+        assert!(
+            source["text"].as_str().unwrap().contains("Rust"),
+            "Public Rust documentation observation: {source}"
+        );
+        assert!(execution.receipt["text_returned_chars"].as_u64().unwrap() > 30);
+        assert_eq!(source["retrieved_at"], execution.receipt["retrieved_at"]);
     }
 
     #[test]
@@ -2048,6 +2445,18 @@ mod tests {
     }
 
     impl PinnedRequestSender for FixtureSender {
+        fn post_json(
+            &self,
+            url: &Url,
+            addresses: &[SocketAddr],
+            headers: &[(HeaderName, HeaderValue)],
+            _: &[u8],
+            timeout: Duration,
+            cancellation: &CommandCancellation,
+        ) -> Result<HttpHopResponse, WebFailure> {
+            self.send(url, addresses, headers, timeout, cancellation)
+        }
+
         fn send(
             &self,
             url: &Url,
@@ -2067,6 +2476,86 @@ mod tests {
 
     fn public_address() -> SocketAddr {
         "1.1.1.1:443".parse().unwrap()
+    }
+
+    #[test]
+    fn waiting_for_network_runtime_obeys_timeout_and_cancel() {
+        let network = ReqwestNetwork::new().unwrap();
+        let _busy = network.runtime.lock().unwrap();
+        assert!(matches!(
+            network.lock_runtime(Duration::from_millis(20), &CommandCancellation::default()),
+            Err(WebFailure::Timeout)
+        ));
+        let cancelled = CommandCancellation::default();
+        cancelled.cancel();
+        assert!(matches!(
+            network.lock_runtime(Duration::from_secs(20), &cancelled),
+            Err(WebFailure::Cancelled)
+        ));
+    }
+
+    #[test]
+    fn search_post_pins_dns_and_never_redirects_or_replays() {
+        let url = Url::parse("https://mcp.exa.ai/mcp").unwrap();
+        for (response, expected) in [
+            (Err(WebFailure::Timeout), WebFailure::Timeout),
+            (
+                Ok(redirect_hop("https://other.example/steal")),
+                WebFailure::RedirectRejected,
+            ),
+            (
+                Ok(ok_hop("application/json", vec![0; MAX_HTTP_BODY_BYTES + 1])),
+                WebFailure::OversizedResponse,
+            ),
+        ] {
+            let resolver = Arc::new(FixtureResolver::new(vec![Ok(vec![
+                public_address(),
+                "8.8.8.8:443".parse().unwrap(),
+            ])]));
+            let sender = Arc::new(FixtureSender::new(vec![response]));
+            let client = SafePublicHttpClient::injected(resolver.clone(), sender.clone());
+            assert_eq!(
+                client
+                    .post_json(
+                        url.clone(),
+                        vec![],
+                        b"{}",
+                        Duration::from_secs(2),
+                        &CommandCancellation::default()
+                    )
+                    .unwrap_err(),
+                expected
+            );
+            assert_eq!(sender.seen.lock().unwrap().len(), 1);
+            assert_eq!(resolver.calls.load(Ordering::SeqCst), 1);
+        }
+        let resolver = Arc::new(FixtureResolver::new(vec![Ok(vec![
+            public_address(),
+            "127.0.0.1:443".parse().unwrap(),
+        ])]));
+        let sender = Arc::new(FixtureSender::new(vec![]));
+        let client = SafePublicHttpClient::injected(resolver, sender.clone());
+        assert_eq!(
+            client
+                .post_json(
+                    url.clone(),
+                    vec![],
+                    b"{}",
+                    Duration::from_secs(2),
+                    &CommandCancellation::default()
+                )
+                .unwrap_err(),
+            WebFailure::DestinationRejected
+        );
+        let cancelled = CommandCancellation::default();
+        cancelled.cancel();
+        assert_eq!(
+            client
+                .post_json(url, vec![], b"{}", Duration::from_secs(2), &cancelled)
+                .unwrap_err(),
+            WebFailure::Cancelled
+        );
+        assert!(sender.seen.lock().unwrap().is_empty());
     }
 
     #[test]

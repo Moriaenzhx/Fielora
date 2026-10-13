@@ -1,4 +1,5 @@
 pub mod command_sandbox;
+pub mod computer;
 pub mod fonts;
 use fielora_contracts::DeviceId;
 use std::ffi::OsString;

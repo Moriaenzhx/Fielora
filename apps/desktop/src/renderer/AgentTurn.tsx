@@ -2,7 +2,7 @@ import { createContext, useContext, useEffect, useMemo, useState, type ReactNode
 import { TimestampHover } from './UiPrimitives';
 import type { AgentEventView, AgentRunView, AgentToolCallView, ApprovalView, ConversationMessageView, McpConnectionRuntimeView, ResultReference } from '@fielora/contracts';
 import type { ResultImagePreviewView } from '../workspace-types';
-import { appliedAgentReview, type AgentReviewSummary } from './agent-review';
+import { appliedAgentReview, buildAgentReview, type AgentReviewSummary } from './agent-review';
 import {
   buildConversationActivityProjection,
   compactOperationTimeline,
@@ -15,7 +15,9 @@ import {
 
 const ActivityRunningContext = createContext(false);
 const ActivityActiveToolContext = createContext<string | null>(null);
+const ActivityToolsContext = createContext<readonly AgentToolCallView[]>([]);
 const ActivityNarrativeTimeContext = createContext<number | undefined>(undefined);
+const ActivityReviewContext = createContext<((path: string) => void) | undefined>(undefined);
 type OperationDisclosure = { open: boolean; selected: string | null };
 const ActivityDisclosureContext = createContext<{
   states: Record<string, OperationDisclosure>;
@@ -26,6 +28,7 @@ import {
   commandApprovalReason,
   agentModelIsActive,
   agentPausePresentation,
+  agentPendingChecks,
   agentCompletionTimeLabel,
   approvalActionLabel,
   buildAgentResultViewModel,
@@ -36,7 +39,8 @@ import {
   type AgentTerminalStatus,
 } from './agent-presentation';
 import { MarkdownMessage, type ActivityFileContext } from './MarkdownMessage';
-import { activityDetailFields, activityStatusLabel, activityFailureReason, activityToolDescription, activityToolIssue, browserLoadPauseReason, resolveActivityFileLink, shouldShowMcpRuntime, type ActivityFileLink } from './agent-activity-detail';
+import { webActivity, activityDetailFields, activityStatusLabel, activityFailureReason, activityToolDescription, activityToolIssue, browserLoadPauseReason, resolveActivityFileLink, shouldShowMcpRuntime, type ActivityFileLink } from './agent-activity-detail';
+import { WebResearchActivity, WebResearchSummary } from './WebResearchActivity';
 import { AppIcon, type AppIconName } from './ui';
 
 interface AgentTurnProps {
@@ -123,6 +127,8 @@ function activityIcon(kind: ConversationActivityGroupKind): AppIconName {
 }
 
 function activityToolPresentation(tool: AgentToolCallView): { title: string; detail: string; command: boolean; inlineDetail: boolean } {
+  const web = webActivity(tool);
+  if (web && !isImageActivity(tool)) return { title: web.action, detail: web.detail, command: false, inlineDetail: true };
   if (isImageActivity(tool)) return { title: tool.status === 'COMPLETED' && (tool.receipt as { screenshot?: unknown } | null)?.screenshot ? '已获取 1 张页面截图' : '获取页面截图', detail: '', command: false, inlineDetail: false };
   const specific: Record<string, string> = {
     list_skills: '查看 Skill 清单', load_skill: '加载 Skill', verify_skill: '检查 Skill 完整性',
@@ -176,6 +182,7 @@ function activityTimestamp(timestamp: number): string {
 function operationLabel(entry: ConversationActivityEntry): string {
   if (entry.kind !== 'TOOL') return entry.title;
   const tool = entry.tool;
+  if (tool.error_code === 'AGENT_EDIT_ALREADY_CURRENT') return `内容已一致 · ${toolDetail(tool)}`;
   const args = tool.arguments as Record<string, unknown> | null;
   const actions: Record<string, string> = { read_file: '读取', list_files: '查看目录', search_text: '搜索', stat_path: '检查',
     run_command: '运行', create_file: '创建', write_file: '编辑', replace_text: '编辑', apply_patches: '编辑', delete_file: '删除', move_file: '移动' };
@@ -197,6 +204,8 @@ function OperationDetail({ entry, activityFiles }: { entry: ConversationActivity
   const issue = entry.kind === 'TOOL' ? activityToolIssue(entry.tool) : null;
   const path = fields.find(field => field.label === '操作对象')?.text;
   const file = path ? activityFiles?.resolve(`fielora-project-file:${path}`) : null;
+  const command = entry.kind === 'TOOL' && entry.tool.name === 'run_command';
+  const primary = new Set(['命令', '标准输出', '标准错误', '输出', '错误', '错误码']);
   const renderField = (field: (typeof fields)[number]) => <div className={`operation-detail-field${field.code ? ' is-code' : ''}`} key={field.label}>
     <div className="operation-detail-heading"><span>{field.label}</span><button type="button" aria-label={`复制${field.label}`} onClick={() => {
       void window.fielora.clipboard.writeText(field.text).then(() => setCopied(`${field.label}已复制`), () => setCopied(`${field.label}复制失败`));
@@ -204,45 +213,81 @@ function OperationDetail({ entry, activityFiles }: { entry: ConversationActivity
     {field.code ? <pre tabIndex={0}>{field.text}</pre> : <div className="operation-detail-value">{field.text}</div>}
   </div>;
   return <section className="operation-detail" id={`detail-${entry.id}`} data-testid="operation-detail" aria-label="操作详情">
-    <header className="operation-detail-title"><AppIcon name={operationIcon(entry)}/><strong>{operationLabel(entry)}</strong><span data-status={entry.status}>{activityStatusLabel(entry.status)}</span></header>
+    {!command && <header className="operation-detail-title"><AppIcon name={operationIcon(entry)}/><strong>{operationLabel(entry)}</strong><span data-status={entry.status}>{activityStatusLabel(entry.status, entry.kind === 'TOOL' ? entry.tool.error_code : null)}</span></header>}
     {fields.length === 0 && <p>该历史记录未保存执行详情。</p>}
-    {fields.filter(field => field.label !== '回执').map(renderField)}
+    {fields.filter(field => field.label !== '回执' && (!command || primary.has(field.label))).map(renderField)}
+    {command && !fields.some(field => ['标准输出', '标准错误', '输出'].includes(field.label)) && <p className="operation-output-note">该记录未保存命令输出正文。</p>}
     {issue && <p>{issue}</p>}
-    {fields.filter(field => field.label === '回执').map(field => <details className="operation-receipt" key={field.label}><summary>原始回执<AppIcon name="chevronDown"/></summary>{renderField(field)}</details>)}
-    <footer><span>{activityStatusLabel(entry.status)}</span>{entry.occurredAt > 0 && <time>开始于 {activityTimestamp(entry.occurredAt)}</time>}{entry.completedAt !== null && <time>结束于 {activityTimestamp(entry.completedAt)}</time>}</footer>
+    {(command || fields.some(field => field.label === '回执')) && <details className="operation-receipt"><summary>{command ? '执行信息与回执' : '原始回执'}<AppIcon name="chevronDown"/></summary>{fields.filter(field => field.label === '回执' || (command && !primary.has(field.label))).map(renderField)}</details>}
+    <footer><span>{activityStatusLabel(entry.status, entry.kind === 'TOOL' ? entry.tool.error_code : null)}</span>{entry.occurredAt > 0 && <time>开始于 {activityTimestamp(entry.occurredAt)}</time>}{entry.completedAt !== null && <time>结束于 {activityTimestamp(entry.completedAt)}</time>}</footer>
     {copied && <span role="status">{copied}</span>}
   </section>;
 }
 
+function OperationRow({ entry, expanded, toggle, activityFiles, single = false }: {
+  entry: ConversationActivityEntry; expanded: boolean; toggle: () => void; activityFiles?: ActivityFileContext; single?: boolean;
+}) {
+  const onReviewFile = useContext(ActivityReviewContext);
+  const tool = entry.kind === 'TOOL' ? entry.tool : null;
+  const args = tool?.arguments as Record<string, unknown> | null;
+  const readPath = tool?.name === 'read_file' && typeof args?.path === 'string' ? args.path : '';
+  const read = readPath && tool?.status === 'COMPLETED' ? resolveActivityFileLink(`fielora-project-file:${readPath}`, [tool]) : null;
+  const changes = tool?.status === 'COMPLETED' ? buildAgentReview([tool]).files : [];
+  const linked = Boolean((read && activityFiles?.open) || (changes.length && onReviewFile));
+  const label = operationLabel(entry);
+  const toggleProps = { 'aria-expanded': expanded, 'aria-controls': `detail-${entry.id}`, onClick: toggle };
+  return <>
+    <div className="operation-row-content">
+      {linked ? <>
+        <AppIcon name={operationIcon(entry)}/>
+        <span className="operation-file-action">{read ? '已读取' : tool?.name === 'create_file' ? '已创建' : tool?.name === 'delete_file' ? '已删除' : tool?.name === 'move_file' ? '已移动' : '已编辑'}</span>
+        <span className="operation-file-targets">
+          {read ? <button type="button" className="operation-file-link" title={read.path} onClick={() => activityFiles?.open?.(read)}>{read.path}</button>
+            : changes.map(file => <span className="operation-file-change" key={file.path}><button type="button" className="operation-file-link" title={file.path} onClick={() => onReviewFile?.(file.path)}>{file.path}</button>{(file.additions > 0 || file.deletions > 0) && <small>+{file.additions} −{file.deletions}</small>}</span>)}
+        </span>
+        <button type="button" className="operation-disclosure" data-testid={single ? 'operation-group-toggle' : 'operation-detail-toggle'} aria-label={`${expanded ? '收起' : '展开'}${label}的执行详情`} {...toggleProps}><AppIcon name="chevronDown"/></button>
+      </> : <button type="button" className="operation-summary" data-testid={single ? 'operation-group-toggle' : 'operation-detail-toggle'} {...toggleProps} title={label}>
+        <AppIcon name={operationIcon(entry)}/><span className="operation-label">{label}</span><AppIcon name="chevronDown"/>
+      </button>}
+    </div>
+    {expanded && <OperationDetail entry={entry} activityFiles={activityFiles}/>}
+  </>;
+}
+
 function CompactActivityGroup({ item, activityFiles }: { item: ConversationActivityGroupItem; activityFiles?: ActivityFileContext }) {
   const running = useContext(ActivityRunningContext);
+  const tools = useContext(ActivityToolsContext);
   const activeToolId = useContext(ActivityActiveToolContext);
   const disclosure = useContext(ActivityDisclosureContext);
   const state = disclosure.states[item.id] ?? { open: false, selected: null };
   const single = item.entries.length === 1;
   const first = item.entries[0]!;
-  const selected = item.entries.find(entry => entry.id === state.selected);
   const active = running && item.entries.some(entry => entry.kind === 'TOOL' && entry.toolId === activeToolId);
-  const issues = [...new Set(item.entries.filter(entry => ['FAILED', 'UNKNOWN', 'DENIED', 'CANCELLED', 'WAITING_APPROVAL'].includes(entry.status)).map(entry => activityStatusLabel(entry.status)))];
+  const issues = [...new Set(item.entries.filter(entry => ['FAILED', 'UNKNOWN', 'DENIED', 'CANCELLED', 'WAITING_APPROVAL'].includes(entry.status)).map(entry => activityStatusLabel(entry.status, entry.kind === 'TOOL' ? entry.tool.error_code : null)))];
   const categories: Record<ConversationActivityGroupKind, string> = { INSPECT: '读取信息', SEARCH: '搜索', DIRECTORY: '查看目录', CHANGE: '编辑文件', COMMAND: '运行命令', VERIFY: '执行检查', VERSION: '版本操作', NETWORK: '访问服务', OTHER: '工具操作', MIXED: '工具操作' };
   const kinds = [...new Set(item.entries.map(entry => entry.kind === 'TOOL' && entry.tool.name === 'run_command' ? '运行命令' : entry.kind === 'TOOL' && entry.tool.name === 'read_file' ? '读取文件' : categories[entry.activityKind]))];
   const completed = item.entries.every(entry => entry.status === 'COMPLETED');
-  const label = single ? operationLabel(first) : `${completed ? '已执行' : '执行记录'} ${item.entries.length} 项操作 · ${kinds.slice(0, 2).join('、')}${kinds.length > 2 ? '等' : ''}`;
-  const detailVisible = state.open && Boolean(selected);
+  const lastWeb = [...item.entries].reverse().find(entry => entry.kind === 'TOOL' && webActivity(entry.tool));
+  const label = lastWeb ? `${operationLabel(lastWeb)} · 共 ${item.entries.length} 项操作`
+    : `${completed ? '已执行' : '执行记录'} ${item.entries.length} 项操作 · ${kinds.slice(0, 2).join('、')}${kinds.length > 2 ? '等' : ''}`;
+  if (single && first.kind === 'TOOL' && ['web.search', 'web.fetch'].includes(first.tool.name)) return <div className="operation-group research-operation" data-testid="compact-category" data-single="true" data-activity-sequence={item.sequence}>
+    <WebResearchActivity tool={first.tool} tools={tools} running={running}/>
+    <button type="button" className="research-detail-toggle" data-testid="operation-group-toggle" aria-expanded={state.open} aria-controls={`detail-${first.id}`} onClick={() => disclosure.update(item.id, { open: !state.open, selected: first.id })}>执行详情<AppIcon name="chevronDown"/></button>
+    {state.open && <OperationDetail entry={first} activityFiles={activityFiles}/>}
+  </div>;
   return <div className={`operation-group${active ? ' is-working' : ''}`} data-testid="compact-category" data-single={single} data-activity-sequence={item.sequence}>
-    <button type="button" className="operation-summary" data-testid="operation-group-toggle" aria-expanded={state.open} aria-controls={`operations-${item.id}`} onClick={() => disclosure.update(item.id, { ...state, open: !state.open, selected: single ? first.id : state.selected })}>
+    {single ? <OperationRow entry={first} single expanded={state.open} toggle={() => disclosure.update(item.id, { open: !state.open, selected: first.id })} activityFiles={activityFiles}/> : <>
+    <button type="button" className="operation-summary" title={label} data-testid="operation-group-toggle" aria-expanded={state.open} aria-controls={`operations-${item.id}`} onClick={() => disclosure.update(item.id, { ...state, open: !state.open })}>
       <AppIcon name={operationIcon(first)}/><span className="operation-label">{label}</span>
-      {!single && issues.length > 0 && <span className="operation-issue">{issues.join('、')}</span>}
-      {!single && active && <span>执行中</span>}<AppIcon name="chevronDown"/>
+      {issues.length > 0 && <span className="operation-issue">{issues.join('、')}</span>}
+      {active && <span>执行中</span>}<AppIcon name="chevronDown"/>
     </button>
     <div id={`operations-${item.id}`} hidden={!state.open}>
-      {!single && state.open && <ol className="operation-list" data-testid="operation-list" aria-label="操作列表">{item.entries.map(entry => <li key={entry.id} data-testid="operation-row" data-activity-entry={entry.kind.toLowerCase()} data-activity-status={entry.status}>
-        <button type="button" aria-expanded={detailVisible && selected?.id === entry.id} aria-controls={`detail-${entry.id}`} onClick={() => disclosure.update(item.id, { open: true, selected: state.selected === entry.id ? null : entry.id })}>
-          <AppIcon name={operationIcon(entry)}/><span className="operation-label">{operationLabel(entry)}</span><span className="operation-detail-link">{state.selected === entry.id ? '收起详情' : '查看详情'}</span>
-        </button>
+      {state.open && <ol className="operation-list" data-testid="operation-list" aria-label="操作列表">{item.entries.map(entry => <li key={entry.id} data-testid="operation-row" data-activity-entry={entry.kind.toLowerCase()} data-activity-status={entry.status}>
+        <OperationRow entry={entry} expanded={state.selected === entry.id} toggle={() => disclosure.update(item.id, { open: true, selected: state.selected === entry.id ? null : entry.id })} activityFiles={activityFiles}/>
       </li>)}</ol>}
-      {detailVisible && selected && <OperationDetail key={selected.id} entry={selected} activityFiles={activityFiles}/>}
     </div>
+    </>}
   </div>;
 }
 
@@ -273,7 +318,7 @@ function ActivityGroup({ item, activityFiles }: { item: ConversationActivityGrou
 function ActivityApprovalRecord({ item }: { item: Extract<ConversationActivityItem, { kind: 'APPROVAL' }> }) {
   const label = item.completedAt ? agentCompletionTimeLabel(item.completedAt, item.decision === 'ALLOW_ONCE') : '';
   return <div className="conversation-activity-approval-record" data-activity-sequence={item.sequence} data-completed-at={item.completedAt ?? undefined}>
-    <span>{item.decision === 'ALLOW_ONCE' ? '已允许本次操作' : item.decision === 'DENY' ? '已拒绝本次操作' : '等待操作确认'}</span>{label && <small>{label}</small>}
+    <span>{item.decision === 'ALLOW_ONCE' ? item.requiredConfirmations === 2 && item.confirmationStage === 1 ? '已确认范围，尚未执行' : '已允许本次操作' : item.decision === 'DENY' ? '已拒绝本次操作' : '等待操作确认'}</span>{label && <small>{label}</small>}
   </div>;
 }
 
@@ -302,7 +347,7 @@ function ConversationActivityStream({ items, tools, approval, approvalSummary, b
     if (item.kind === 'PHASE') return <TimestampHover timestamp={item.occurredAt} key={item.id}><p className="conversation-activity-phase" data-activity-sequence={item.sequence}>{item.title}</p></TimestampHover>;
     if (approval?.id === item.approvalId && onDecision && !item.completedAt) {
       const tool = tools.find(candidate => candidate.id === item.toolCallId) ?? null;
-      return <AgentApproval key={item.id} tool={tool} summary={approvalSummary} busy={busy} onDecision={onDecision}/>;
+      return <AgentApproval key={`${item.id}:${approval.nonce}`} approval={approval} tool={tool} summary={approvalSummary} busy={busy} onDecision={onDecision}/>;
     }
     return <ActivityApprovalRecord item={item} key={item.id}/>;
   };
@@ -338,16 +383,18 @@ function currentRunStateLabel(run: AgentRunView, events: readonly AgentEventView
   return '正在执行';
 }
 
-function AgentProgressSummary({ run, tools, busy, onResume, onStop }: {
-  run: AgentRunView; tools: AgentToolCallView[]; busy: boolean;
+function AgentProgressSummary({ run, tools, events, busy, onResume, onStop }: {
+  run: AgentRunView; tools: AgentToolCallView[]; events: AgentEventView[]; busy: boolean;
   onResume?: () => void; onStop?: () => void;
 }) {
+  const pending = agentPendingChecks(run, events);
   const clarification = run.error_code === 'AGENT_USER_INPUT_REQUIRED'
     ? [...tools].reverse().find(tool => tool.name === 'request_user_input' && tool.status === 'COMPLETED')?.arguments as { question?: string; reason?: string } | undefined : undefined;
   return <div className="agent-progress-summary" data-testid="agent-execution-status" data-execution-stage={run.status}>
     <div className="agent-pause-notice" data-testid="agent-pause-notice">
       {clarification?.question && <div className="agent-user-question" data-testid="agent-visible-question">{clarification.reason && <p>{clarification.reason}</p>}<p>{clarification.question}</p></div>}
-      <p>{(run.error_code === 'AGENT_VERIFICATION_REQUIRED' ? browserLoadPauseReason(tools) : null) ?? agentPausePresentation(run).reason}</p>
+      <p>{(run.error_code === 'AGENT_VERIFICATION_REQUIRED' ? browserLoadPauseReason(tools) : null) ?? agentPausePresentation(run, events).reason}</p>
+      {pending.length > 0 && <p data-testid="agent-pending-checks">待解决的检查：{pending.join('；')}。</p>}
       <div className="agent-pause-actions" aria-busy={busy}>
         {onResume && agentPausePresentation(run).canResume && <button type="button" className="agent-resume-action is-primary" disabled={busy} onClick={onResume}>{agentPausePresentation(run).action}</button>}
         {onStop && <button type="button" className="agent-resume-action" disabled={busy} onClick={onStop}>停止任务</button>}
@@ -356,13 +403,18 @@ function AgentProgressSummary({ run, tools, busy, onResume, onStop }: {
   </div>;
 }
 
-function AgentApproval({ tool, summary, busy, onDecision }: {
+function AgentApproval({ approval, tool, summary, busy, onDecision }: {
+  approval: ApprovalView;
   tool: AgentToolCallView | null;
   summary: string;
   busy: boolean;
   onDecision: (decision: 'DENY' | 'ALLOW_ONCE') => void;
 }) {
   const [detailsOpen, setDetailsOpen] = useState(false);
+  const policy = tool?.arguments && typeof tool.arguments === 'object' ? (tool.arguments as Record<string, unknown>)._operation_policy as Record<string, unknown> | undefined : undefined;
+  const facts = policy?.facts as Record<string, unknown> | undefined;
+  const second = approval.required_confirmations === 2 && approval.confirmation_stage === 2;
+  const operationTitle = policy?.kind === 'CLEAR_SCOPE' ? (second ? '再次确认清空范围' : '确认清空范围（第 1 次）') : policy?.kind === 'LOCAL_DATA_UPLOAD' ? '确认发送本地数据' : policy?.kind === 'COMPUTER_OBSERVATION' ? '允许本任务查看此应用' : null;
   const commandReason = commandApprovalReason(tool);
   const mcpActivation = tool?.name === 'mcp.activate_connection';
   const install = tool?.name === 'tools.install' && tool.arguments && typeof tool.arguments === 'object'
@@ -372,8 +424,16 @@ function AgentApproval({ tool, summary, busy, onDecision }: {
   const connectionId = mcpActivation && tool?.arguments && typeof tool.arguments === 'object' && 'connection_id' in tool.arguments
     ? String((tool.arguments as { connection_id?: unknown }).connection_id ?? '') : '';
   return <section className="agent-turn-approval" data-testid="agent-approval">
-    <p>{fontInstall ? `安装字体 ${fontInstall.font.families.map(f => f.family).join("、")}` : install ? `安装工具 ${String(install.name)}${install.version ? ` ${String(install.version)}` : ''}` : mcpActivation ? `Start local MCP Server “${connectionId}” for this Run` : commandReason ? '此命令需要批准' : '我已经定位到需要执行的下一步。'}</p>
-    {commandReason && <p data-testid="command-approval-reason">{commandReason}</p>}
+    <p>{operationTitle ?? (fontInstall ? `安装字体 ${fontInstall.font.families.map(f => f.family).join("、")}` : install ? `安装工具 ${String(install.name)}${install.version ? ` ${String(install.version)}` : ''}` : mcpActivation ? `Start local MCP Server “${connectionId}” for this Run` : commandReason ? '此命令需要批准' : '我已经定位到需要执行的下一步。')}</p>
+    {operationTitle && <div className="agent-operation-preview" data-testid="operation-approval-preview">
+      <p>{String(facts?.disclosure ?? facts?.description ?? '')}</p>
+      {policy?.kind === 'CLEAR_SCOPE' && <p>{second ? '第一次确认已记录，尚未执行。再次确认后才会清空以下范围；取消将保留现有内容。' : '本次确认不会执行删除，之后仍需你再次明确确认。'}</p>}
+      {Array.isArray(facts?.targets) && facts.targets.map((target, index) => <p key={index}>{String((target as Record<string, unknown>).path)}</p>)}
+      {Array.isArray(facts?.sources) && facts.sources.map((source, index) => <p key={index}>{String((source as Record<string, unknown>).path)} · {String((source as Record<string, unknown>).bytes ?? '未知')} 字节</p>)}
+      {Array.isArray(facts?.destinations) && <p>发送至：{facts.destinations.map(String).join('、')}</p>}
+      {policy?.kind === 'COMPUTER_OBSERVATION' && <><p>应用：{String((facts?.target as Record<string, unknown>)?.name ?? '')} · 模型：{String(facts?.model ?? '')}</p><p>接收服务：{String(facts?.receiving_service ?? '当前模型服务')}</p>{detailsOpen && <p>{String((facts?.target as Record<string, unknown>)?.executable ?? '')} · PID {String((facts?.target as Record<string, unknown>)?.pid ?? '')}</p>}</>}
+    </div>}
+    {!operationTitle && commandReason && <p data-testid="command-approval-reason">{commandReason}</p>}
     {install && <dl className="agent-install-preview" data-testid="agent-install-preview">
       <dt>来源</dt><dd>{String(install.source_url)}</dd>
       <dt>下载大小</dt><dd>{Number(install.archive_bytes) < 1024 * 1024 ? `${Number(install.archive_bytes).toLocaleString()} 字节` : `${(Number(install.archive_bytes) / 1024 / 1024).toFixed(2)} MiB`}</dd>
@@ -389,7 +449,7 @@ function AgentApproval({ tool, summary, busy, onDecision }: {
     </dl>}
     {!install && !fontInstall && <p>{mcpActivation ? '这会启动已配置的本地进程并发现有界 Tools；不会授予后续 Tool 权限。' : summary || (tool ? `${toolTitle(tool.name)} · ${toolDetail(tool)}` : '只会执行当前列出的操作，不会扩大范围。')}</p>}
     {detailsOpen && tool && <OperationDetail entry={{ id: `tool-${tool.id}`, kind: 'TOOL', toolId: tool.id, tool, status: tool.status, activityKind: 'OTHER', sequence: 0, occurredAt: tool.created_at, completedAt: null }}/>}
-    <div><button type="button" aria-expanded={detailsOpen} onClick={() => setDetailsOpen(value => !value)}>{fontInstall ? '查看安装详情' : install || commandReason ? '查看执行详情' : '查看修改范围'}</button><button type="button" onClick={() => onDecision('DENY')} disabled={busy}>拒绝</button><button type="button" className="agent-primary-action" onClick={() => onDecision('ALLOW_ONCE')} disabled={busy} data-testid="agent-allow-once">{install || fontInstall ? '允许本次安装' : approvalActionLabel(tool)}</button></div>
+    <div><button type="button" aria-expanded={detailsOpen} onClick={() => setDetailsOpen(value => !value)}>{fontInstall ? '查看安装详情' : install || commandReason ? '查看执行详情' : '查看修改范围'}</button><button type="button" onClick={() => onDecision('DENY')} disabled={busy}>拒绝</button><button type="button" className="agent-primary-action" onClick={() => onDecision('ALLOW_ONCE')} disabled={busy} data-testid="agent-allow-once">{operationTitle ? policy?.kind === 'CLEAR_SCOPE' ? second ? '再次确认并执行清空' : '确认范围，进入第二次确认' : policy?.kind === 'LOCAL_DATA_UPLOAD' ? '允许本次发送' : '允许本任务查看此应用' : install || fontInstall ? '允许本次安装' : approvalActionLabel(tool)}</button></div>
   </section>;
 }
 
@@ -449,6 +509,11 @@ function AgentTerminalResult({ run, status, message, presentation, tools, partia
   return <div className="agent-terminal-result" data-testid="agent-terminal-result" data-result-outcome={presentation?.outcome ?? status}>
     {run?.error_code && <p className="agent-run-error-detail">结束原因：<code>{run.error_code}</code></p>}
     {failureReason && <p className="agent-failure-reason" data-testid="agent-failure-reason"><AppIcon name="info"/><span>{failureReason}</span></p>}
+    {result.verificationEvidence && <details className="agent-result-verification" data-testid="agent-result-verification">
+      <summary><span>{result.verificationEvidence.label}</span><AppIcon name="chevronDown"/></summary>
+      <p>{result.verificationEvidence.detail}</p>
+      <ul>{result.verificationEvidence.checks.map(check => <li key={check.id}><span>{check.state}</span><code>{check.command}</code></li>)}</ul>
+    </details>}
     <TimestampHover timestamp={message?.created_at}><div className="agent-terminal-body"><MarkdownMessage content={markdown} references={message?.references ?? []} onOpenReference={onOpenReference} onOpenImage={onOpenImage} activityFiles={activityFiles} modernStatusMarkers/></div></TimestampHover>
     {editedReview && editedReview.files.length > 0 && <ChangedFiles review={editedReview} onReview={onReview} onReviewFile={onReviewFile}/>}
     <div className="agent-terminal-actions">
@@ -500,7 +565,7 @@ export function AgentTurn({
   const invocationTime = [...events].reverse().find(event => event.kind === 'MODEL_STARTED')?.created_at;
   const activeToolId = run?.status === 'RUNNING' && !terminal ? [...tools].reverse().find(tool => ['PROPOSED', 'RUNNING'].includes(tool.status))?.id ?? null : null;
 
-  return <ActivityRunningContext.Provider value={Boolean(run?.status === 'RUNNING' && !terminal)}><ActivityActiveToolContext.Provider value={activeToolId}><ActivityNarrativeTimeContext.Provider value={invocationTime}><ActivityDisclosureContext.Provider value={disclosure}><section
+  return <ActivityToolsContext.Provider value={tools}><ActivityReviewContext.Provider value={onReviewFile}><ActivityRunningContext.Provider value={Boolean(run?.status === 'RUNNING' && !terminal)}><ActivityActiveToolContext.Provider value={activeToolId}><ActivityNarrativeTimeContext.Provider value={invocationTime}><ActivityDisclosureContext.Provider value={disclosure}><section
     className={`message assistant agent-turn${answerOnly ? ' agent-answer' : ''}${terminal ? ' is-terminal' : run?.status === 'PAUSED' ? ' is-paused' : ' is-running'}`}
     data-message-id={messageId}
     data-testid="message-assistant"
@@ -523,14 +588,15 @@ export function AgentTurn({
       <div className="agent-execution-detail is-history" data-testid="agent-execution-detail" id={historyId} hidden={!historyOpen}>
         <ConversationActivityStream items={activityItems} tools={tools} approval={approval} approvalSummary={approvalSummary} busy={busy} onDecision={onDecision} liveNarrative={liveNarrative} activityFiles={activityFiles}/>
       </div>
+      {!historyOpen && <WebResearchSummary tools={tools}/>}
       {!terminal && <div className="agent-current-action" data-testid="agent-current-action"><span className={thinking && !stopping ? 'agent-running-label is-working' : 'agent-running-label'} data-testid="agent-running-label">{stopping ? '正在停止' : run.status === 'RUNNING' ? currentCompactAction(activityItems, tools, events) : currentRunStateLabel(run, events, tools, false)}</span></div>}
-      {!terminal && approval && onDecision && !activityItems.some(item => item.kind === 'APPROVAL' && item.approvalId === approval.id) && <AgentApproval tool={tools.find(tool => tool.id === approval.tool_call_id) ?? null} summary={approvalSummary} busy={busy} onDecision={onDecision}/>}
-      {!terminal && run.status === 'PAUSED' && <AgentProgressSummary run={run} tools={tools} busy={busy} onResume={onResume} onStop={onStop}/>}
+      {!terminal && approval && onDecision && !activityItems.some(item => item.kind === 'APPROVAL' && item.approvalId === approval.id) && <AgentApproval approval={approval} tool={tools.find(tool => tool.id === approval.tool_call_id) ?? null} summary={approvalSummary} busy={busy} onDecision={onDecision}/>}
+      {!terminal && run.status === 'PAUSED' && <AgentProgressSummary run={run} tools={tools} events={events} busy={busy} onResume={onResume} onStop={onStop}/>}
       {!terminal && <CurrentRunMcp runtime={mcpRuntime} busyConnectionId={mcpBusyConnectionId} onActivate={onActivateMcp}/>}
     </>}
     {!textOnlyAnswer && terminal && status && (
       <AgentTerminalResult run={run} status={status} message={terminalMessage} presentation={presentation} tools={tools} partial={partial} review={review} onRetry={onRetry} onReview={onReview} onReviewFile={onReviewFile} onOpenReference={onOpenReference} onOpenImage={onOpenImage} activityFiles={activityFiles}/>
     )}
     {terminalMessage && onCopy && <footer className={`message-actions agent-turn-message-actions ${copied ? 'copy-confirmed' : ''}`}><button type="button" className={copied ? 'copied' : ''} aria-label={copied ? '消息已复制' : '复制消息'} title={copied ? '已复制' : '复制'} onClick={onCopy} data-testid="message-copy"><AppIcon name={copied ? 'check' : 'copy'}/>{copied && <span role="status" aria-live="polite">已复制</span>}</button></footer>}
-  </section></ActivityDisclosureContext.Provider></ActivityNarrativeTimeContext.Provider></ActivityActiveToolContext.Provider></ActivityRunningContext.Provider>;
+  </section></ActivityDisclosureContext.Provider></ActivityNarrativeTimeContext.Provider></ActivityActiveToolContext.Provider></ActivityRunningContext.Provider></ActivityReviewContext.Provider></ActivityToolsContext.Provider>;
 }

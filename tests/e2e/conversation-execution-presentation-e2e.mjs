@@ -10,7 +10,7 @@ import { launchElectron, connectToFieloraApp, waitForExpression, captureScreensh
 // No credential, model request, tool execution or production database access.
 const root = path.resolve(import.meta.dirname, '../..');
 const baseline = process.env.FIELORA_UI_BASELINE === '1';
-const evidence = path.join(root, 'artifacts/conversation-execution-20260930', baseline ? 'before' : 'after');
+const evidence = process.env.FIELORA_E2E_EVIDENCE_DIR ?? path.join(root, 'artifacts/conversation-execution-20260930', baseline ? 'before' : 'after');
 const dataRoot = await mkdtemp(path.join(tmpdir(), 'fielora-execution-ui-'));
 const projectRoot = path.join(dataRoot, 'project');
 const output = [];
@@ -46,7 +46,7 @@ try {
   const inspectorPort = await freeDebuggingPort();
   const launched = await launchElectron({ root: path.join(root, 'apps/desktop'), dataRoot, output,
     executablePath: process.execPath, args: [path.join(root, 'node_modules/@electron-forge/cli/dist/electron-forge.js'), 'start', '--', `--inspect=${inspectorPort}`, `--user-data-dir=${path.join(dataRoot, 'chromium')}`],
-    extraEnv: { Path: `${path.dirname(process.execPath)};${process.env.Path ?? ''}`, FIELORA_CORE_PATH: path.join(root, 'target/release/fielora-core.exe') } });
+    extraEnv: { FIELORA_CORE_PATH: path.join(root, `target/debug/fielora-core${process.platform === 'win32' ? '.exe' : ''}`) } });
   child = launched.child;
   cdp = await connectToFieloraApp({ port: launched.port, output, enablePage: true, timeoutMs: 120000 });
   const evaluate = cdp.eval.bind(cdp);
@@ -59,7 +59,7 @@ try {
     return result.result.value;
   };
   const emit = payload => mainEval(`process.mainModule.require('electron').BrowserWindow.getAllWindows()[0].webContents.send('fielora:core:event',${JSON.stringify(payload)})`);
-  assert.equal(path.resolve(await mainEval(`process.mainModule.require('electron').app.getPath('userData')`)), path.join(dataRoot, 'chromium'));
+  assert.equal(path.resolve(await mainEval(`process.mainModule.require('electron').app.getPath('userData')`)), path.join(dataRoot, 'electron-profile'));
   await wait('window.fieloraTest && document.querySelector("[data-testid=project-workspace]")');
   const ids = await cdp.eval(`(async()=>{
     const p=await window.fieloraTest.createProject({title:'执行过程 UI 回放',goal:null,root_path:${JSON.stringify(projectRoot)}});
@@ -70,7 +70,7 @@ try {
   })()`);
   db = new DatabaseSync(path.join(dataRoot, 'Fielora/data/fielora.db'));
   db.exec('PRAGMA foreign_keys=ON; PRAGMA busy_timeout=5000;');
-  db.prepare(`INSERT INTO agent_runs(id,field_id,conversation_id,provider_config_id,model_id,task,permission,status,current_step,max_steps,next_sequence,error_code,created_at,updated_at,finished_at) VALUES(?,?,?,?,?,?,?,'PAUSED',12,100,100,'AGENT_USER_PAUSED',?,?,NULL)`)
+  db.prepare(`INSERT INTO agent_runs(id,field_id,conversation_id,provider_config_id,model_id,task,permission,status,current_step,max_steps,next_sequence,error_code,created_at,updated_at,finished_at) VALUES(?,?,?,?,?,?,?,'PAUSED',12,100,100,'AGENT_ACCEPTANCE_SCOPE_REQUIRED',?,?,NULL)`)
     .run(runId, ids.field, ids.conversation, ids.provider, 'presentation-fixture', '检查对话区组件', 'FULL_CONTROL', now, now + 60000);
   event('RUN_CREATED', { user_message_id: ids.user }); event('RUN_STARTED', { task_class: 'GENERAL' });
   event('ASSISTANT_NARRATIVE', { step: 1, text: narrative });
@@ -81,12 +81,14 @@ try {
   tool('read_file', {}, 'COMPLETED', null);
   event('ASSISTANT_NARRATIVE', { step: 4, text: '检查命令遇到错误，等待处理。' });
   tool('run_command', { program: 'missing-fixture-command', argv: [] }, 'FAILED', null, 'AGENT_IO_FAILED');
+  event('CHECKPOINT_CREATED', {kind:'GENERAL_WORK_STATE_V1',current_work:{checks_passed:true,unresolved_checks:[{id:'conflict',expected:'重启后仍保留冲突',check:{status:'stale'}}]}});
   event('RUN_PAUSED');
   await cdp.send('Page.reload');
   await wait(`document.querySelector('[data-testid="project-${ids.field}"]')`);
   await cdp.eval(`(()=>{let e=document.querySelector('[data-testid="project-${ids.field}"]');if(e.getAttribute('aria-expanded')!=='true')e.click()})()`);
   await click(`[data-testid="conversation-${ids.conversation}"]`);
   await wait('document.querySelector("[data-testid=agent-pause-notice]")');
+  assert.match(await cdp.eval('document.querySelector("[data-testid=agent-pending-checks]").textContent'), /重启后仍保留冲突（输入已变化）/);
   for (const width of [1280, 1440]) {
     await cdp.eval(`window.fieloraTest.resizeWindow({width:${width},height:1000})`);
     await cdp.send('Emulation.setDeviceMetricsOverride', { width, height: 1000, deviceScaleFactor: 1, mobile: false });
@@ -118,12 +120,12 @@ try {
       const g=await geometry(); metrics.push(g);
       assert.ok(Math.abs(g.body.left-g.composer.left)<1 && Math.abs(g.body.right-g.composer.right)<1,JSON.stringify(g));
       assert.ok(g.body.width<=920.5 && !g.overflow,JSON.stringify(g));
-      assert.equal(g.font,18); assert.equal(g.line,28);
+      assert.equal(g.font,15); assert.equal(g.line,25.5);
     }
     assert.equal(await cdp.eval(`document.querySelector('[data-testid=operation-row]').getBoundingClientRect().height`),32);
     assert.equal(await cdp.eval(`getComputedStyle(document.querySelector('[data-testid=operation-row] button')).backgroundColor`),'rgba(0, 0, 0, 0)');
     assert.equal(await cdp.eval(`document.querySelectorAll('[data-testid=operation-detail]').length`),1);
-    assert.equal(await cdp.eval(`document.querySelector('[data-testid=operation-list]').contains(document.querySelector('[data-testid=operation-detail]'))`),false);
+    assert.equal(await cdp.eval(`document.querySelector('[data-testid=operation-row]:nth-child(3)').contains(document.querySelector('[data-testid=operation-detail]'))`),true);
     await click('[aria-label="复制命令"]');
     await wait(`document.querySelector('[data-testid=operation-detail]').textContent.includes('命令已复制')`);
     assert.equal(await mainEval(`process.mainModule.require('electron').clipboard.readText()`), `powershell -Command ${command}`);
@@ -168,7 +170,7 @@ try {
     assert.ok(await cdp.eval(`window.__openDetail===document.querySelector('[data-testid=operation-detail]')`));
     await cdp.eval(`[...document.querySelectorAll('[data-testid=operation-group-toggle]')].find(e=>e.textContent.includes('10 项操作')).click()`); await settle();
     const scrollList=await cdp.eval(`(()=>{const e=[...document.querySelectorAll('[data-testid=operation-list]')].find(e=>e.children.length===10);return {height:e.clientHeight,scroll:e.scrollHeight}})()`);
-    assert.equal(scrollList.height,256); assert.ok(scrollList.scroll>256);
+    assert.ok(scrollList.height>=320); assert.equal(scrollList.height,scrollList.scroll,'Operation list follows conversation scrolling');
     await cdp.eval(`document.querySelector('.message-list').scrollTop=document.querySelector('.message-list').scrollHeight`); await settle();
     const atBottomBefore=await cdp.eval(`document.querySelector('.message-list').scrollTop`);
     await emit({event:'event.agent.text_delta',run_id:runId,step:21,text_delta:'新的进展正文。'.repeat(200)}); await settle();
@@ -179,12 +181,13 @@ try {
     await emit({event:'event.agent.changed',run_id:runId,sequence,status:'CANCELLED'});
     await wait(`document.querySelector('[data-agent-state=CANCELLED]')`);
     assert.ok(await cdp.eval(`window.__openDetail===document.querySelector('[data-testid=operation-detail]')`),'terminal handoff keeps selected detail DOM');
+    await click('[data-testid=agent-history-toggle]');
     // Dock uses the application's existing workspace controls and real remaining pane width.
     await cdp.eval(`window.dispatchEvent(new CustomEvent('fielora:open-workspace-launcher'))`); await settle();
     await cdp.send('Emulation.setDeviceMetricsOverride',{width:1280,height:1000,deviceScaleFactor:1,mobile:false}); await settle();
     const narrow=await geometry(); metrics.push(narrow);
     assert.ok(narrow.pane.width<=640,JSON.stringify(narrow));
-    assert.ok(Math.abs(narrow.body.left-narrow.pane.left-16)<1,JSON.stringify(narrow));
+    assert.ok(Math.abs(narrow.body.left-narrow.pane.left-20)<1,JSON.stringify(narrow));
     assert.ok(Math.abs(narrow.body.left-narrow.composer.left)<1 && Math.abs(narrow.body.right-narrow.composer.right)<1 && !narrow.overflow,JSON.stringify(narrow));
     await cdp.eval(`document.activeElement?.blur(); document.querySelector('.message-list').scrollTop=0`); await settle();
     await cdp.eval(`document.querySelector('.message-list').scrollTop=0`); await shot('narrow-dock');
@@ -209,7 +212,7 @@ try {
     await click(`[data-testid="conversation-${ids.conversation}"]`); await wait(`document.querySelector('[data-testid=operation-group-toggle]')`);
     await cdp.eval(`document.querySelector('.message-list').scrollTop=0`);
     const fonts=await cdp.eval(`(()=>{const p=getComputedStyle(document.querySelector('.conversation-narrative p')),c=getComputedStyle(document.querySelector('.conversation-narrative code'));return {body:parseFloat(p.fontSize),code:parseFloat(c.fontSize),family:p.fontFamily,codeFamily:c.fontFamily}})()`);
-    assert.equal(fonts.body,21.6); assert.equal(fonts.code,17); assert.match(fonts.family,/Microsoft YaHei/); assert.match(fonts.codeFamily,/Consolas/);
+    assert.equal(fonts.body,18); assert.equal(fonts.code,17); assert.match(fonts.family,/Microsoft YaHei/); assert.match(fonts.codeFamily,/Consolas/);
     assert.equal(await cdp.eval(`document.querySelector('[data-testid=operation-group-toggle]').getAttribute('aria-expanded')`),'false','legacy display preference does not create another rendering mode');
     await shot('font-settings-dark');
     await writeFile(path.join(evidence,'metrics.json'),JSON.stringify({metrics,fonts,scrollList,streaming:true,terminalIdentity:true,commandClipboard:true,dockDrag:true},null,2));

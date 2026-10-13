@@ -22,6 +22,9 @@ const config: ForgeConfig = {
   plugins: [
     new WebpackPlugin({
       mainConfig,
+      // Preserve Forge's development script/source-map policy; only admit the
+      // isolated prototype document scheme as an additional frame destination.
+      devContentSecurityPolicy: "default-src 'self' 'unsafe-inline' data:; script-src 'self' 'unsafe-eval' 'unsafe-inline' data:; frame-src fielora-prototype:",
       renderer: {
         config: rendererConfig,
         entryPoints: [

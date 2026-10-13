@@ -3,6 +3,8 @@ import type { ResultReference } from '@fielora/contracts';
 import type { ResultImagePreviewView } from '../workspace-types';
 import type { ActivityFileLink } from './agent-activity-detail';
 import { AppIcon } from './ui/Icon';
+import { InteractivePrototype } from './InteractivePrototype';
+import { prototypeReferences } from './interactive-prototype';
 
 export interface ActivityFileContext {
   resolve: (target: string) => ActivityFileLink | null;
@@ -104,9 +106,9 @@ function InlineResultImage({ reference, context }: { reference: ResultReference 
   </figure>;
 }
 
-function renderInline(value: string, keyPrefix: string, context?: ReferenceRenderContext): ReactNode[] {
+function renderInline(value: string, keyPrefix: string, context?: ReferenceRenderContext, allowFileLinks = true): ReactNode[] {
   const status = context?.modernStatusMarkers ? /^(?:✅|✔️?|☑️?)\s+(.+)$/u.exec(value) : null;
-  if (status) return [<span className="markdown-status-marker" role="img" aria-label="对勾" key={`${keyPrefix}-status`}><AppIcon name="check"/></span>, ...renderInline(status[1]!, keyPrefix, { ...context!, modernStatusMarkers: false })];
+  if (status) return [<span className="markdown-status-marker" role="img" aria-label="对勾" key={`${keyPrefix}-status`}><AppIcon name="check"/></span>, ...renderInline(status[1]!, keyPrefix, { ...context!, modernStatusMarkers: false }, allowFileLinks)];
   const result: ReactNode[] = [];
   let remaining = value;
   let sequence = 0;
@@ -118,23 +120,33 @@ function renderInline(value: string, keyPrefix: string, context?: ReferenceRende
     }
     if (match.index > 0) result.push(remaining.slice(0, match.index));
     const key = `${keyPrefix}-${sequence++}`;
-    if (match.kind === 'code') result.push(<code key={key}>{match.label}</code>);
-    if (match.kind === 'strong') result.push(<strong key={key}>{renderInline(match.label, key, context)}</strong>);
-    if (match.kind === 'strike') result.push(<del key={key}>{renderInline(match.label, key, context)}</del>);
-    if (match.kind === 'emphasis') result.push(<em key={key}>{renderInline(match.label, key, context)}</em>);
+    if (match.kind === 'code') {
+      // Only an exact, existing reference or successful read can make a path
+      // actionable. Keep command fragments inert and never nest controls.
+      const reference = allowFileLinks && context?.onOpenReference
+        ? [...context.references.values()].find(item => item.target.kind === 'PROJECT_FILE' && item.target.relative_path === match.label) : undefined;
+      const file = !reference && allowFileLinks && context?.activityFiles?.open
+        ? context.activityFiles.resolve(`fielora-project-file:${match.label}`) : null;
+      result.push(reference || file
+        ? <button key={key} type="button" className="markdown-typed-reference" data-reference-kind="PROJECT_FILE" data-inline-file="true" title={match.label} onClick={() => reference ? context?.onOpenReference?.(reference) : file && context?.activityFiles?.open?.(file)}><code>{match.label}</code></button>
+        : <code key={key}>{match.label}</code>);
+    }
+    if (match.kind === 'strong') result.push(<strong key={key}>{renderInline(match.label, key, context, allowFileLinks)}</strong>);
+    if (match.kind === 'strike') result.push(<del key={key}>{renderInline(match.label, key, context, allowFileLinks)}</del>);
+    if (match.kind === 'emphasis') result.push(<em key={key}>{renderInline(match.label, key, context, allowFileLinks)}</em>);
     if (match.kind === 'link' && match.target?.startsWith('fielora-reference:')) {
       const reference = context?.references.get(match.target.slice('fielora-reference:'.length));
       if (reference) {
-        result.push(<button key={key} type="button" className="markdown-typed-reference" data-reference-kind={reference.target.kind} data-reference-id={reference.id} onClick={() => context?.onOpenReference?.(reference)} disabled={!context?.onOpenReference}><AppIcon name={reference.target.kind === 'IMAGE' ? 'images' : reference.target.kind === 'WEB_REFERENCE' ? 'browse' : 'files'}/>{renderInline(match.label, key, context)}</button>);
+        result.push(<button key={key} type="button" className="markdown-typed-reference" data-reference-kind={reference.target.kind} data-reference-id={reference.id} onClick={() => context?.onOpenReference?.(reference)} disabled={!context?.onOpenReference}><AppIcon name={reference.target.kind === 'IMAGE' ? 'images' : reference.target.kind === 'WEB_REFERENCE' ? 'browse' : 'files'}/>{renderInline(match.label, key, context, false)}</button>);
       } else {
-        result.push(<span key={key} className="markdown-reference-unavailable">{renderInline(match.label, key, context)}</span>);
+        result.push(<span key={key} className="markdown-reference-unavailable">{renderInline(match.label, key, context, false)}</span>);
       }
     } else if (match.kind === 'link' && match.target?.toLowerCase().startsWith('fielora-project-file:')) {
       const file = context?.activityFiles?.resolve(match.target);
       result.push(file && context?.activityFiles?.open
         ? <button key={key} type="button" className="markdown-typed-reference" data-reference-kind="PROJECT_FILE" onClick={() => context.activityFiles?.open?.(file)}><AppIcon name="files"/>{match.label}</button>
         : <code key={key}>{match.label}</code>);
-    } else if (match.kind === 'link') result.push(<a key={key} href={match.target} target="_blank" rel="noreferrer noopener">{renderInline(match.label, key, context)}</a>);
+    } else if (match.kind === 'link') result.push(<a key={key} href={match.target} target="_blank" rel="noreferrer noopener">{renderInline(match.label, key, context, false)}</a>);
     remaining = remaining.slice(match.index + match.length);
   }
   return result;
@@ -271,5 +283,5 @@ function renderMarkdown(content: string, onCopyError?: (message: string) => void
 
 export function MarkdownMessage({ content, streaming = false, onCopyError, references = [], onOpenReference, onOpenImage, activityFiles, modernStatusMarkers = false }: MarkdownMessageProps) {
   const context: ReferenceRenderContext = { references: new Map(references.map((reference) => [reference.id, reference])), onOpenReference, onOpenImage, activityFiles, modernStatusMarkers };
-  return <div className={`markdown-body${streaming ? ' is-streaming' : ''}`}>{renderMarkdown(content, onCopyError, context)}</div>;
+  return <div className={`markdown-body${streaming ? ' is-streaming' : ''}`}>{renderMarkdown(content, onCopyError, context)}{prototypeReferences(references, streaming).map(reference => <InteractivePrototype key={`${reference.id}:${reference.target.expected_sha256}`} reference={reference} onOpenSource={onOpenReference}/>)}</div>;
 }

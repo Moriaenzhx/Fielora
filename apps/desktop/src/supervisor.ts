@@ -62,11 +62,11 @@ export class CoreProcessSupervisor extends EventEmitter {
     }
   }
 
-  async request(method: string, params: unknown = {}): Promise<unknown> {
+  async request(method: string, params: unknown = {}, deadlineMs?: number): Promise<unknown> {
     if (this.state !== 'READY' || !this.client) {
       throw new Error('Fielora Core is unavailable');
     }
-    return this.client.request(method, params);
+    return this.client.request(method, params, deadlineMs);
   }
 
   getHealth(): HealthDTO {

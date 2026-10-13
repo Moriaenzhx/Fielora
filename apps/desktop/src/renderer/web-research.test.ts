@@ -1,0 +1,54 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import type { AgentToolCallView } from '@fielora/contracts';
+import { researchOperation, researchSummary, researchUrl } from './web-research.ts';
+const source = {title:'Official help',url:'https://example.com/docs',snippet:'Returned source content <script>not executable</script>'};
+const call = (overrides: Partial<AgentToolCallView> = {}): AgentToolCallView => ({id:'search',run_id:'run',name:'web.search',effect:'NETWORK',status:'COMPLETED',policy_decision:'ALLOW',arguments:{query:'official docs'},receipt:{success:true,result_count:1,sources:[source],retrieved_at:123},error_code:null,created_at:1,updated_at:2,...overrides});
+
+test('research displays actual returned excerpts and preserves literal untrusted markup', () => {
+  const operation = researchOperation(call(), [], false)!;
+  assert.equal(operation.state, 'success');
+  assert.equal(operation.sources[0]?.excerpt, source.snippet);
+  assert.match(operation.sources[0]!.readLabel, /未读取正文/);
+  assert.deepEqual(researchSummary([]), []);
+  assert.equal(researchOperation(call({name:'work_plan'}),[],true),null);
+});
+test('running and empty results are distinct from failed and interrupted searches', () => {
+  assert.equal(researchOperation(call({status:'RUNNING',receipt:null}),[],true)?.state,'running');
+  assert.equal(researchOperation(call({status:'RUNNING',receipt:null}),[],false)?.state,'interrupted');
+  assert.match(researchOperation(call({status:'PROPOSED',receipt:null}),[],true)!.heading,/等待执行/);
+  assert.equal(researchOperation(call({status:'FAILED',error_code:'AGENT_TOOL_REQUEST_TIMEOUT'}),[],false)?.sources.length,0);
+  assert.match(researchOperation(call({status:'FAILED',error_code:'AGENT_TOOL_REQUEST_TIMEOUT'}),[],false)!.detail,/超时/);
+  assert.equal(researchOperation(call({receipt:{success:true,result_count:0,sources:[]}}),[],false)?.detail,'未找到结果');
+  assert.equal(researchOperation(call({receipt:{success:false,sources:[source]}}),[],false)?.state,'failed');
+});
+test('source read state requires same Run and exact URL with returned body, never a planned read', () => {
+  const fetch = call({id:'fetch',name:'web.fetch',arguments:{url:source.url},receipt:{success:true,final_url:source.url,text_returned_chars:123}});
+  const label = (reads: AgentToolCallView[]) => researchOperation(call(),reads,false)!.sources[0]!.readLabel;
+  assert.match(label([fetch]),/已返回正文/);
+  assert.match(label([{...fetch,run_id:'foreign'}]),/未读取/);
+  assert.match(label([{...fetch,status:'RUNNING'}]),/未读取/);
+  assert.match(label([{...fetch,status:'FAILED'}]),/读取失败/);
+  assert.match(label([{...fetch,arguments:{url:'https://example.com/other'},receipt:{success:true,final_url:'https://example.com/other',text_returned_chars:123}}]),/未读取/);
+  assert.match(label([{...fetch,receipt:{success:true,final_url:source.url,text_returned_chars:0}}]),/未读取/);
+});
+test('legacy sources remain visible after serialization with no fabricated excerpt; unsafe links rejected', () => {
+  const old = call({receipt:{success:true,result_count:1,sources:[{title:source.title,url:source.url}]}});
+  assert.equal(researchOperation(JSON.parse(JSON.stringify(old)),[],false)!.sources[0]!.excerpt,'');
+  assert.equal(researchUrl('javascript:alert(1)'),null);
+  assert.equal(researchUrl('https://secret@example.com/'),null);
+  assert.equal(researchUrl('file:///tmp/a'),null);
+  assert.equal(researchUrl(source.url+'#section'),source.url);
+  assert.equal(researchOperation(call({receipt:{success:true,sources:[{title:'bad',url:'javascript:alert(1)'}]}}),[],false)!.sources.length,0);
+});
+test('fetch previews, redirects and deduplicated summary retain their actual coverage', () => {
+  const fetch = call({id:'fetch',name:'web.fetch',arguments:{url:'https://example.com/old'},receipt:{success:true,requested_url:'https://example.com/old',final_url:source.url,title:'Docs body',text_returned_chars:1000,excerpt:'Body excerpt',excerpt_truncated:true,truncated:true}});
+  const operation = researchOperation(fetch,[fetch],false)!;
+  assert.equal(operation.sources[0]?.excerpt,'Body excerpt');
+  assert.equal(operation.sources[0]?.truncated,true);
+  assert.match(operation.sources[0]!.readLabel,/部分正文/);
+  const summary = researchSummary([call(),fetch]);
+  assert.equal(summary.length,1);
+  assert.equal(summary[0]?.url,source.url);
+  assert.equal(researchOperation(call({receipt:{success:true,sources:[source],retrieved_at:Infinity}}),[],false)?.retrievedAt,null);
+});

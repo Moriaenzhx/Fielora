@@ -148,7 +148,9 @@ impl TurnContext {
                 .map(|o| o.content.as_str())
                 .unwrap_or(&current.task),
         );
-        messages.push(AgentModelMessage::User(format!("{MARKER}{}\n{}",json!({
+        // Static guidance already lives in the system prompt/tool definitions.
+        // Repeating it here takes space away from current source and diagnostics.
+        messages.push(AgentModelMessage::User(format!("{MARKER}{}",json!({
             "current_request":current.task,"source_user_message_id":self.origin.as_ref().map(|o|&o.id),
             "historical_execution_index":self.index,"historical_messages_omitted":self.omitted_messages,
             "historical_outcomes_are_not_current_verification":true,
@@ -159,7 +161,7 @@ impl TurnContext {
             "user_clarifications":user_input,
             "interpretation_is_permission_or_verification":false,
             "current_request_constraint": if access_question { Some("ACCESS_CONFIRMATION: confirm the supplied local path with list_files or read_file. No comparison, implementation, process, delegation or older task continuation. The Harness finishes from the current source-specific receipt.") } else { None }
-        }),format_args!("{}\n{}\n{}", GUIDANCE, crate::agent_request_intent::GUIDANCE, crate::agent_user_input::GUIDANCE))));
+        }))));
         // Rebuild after compaction and restart. The original task stays durable,
         // while the latest natural-language reply is an actual user turn, not
         // merely a nested answer expected to fill an assistant-chosen field.

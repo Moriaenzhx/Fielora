@@ -9,6 +9,7 @@ const { BrowserRuntime } = require(path.join(root, 'apps/desktop/src/browser-run
 const evidence = path.resolve(process.env.FIELORA_E2E_EVIDENCE_DIR || path.join(root, 'artifacts/agent-browser-readiness-20260924/native'));
 app.setPath('userData', fs.mkdtempSync(path.join(require('node:os').tmpdir(), 'fielora-readiness-test-')));
 app.commandLine.appendSwitch('disable-features', 'CalculateNativeWinOcclusion');
+if (process.platform === 'darwin') app.commandLine.appendSwitch('disable-backgrounding-occluded-windows');
 app.whenReady().then(async () => {
   let runtime, win, server;
   const results = {};
@@ -16,7 +17,10 @@ app.whenReady().then(async () => {
   try {
     server = http.createServer((req, res) => {
       if (req.url === '/hang') return;
-      if (req.url === '/long') {
+      if (req.url === '/errors') {
+        res.setHeader('Content-Type', 'text/html');
+        res.end('<!doctype html><button onclick="throw new Error(\'click-diagnostic\')">Broken click</button><script>throw new ReferenceError("cIdx is not defined")</script>');
+      } else if (req.url === '/long') {
         res.setHeader('Content-Type', 'text/plain');
         res.end('A'.repeat(25000) + 'TAIL_MUST_NOT_BE_ASSUMED_ABSENT');
       } else if (req.url === '/delayed') {
@@ -24,7 +28,7 @@ app.whenReady().then(async () => {
         timers.add(timer);
       } else {
         res.setHeader('Content-Type', 'text/html');
-        res.end('<!doctype html><body><h1>readiness-visible-text</h1><button onclick="this.textContent=\'clicked-once\'">Click</button></body>');
+        res.end('<!doctype html><body><h1>readiness-visible-text</h1><button onclick="this.textContent=\'clicked-once\'">Click</button><button style="display:block;position:relative;left:calc(100vw - 140px);margin-top:1100px;width:100px" onclick="this.textContent=\'far-clicked\'">Far target</button></body>');
       }
     });
     await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
@@ -51,6 +55,39 @@ app.whenReady().then(async () => {
     const clicked = await call({ action: 'click', ref: page.elements.find(e => e.text === 'Click').ref, snapshot_id: page.snapshot_id });
     assert.equal(clicked.success, true); assert.match(clicked.text, /clicked-once/);
     results.recovered_input = clicked;
+    // A scaled desktop viewport must hit the same DOM control, not just report
+    // that Chromium accepted mouse events at a different coordinate.
+    results.scaled_clicks = [];
+    for (const viewport of [{ width: 1280, height: 900 }, { width: 640, height: 480 }, { width: 1920, height: 1080 }]) {
+      const resized = await call({ action: 'resize', ...viewport });
+      results.scaled_clicks.push({ requested: viewport, resized: resized.viewport });
+      assert.deepEqual(resized.viewport, viewport, 'Resize must reach the actual CSS viewport');
+      page = await call({ action: 'open', url: base });
+      results.scaled_clicks.at(-1).opened = page.viewport;
+      assert.deepEqual(page.viewport, viewport, 'Navigation must preserve the requested CSS viewport');
+      const scaledClick = await call({ action: 'click', ref: page.elements.find(e => e.text === 'Click').ref, snapshot_id: page.snapshot_id });
+      results.scaled_clicks.at(-1).near = scaledClick;
+      assert.match(scaledClick.text, /clicked-once/, 'Scaled native input must change the actual control');
+      const far = await call({ action: 'click', ref: scaledClick.elements.find(e => e.text === 'Far target').ref, snapshot_id: scaledClick.snapshot_id });
+      results.scaled_clicks.at(-1).far = far;
+      assert.equal(far.scroll_performed, true);
+      assert.match(far.text, /far-clicked/, 'Scroll and a large CSS x coordinate must still hit the control');
+      page = await call({ action: 'reload' });
+      assert.deepEqual(page.viewport, viewport, 'Reload must also restore the requested CSS viewport');
+      const reloadedClick = await call({ action: 'click', ref: page.elements.find(e => e.text === 'Click').ref, snapshot_id: page.snapshot_id });
+      assert.match(reloadedClick.text, /clicked-once/);
+      results.scaled_clicks.at(-1).reload_clicked = true;
+    }
+    page = await call({ action: 'open', url: base + '/errors' });
+    assert.equal(page.page_loaded, true, 'Navigation can succeed while application code fails');
+    assert.ok(page.page_errors.some(e => e.message.includes('cIdx is not defined') && e.source === base + '/errors' && e.line > 0));
+    const broken = await call({ action: 'click', ref: page.elements.find(e => e.text === 'Broken click').ref, snapshot_id: page.snapshot_id });
+    assert.equal(broken.success, true, 'Input delivery is separate from a JavaScript exception');
+    assert.ok(broken.page_errors.some(e => e.message.includes('click-diagnostic')));
+    results.runtime_errors = broken.page_errors;
+    page = await call({ action: 'open', url: base });
+    assert.deepEqual(page.page_errors, [], 'A new document does not inherit old errors');
+    page = await call({ action: 'reload' }); assert.deepEqual(page.page_errors, []);
     // A short DOM tree with long text used to claim partial=false at 24k chars.
     page = await call({ action: 'open', url: base + '/long' });
     assert.equal(page.success, true); assert.equal(page.text.length, 24000);

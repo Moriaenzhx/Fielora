@@ -1,11 +1,40 @@
 import type { AgentEventView, AgentRunView, AgentToolCallView } from '@fielora/contracts';
 import { providerResponseReason } from './provider-response-errors.ts';
+import { webSearchFailure } from './web-search.ts';
 
-export function activityStatusLabel(status: AgentToolCallView['status']): string {
+export function activityStatusLabel(status: AgentToolCallView['status'], errorCode?: string | null): string {
+  if (status === 'FAILED' && errorCode === 'AGENT_EDIT_ALREADY_CURRENT') return '内容已一致';
   return { PROPOSED: '等待执行', RUNNING: '执行中', WAITING_APPROVAL: '等待批准', COMPLETED: '已完成', FAILED: '执行失败', DENIED: '已拒绝', CANCELLED: '已停止', UNKNOWN: '执行状态待确认' }[status];
 }
 
 export interface ActivityDetailField { label: string; text: string; code?: boolean }
+
+export function webActivity(tool: AgentToolCallView): { action: string; target: string; detail: string } | null {
+  if (!['browser', 'web.fetch', 'web.search'].includes(tool.name)) return null;
+  const args = (tool.arguments ?? {}) as Record<string, unknown>;
+  const receipt = (tool.receipt ?? {}) as Record<string, unknown>;
+  const succeeded = tool.status === 'COMPLETED' && receipt.success === true;
+  const actions: Record<string, string> = { open: '打开网页', inspect: '读取网页', reload: '刷新网页', click: '点击网页控件', fill: '填写网页', select: '选择网页选项', scroll: '滚动网页', screenshot: '截取网页', resize: '调整网页视口', request_login: '请求网页登录', download: '下载网页文件' };
+  const action = tool.name === 'web.search' ? '搜索网页' : tool.name === 'web.fetch' ? '读取网页正文' : actions[String(args.action)] ?? '操作网页';
+  let target = '';
+  if (tool.name === 'web.search') target = typeof args.query === 'string' ? args.query.slice(0, 140) : '';
+  else {
+    const address = succeeded ? receipt.final_url ?? receipt.url ?? args.url : args.url ?? receipt.requested_url;
+    try { const url = new URL(String(address)); if (['http:', 'https:'].includes(url.protocol) && !url.username && !url.password) target = url.hostname; } catch { /* Unknown target remains unknown. */ }
+  }
+  const count = receipt.text_returned_chars;
+  const download = receipt.download as Record<string, unknown> | undefined;
+  if (tool.name === 'browser' && args.action === 'download' && succeeded && download?.status === 'COMPLETED'
+    && typeof download.bytes === 'number' && Number.isSafeInteger(download.bytes) && download.bytes >= 0) {
+    return { action, target, detail: `${target}${target ? ' · ' : ''}已下载 ${download.bytes} 字节` };
+  }
+  if (tool.name === 'web.search' && succeeded && typeof receipt.result_count === 'number') {
+    return { action, target, detail: `${target} · ${receipt.result_count} 个来源` };
+  }
+  const detail = succeeded && typeof count === 'number' && Number.isSafeInteger(count) && count >= 0
+    ? `${target}${target ? ' · ' : ''}已返回 ${count} 字符${receipt.text_truncated === true || receipt.truncated === true ? '（部分正文）' : ''}` : target;
+  return { action, target, detail };
+}
 
 /** Only the existing renderer DTO is used, including its upstream redaction.
  * Display and clipboard share exactly these strings; never fetch raw logs.
@@ -85,9 +114,15 @@ export function resolveActivityFileLink(target: string, tools: readonly AgentToo
 
 /** Presentation only: preserve the recorded action, including its range and failure. */
 export function activityToolDescription(tool: AgentToolCallView): string {
+  const web = webActivity(tool);
+  if (web) return web.detail;
   const args = tool.arguments && typeof tool.arguments === 'object' && !Array.isArray(tool.arguments)
     ? tool.arguments as Record<string, unknown> : {};
   const path = typeof args.path === 'string' ? args.path : '';
+  if (tool.name === 'computer') {
+    const actions: Record<string, string> = { status: '检查电脑控制能力', observe: '读取应用窗口', activate: '切换应用', click: '点击应用控件', type: '输入文字', press: '发送快捷键', scroll: '滚动应用窗口' };
+    return [actions[String(args.action)] ?? '操作电脑应用', typeof args.app_id === 'string' ? args.app_id : ''].filter(Boolean).join(' · ');
+  }
   if (tool.name === 'work_plan') {
     const next = args.next_step as Record<string, unknown> | undefined;
     return typeof next?.action === 'string' ? next.action : '保留目标与下一步，计划可调整';
@@ -110,9 +145,24 @@ export function activityToolDescription(tool: AgentToolCallView): string {
 }
 
 export function activityToolIssue(tool: AgentToolCallView): string | null {
+  if (tool.name === 'web.search' && tool.status === 'FAILED') return webSearchFailure(tool.error_code);
   const receipt = tool.receipt as Record<string, unknown> | null;
+  if (tool.name === 'computer') {
+    const code = String(receipt?.error_code ?? tool.error_code ?? '');
+    if (tool.status === 'UNKNOWN' || receipt?.outcome_unknown === true) return '输入结果尚未确认；任务已保留现场，不能自动重复该操作。';
+    if (code.includes('PERMISSION') || code.includes('ACCESSIBILITY')) return 'macOS 尚未授予辅助功能权限；完全访问不会替代系统授权，本次未输入。';
+    if (code.includes('UNSUPPORTED')) return '当前系统尚不支持此项电脑控制能力，未执行操作。';
+    if (code.includes('STALE') || code.includes('FOCUS') || code.includes('TARGET_CHANGED')) return '应用或焦点已变化，未派发输入；需要重新观察当前窗口。';
+    if (code.includes('PROTECTED') || code.includes('GOVERNED_OPERATION')) return '此操作需要经过专门的授权通道，Agent 不能用电脑控制绕过确认。';
+    if (code === 'COMPUTER_BUSY') return '已有电脑操作正在执行，本次没有派发输入。';
+    if (receipt?.success === false) return '这次电脑操作未成功，具体原因已记录在执行详情中。';
+  }
   if (receipt?.user_action_required === 'LOGIN') return '请在右侧浏览器完成登录，然后继续页面验证。';
   if (receipt?.error_code === 'BROWSER_LOGIN_NOT_OBSERVED') return '当前页面未观察到登录所需的密码输入框，请重新检查页面。';
+  const downloadError = receipt?.error_code ?? (receipt?.download_notice as Record<string, unknown> | undefined)?.error_code;
+  if (downloadError === 'BROWSER_DOWNLOAD_NOT_ARMED') return '此次下载已取消，尚未保存文件；Agent 需要使用下载操作取得实际导出文件。';
+  if (downloadError === 'BROWSER_DOWNLOAD_TOO_LARGE') return '文件超过本次下载的 16 MiB 上限，未保留文件。';
+  if (typeof downloadError === 'string' && downloadError.startsWith('BROWSER_DOWNLOAD_')) return '未取得完整下载文件，请根据执行详情核对原因；点击成功不能证明导出成功。';
   if (receipt?.error_code === 'BROWSER_SERVER_NOT_TRACKED' || receipt?.error_code === 'BROWSER_SERVER_NOT_STARTED') return '当前任务未关联服务进程；已有服务可能仍在运行，需要检查实际地址。';
   if (receipt?.error_code === 'BROWSER_NAVIGATION_FAILED') return '目标页面加载失败，未取得可验证的页面内容；这不能证明需要登录。';
   if (tool.name === 'browser_server' && receipt?.readiness === 'NOT_CHECKED') return '进程已启动，网站地址尚未检查。';
@@ -120,6 +170,7 @@ export function activityToolIssue(tool: AgentToolCallView): string | null {
   if (receipt?.error_code === 'BROWSER_SERVER_ALREADY_RUNNING') return '该任务的服务进程已在运行，无需重复启动。';
   if (tool.name === 'browser_server' && receipt?.readiness === 'NOT_LISTENING') return '该地址未接受连接，需要核对开发服务的地址和启动状态。';
   const labels: Record<string, string> = {
+    AGENT_EDIT_ALREADY_CURRENT: '目标内容已经一致，本次没有写入。是否修复成功仍以当前版本的检查结果为准。',
     AGENT_WORK_EVIDENCE_STALE: '引用对应的文件已变化；这条旧证据需要重新核对。',
     AGENT_WORK_QUOTE_MISMATCH: '引用未匹配文件内容，未作为已确认事实。',
     AGENT_WORK_EVIDENCE_REQUIRED: '引用未关联成功的文件读取，未作为已确认事实。',

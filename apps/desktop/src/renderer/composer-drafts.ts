@@ -3,6 +3,7 @@ import type { WorkspaceAttachmentView } from '../workspace-types';
 
 export type ComposerDraft = { prompt: string; attachments: WorkspaceAttachmentView[] };
 const emptyDraft = (): ComposerDraft => ({ prompt: '', attachments: [] });
+export const consumeComposerDraft = (current: ComposerDraft, submitted: ComposerDraft): ComposerDraft => current === submitted ? emptyDraft() : current;
 export const composerDraftKey = (projectId: string, conversationId: string): string => JSON.stringify([projectId, conversationId]);
 
 // Unsaved editing state lasts for this app session, including workspace remounts.
@@ -36,6 +37,6 @@ export function useComposerDraft(key: string) {
   const setPrompt = useCallback((value: SetStateAction<string>) => update(activeKey.current, current => ({ ...current, prompt: typeof value === 'function' ? value(current.prompt) : value })), [update]);
   const setAttachments = useCallback((value: SetStateAction<WorkspaceAttachmentView[]>) => update(activeKey.current, current => ({ ...current, attachments: typeof value === 'function' ? value(current.attachments) : value })), [update]);
   const move = useCallback((from: string, to: string) => sessionDrafts.move(from, to), []);
-  const clear = useCallback((target: string) => update(target, emptyDraft), [update]);
-  return { ...draft, setPrompt, setAttachments, update, move, clear };
+  const clear = useCallback((target: string, submitted?: ComposerDraft) => update(target, current => submitted ? consumeComposerDraft(current, submitted) : emptyDraft()), [update]);
+  return { ...draft, snapshot: draft, setPrompt, setAttachments, update, move, clear };
 }

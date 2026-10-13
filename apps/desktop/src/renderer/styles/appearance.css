@@ -544,8 +544,9 @@ button[type="submit"]:disabled { background: var(--fl-action-primary-disabled); 
 .settings-extension-details code, .settings-catalog-fact code { overflow-wrap: anywhere; color: var(--fl-color-text-muted); font: var(--fl-font-size-caption)/1.5 var(--fl-font-mono); }
 .settings-authority-note, .settings-catalog-fact { color: var(--fl-color-text-muted); font-size: var(--fl-font-size-meta); line-height: var(--fl-line-height-body); }
 .settings-plugin-add { display: flex; align-items: end; gap: var(--fl-space-4); padding: var(--fl-space-5) var(--fl-space-1); border-top: 1px solid var(--fl-color-border-soft); }
-.settings-plugin-add label { min-width: 0; flex: 1; display: grid; gap: var(--fl-space-2); color: var(--fl-color-text-muted); font-size: var(--fl-font-size-meta); }
+.settings-plugin-add label { min-width: 0; flex: 1; display: grid; gap: var(--fl-space-2); margin: 0; color: var(--fl-color-text-muted); font-size: var(--fl-font-size-meta); }
 .settings-plugin-add input { width: 100%; min-height: var(--fl-control-lg); padding: 0 var(--fl-space-4); border: 1px solid var(--fl-color-border); border-radius: var(--fl-radius-input); color: var(--fl-color-text); background: var(--fl-color-surface-subtle); }
+.settings-plugin-add > button { flex: 0 0 auto; min-height: var(--fl-control-lg); white-space: nowrap; }
 .settings-plugin-list { border-top: 1px solid var(--fl-color-border-soft); }
 .settings-plugin-row { border-bottom: 1px solid var(--fl-color-border-soft); }
 .settings-plugin-summary { min-height: 74px; display: flex; align-items: center; justify-content: space-between; gap: var(--fl-space-6); padding: var(--fl-space-4) var(--fl-space-1); }

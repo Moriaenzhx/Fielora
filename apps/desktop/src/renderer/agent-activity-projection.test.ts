@@ -3,6 +3,14 @@ import test from 'node:test';
 import type { AgentEventKind, AgentEventView, AgentToolCallView } from '@fielora/contracts';
 import { buildConversationActivityProjection, compactOperationTimeline, reconcileLiveNarrative } from './agent-activity-projection.ts';
 
+test('research results stay separate and chronological without assistant announcements creating calls', () => {
+  const tools = [tool('a','read_file','OBSERVE','COMPLETED'),tool('b','web.search','NETWORK','COMPLETED'),tool('c','web.fetch','NETWORK','FAILED'),tool('d','read_file','OBSERVE','COMPLETED')];
+  const events = tools.map((t,i)=>event(i+1,'TOOL_PROPOSED',{tool_call_id:t.id}));
+  const items = compactOperationTimeline(buildConversationActivityProjection(events,tools));
+  assert.deepEqual(items.filter(i=>i.kind==='GROUP').map(i=>i.entries.map(e=>e.kind==='TOOL' && e.toolId)),[['a'],['b'],['c'],['d']]);
+  assert.equal(buildConversationActivityProjection([event(1,'ASSISTANT_NARRATIVE',{text:'开始联网搜索',step:1})],[]).filter(i=>i.kind==='GROUP').length,0);
+});
+
 test('consecutive retries occupy one row without erasing execution boundaries or durable history', () => {
   const events = [event(1,'RUN_PAUSED'),event(2,'RUN_RESUMED'),event(3,'RUN_PAUSED'),event(4,'RUN_RESUMED'),event(5,'RUN_PAUSED')];
   const raw = buildConversationActivityProjection(events, []);
@@ -198,6 +206,20 @@ test('approved tools remain after the approval anchor and carry persisted termin
   assert.equal(activity?.completedAt, 6_000);
 });
 
+test('second confirmation supersedes the first active approval without starting a tool', () => {
+  const projection = buildConversationActivityProjection([
+    event(1, 'APPROVAL_REQUESTED', { approval: { id: 'clear', tool_call_id: 'delete', confirmation_stage: 1, nonce: 'first' } }),
+    event(2, 'CHECKPOINT_CREATED', { reason: 'APPROVAL_FIRST_CONFIRMATION' }),
+    event(3, 'APPROVAL_REQUESTED', { approval: { id: 'clear', tool_call_id: 'delete', confirmation_stage: 2, nonce: 'second' } }),
+  ], []);
+  const approvals = projection.filter(item => item.kind === 'APPROVAL');
+  assert.equal(approvals.length, 2);
+  assert.notEqual(approvals[0]?.id, approvals[1]?.id);
+  assert.equal(approvals[0]?.completedAt, 3_000);
+  assert.equal(approvals[1]?.completedAt, null);
+  assert.equal(projection.some(item => item.kind === 'GROUP'), false);
+});
+
 test('internal delegate bookkeeping and transient delta event kinds do not become durable conversation activity', () => {
   const internal = tool('delegate', 'delegate_readonly', 'OBSERVE', 'COMPLETED', { objective: 'inspect' });
   const projection = buildConversationActivityProjection([
@@ -227,4 +249,12 @@ test('corrective review shows its next check without claiming verification or ex
   assert.equal(projected.length,1);
   assert.equal(projected[0]?.kind === 'NARRATIVE' && projected[0].text,'已复盘之前的尝试，接下来验证：只重跑编码查询用例');
   assert.ok(!JSON.stringify(projected).includes('private operational data'));
+});
+
+test('already obsolete review never displays its old repair as the next action', () => {
+  const projected = buildConversationActivityProjection([
+    event(1,'CHECKPOINT_CREATED',{kind:'WORK_REVIEW_V1',status:'RECORDED',guidance_status:'HISTORICAL_INPUTS_REASSESS',review:{next_check:'WRONG_OLD_REPAIR'},verification_eligible:false}),
+  ],[]);
+  assert.equal(projected[0]?.kind === 'NARRATIVE' && projected[0].text,'已有更新的执行证据，旧复盘保留为历史记录。');
+  assert.ok(!JSON.stringify(projected).includes('WRONG_OLD_REPAIR'));
 });

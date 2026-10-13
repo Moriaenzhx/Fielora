@@ -186,6 +186,7 @@ impl ToolRuntime {
         let scoped = Self {
             project_install_sandbox: false,
             root: root.to_owned(),
+            artifact_root: self.artifact_root.clone(),
             reference_paths: vec![],
             checkpoint_root: self.checkpoint_root.clone(),
             skill_catalog: self.skill_catalog.clone(),

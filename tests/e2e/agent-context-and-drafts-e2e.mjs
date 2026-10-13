@@ -11,6 +11,11 @@ const dataRoot = await mkdtemp(path.join(tmpdir(), 'fielora-input-drafts-'));
 const projectRoot = path.join(dataRoot, 'project');
 const evidence = path.resolve(process.env.FIELORA_E2E_EVIDENCE_DIR ?? path.join(root,'artifacts/agent-context-drafts'));
 const output = [];
+const launchEnv = {
+  [process.platform === 'win32' ? 'Path' : 'PATH']: `${path.dirname(process.execPath)}${path.delimiter}${process.env.Path ?? process.env.PATH ?? ''}`,
+  FIELORA_DATA_DIR: path.join(dataRoot, 'Fielora'),
+  FIELORA_E2E_USER_DATA: path.join(dataRoot, 'electron-profile'),
+};
 let child; let cdp; let ids;
 const wait = expression => waitForExpression(cdp, expression, { timeoutMs:45000, output });
 async function click(selector) {
@@ -41,11 +46,11 @@ async function openConversation(id) { await click(`[data-testid="conversation-${
 try {
   await mkdir(projectRoot);await mkdir(evidence,{recursive:true});
   await writeFile(path.join(projectRoot,'evidence.txt'),'Original screenshot comparison: labels must match the requested controls.\n');
-  assert.equal(spawnSync('git.exe',['init'],{cwd:projectRoot,windowsHide:true}).status,0);
+  assert.equal(spawnSync(process.platform === 'win32' ? 'git.exe' : 'git',['init'],{cwd:projectRoot,windowsHide:true}).status,0);
   const launched=await launchElectron({root:path.join(root,'apps/desktop'),dataRoot,output,
     executablePath:process.env.FIELORA_PACKAGED_EXE??process.execPath,
     args:process.env.FIELORA_PACKAGED_EXE?[]:[path.join(root,'node_modules/@electron-forge/cli/dist/electron-forge.js'),'start'],
-    extraEnv:{Path:`${path.dirname(process.execPath)};${process.env.Path??''}`},
+    extraEnv:launchEnv,
   });
   child=launched.child;
   cdp=await connectToFieloraApp({port:launched.port,output,timeoutMs:120000,enablePage:true});
@@ -56,10 +61,14 @@ try {
     await window.fielora.provider.storeCredential({provider_config_id:provider.id,secret:'fixture-only'});
     const project=await window.fieloraTest.createProject({title:'图片与草稿回归',goal:null,root_path:${JSON.stringify(projectRoot)}});
     const make=title=>window.fielora.conversation.create({field_id:project.field_id,title,provider_config_id:provider.id,model_id:provider.default_model});
-    const first=await make('保留图片草稿'),second=await make('另一个对话');
+    const first=await make('保留图片草稿'),second=await make('另一个对话'),terminal=await make('已经完成的独立对话');
     for(const c of [first,second]) await window.fielora.conversation.createMessage({conversation_id:c.id,role:'USER',content:c.title,status:'COMPLETED',provider_config_id:null,model_id:null,invocation_id:null,references:[]});
-    return {provider,project,first,second};
+    const task='请解释当前对话的说明。';
+    const message=await window.fielora.conversation.createMessage({conversation_id:terminal.id,role:'USER',content:task,status:'COMPLETED',provider_config_id:null,model_id:null,invocation_id:null,references:[]});
+    const terminalRun=await window.fielora.agent.start({field_id:project.field_id,conversation_id:terminal.id,user_message_id:message.id,provider_config_id:provider.id,model_id:provider.default_model,task,permission:'FULL_CONTROL',max_steps:null,attachments:[]});
+    return {provider,project,first,second,terminal,terminalRun};
   })()`);
+  await wait(`window.fielora.agent.get({run_id:${JSON.stringify(ids.terminalRun.id)}}).then(r=>r.status==='COMPLETED')`);
   await cdp.eval('window.__draftReload=true');await cdp.send('Page.reload');
   await wait('typeof window.__draftReload==="undefined" && window.fieloraTest');
   await openConversation(ids.first.id);
@@ -86,7 +95,7 @@ try {
   await click('[data-testid=send-message]');
   await wait("document.querySelector('[data-testid=agent-pause-notice]')");
   const conversations=await cdp.eval(`window.fielora.conversation.list({field_id:${JSON.stringify(ids.project.field_id)}})`);
-  const conversation=conversations.find(item=>![ids.first.id,ids.second.id].includes(item.id));
+  const conversation=conversations.find(item=>![ids.first.id,ids.second.id,ids.terminal.id].includes(item.id));
   assert.ok(conversation);
   const [paused]=await cdp.eval(`window.fielora.agent.list({conversation_id:${JSON.stringify(conversation.id)}})`);
   assert.equal(paused.status,'PAUSED');assert.equal(paused.error_code,'AGENT_TIME_BUDGET_EXHAUSTED');
@@ -97,6 +106,80 @@ try {
   assert.ok(!JSON.stringify(stored).includes('base64'));
   assert.equal(events.find(e=>e.kind==='MODEL_COMPLETED').payload.prompt.image_count,2);
   await captureScreenshot(cdp,path.join(evidence,'images-budget-paused.png'));
+
+  // A paused foreground ref must not route a different conversation's composer
+  // message into A's follow-up queue. No reload between these navigation steps:
+  // reloading would erase the stale ref and hide the reported regression.
+  const pausedMessages=await cdp.eval(`window.fielora.conversation.listMessages({conversation_id:${JSON.stringify(conversation.id)}})`);
+  const pausedEventIds=events.map(event=>event.id);
+  const pausedQueue=await cdp.eval(`localStorage.getItem('fielora:queued-follow-ups:'+${JSON.stringify(conversation.id)})`);
+  assert.equal(pausedQueue,null);
+  async function assertOriginalPauseUnchanged() {
+    const current=await cdp.eval(`window.fielora.agent.get({run_id:${JSON.stringify(paused.id)}})`);
+    assert.equal(current.status,'PAUSED','switching/sending in B must not resume or cancel A');
+    assert.equal(current.error_code,paused.error_code);
+    assert.equal(current.current_step,paused.current_step);
+    const currentEvents=await cdp.eval(`window.fielora.agent.events({run_id:${JSON.stringify(paused.id)},after_sequence:null,limit:500})`);
+    assert.deepEqual(currentEvents.map(event=>event.id),pausedEventIds,'B must not append cancellation, continuation or input events to A');
+    assert.deepEqual(await cdp.eval(`window.fielora.conversation.listMessages({conversation_id:${JSON.stringify(conversation.id)}})`),pausedMessages,'B messages must not appear in A');
+    assert.equal(await cdp.eval(`localStorage.getItem('fielora:queued-follow-ups:'+${JSON.stringify(conversation.id)})`),pausedQueue,'B must not change A follow-up queue');
+    await openConversation(conversation.id);
+    await wait("document.querySelector('[data-testid=agent-pause-notice]')");
+    assert.equal(await cdp.eval("document.querySelectorAll('[data-testid=queued-follow-up-card]').length"),0);
+  }
+  async function assertIndependentRun(targetId, priorIds, task) {
+    await wait(`window.fielora.agent.list({conversation_id:${JSON.stringify(targetId)}}).then(runs=>runs.some(r=>!${JSON.stringify(priorIds)}.includes(r.id)&&r.status==='COMPLETED'))`);
+    const runs=await cdp.eval(`window.fielora.agent.list({conversation_id:${JSON.stringify(targetId)}})`);
+    const added=runs.filter(run=>!priorIds.includes(run.id));
+    assert.equal(added.length,1,'one composer send creates exactly one new Run in B');
+    const [started]=added;
+    assert.equal(started.conversation_id,targetId);
+    assert.equal(started.task,task);
+    assert.equal(started.model_id,ids.provider.default_model);
+    assert.notEqual(started.id,paused.id);
+    const targetMessages=await cdp.eval(`window.fielora.conversation.listMessages({conversation_id:${JSON.stringify(targetId)}})`);
+    const submitted=targetMessages.filter(message=>message.role==='USER'&&message.content===task);
+    assert.equal(submitted.length,1,'B receives one durable user message');
+    const targetEvents=await cdp.eval(`window.fielora.agent.events({run_id:${JSON.stringify(started.id)},after_sequence:null,limit:500})`);
+    assert.equal(targetEvents.find(event=>event.kind==='RUN_CREATED').payload.user_message_id,submitted[0].id);
+    assert.equal(targetEvents.find(event=>event.kind==='MODEL_COMPLETED').payload.prompt.image_count,0,'B must not inherit A images');
+    assert.equal(await cdp.eval(`localStorage.getItem('fielora:queued-follow-ups:'+${JSON.stringify(targetId)})`),null,'B must not queue its message behind A');
+    await wait("document.querySelector('[data-agent-state=COMPLETED]')");
+    assert.equal(await cdp.eval("document.querySelectorAll('[data-testid=queued-follow-up-card]').length"),0);
+    return started.id;
+  }
+  await openConversation(ids.terminal.id);
+  await wait("document.querySelector('[data-agent-state=COMPLETED]')");
+  assert.equal(await cdp.eval("document.querySelectorAll('[data-testid=agent-pause-notice]').length"),0);
+  const terminalTask='请解释独立对话 B 的当前说明。';
+  await textInput(terminalTask);
+  await wait("!document.querySelector('[data-testid=send-message]').disabled");
+  await click('[data-testid=send-message]');
+  const terminalSendRun=await assertIndependentRun(ids.terminal.id,[ids.terminalRun.id],terminalTask);
+  await captureScreenshot(cdp,path.join(evidence,'paused-a-to-terminal-b-new-run.png'));
+  await assertOriginalPauseUnchanged();
+
+  const beforeBlank=await cdp.eval(`window.fielora.conversation.list({field_id:${JSON.stringify(ids.project.field_id)}})`);
+  await click(`[data-testid="project-new-conversation-${ids.project.field_id}"]`);
+  await wait("document.querySelector('.conversation-heading h2')?.textContent==='新对话'");
+  assert.equal(await cdp.eval("document.querySelectorAll('[data-testid=agent-pause-notice]').length"),0);
+  assert.equal(await draftText(),'');assert.equal(await images(),0);
+  const blankTask='请解释新建独立对话 C 的说明。';
+  await textInput(blankTask);
+  await wait("!document.querySelector('[data-testid=send-message]').disabled");
+  await click('[data-testid=send-message]');
+  const priorConversationIds=beforeBlank.map(item=>item.id);
+  await wait(`window.fielora.conversation.list({field_id:${JSON.stringify(ids.project.field_id)}}).then(items=>items.some(item=>!${JSON.stringify(priorConversationIds)}.includes(item.id)))`);
+  const afterBlank=await cdp.eval(`window.fielora.conversation.list({field_id:${JSON.stringify(ids.project.field_id)}})`);
+  const created=afterBlank.filter(item=>!priorConversationIds.includes(item.id));
+  assert.equal(created.length,1);
+  const blankSendRun=await assertIndependentRun(created[0].id,[],blankTask);
+  await captureScreenshot(cdp,path.join(evidence,'paused-a-to-blank-c-new-run.png'));
+  await assertOriginalPauseUnchanged();
+  await captureScreenshot(cdp,path.join(evidence,'original-a-still-paused-without-foreign-queue.png'));
+  const conversationScope={pausedRun:paused.id,terminalConversation:ids.terminal.id,terminalSendRun,blankConversation:created[0].id,blankSendRun,originalPauseUnchanged:true,foreignMessagesAndQueuesAbsent:true};
+  await writeFile(path.join(evidence,'conversation-scope.json'),JSON.stringify(conversationScope,null,2));
+
   const beforePid=await cdp.eval('window.fielora.core.getHealth().then(h=>h.pid)');
   await cdp.eval('window.fieloraTest.killCore()');
   await wait(`window.fielora.core.getHealth().then(h=>h.state==='READY'&&h.pid!==${beforePid})`);
@@ -187,7 +270,7 @@ try {
     const launched=await launchElectron({root:path.join(root,'apps/desktop'),dataRoot,output,
       executablePath:process.env.FIELORA_PACKAGED_EXE??process.execPath,
       args:process.env.FIELORA_PACKAGED_EXE?[]:[path.join(root,'node_modules/@electron-forge/cli/dist/electron-forge.js'),'start'],
-      extraEnv:{Path:`${path.dirname(process.execPath)};${process.env.Path??''}`},
+      extraEnv:launchEnv,
     });
     child=launched.child;
     cdp=await connectToFieloraApp({port:launched.port,output,timeoutMs:120000,enablePage:true});
@@ -274,7 +357,7 @@ try {
   assert.equal(fallbackEvents.find(e=>e.payload.kind==='REFERENCED_INPUTS_RESTORED').payload.source_run_id,missingReference.run.id);
   assert.equal(fallbackEvents.find(e=>e.kind==='MODEL_COMPLETED').payload.prompt.image_count,2);
   await cdp.eval(`window.fielora.agent.cancel({run_id:${JSON.stringify(boundedFallback.id)}})`);
-  await writeFile(path.join(evidence,'validation.json'),JSON.stringify({status:'PASS',host:process.env.FIELORA_PACKAGED_EXE?'packaged':'development',conversationDraftIsolation:true,newConversationDraftRestored:true,sendMovesAndClearsCorrectDraft:true,originalInputsDurableAcrossCoreRestart:true,legacyUiResumeRestoresMessageAttachments:true,textOnlyNewTurnRestoresHistoricalImages:true,legacyTextOnlyRetryRestoresImages:true,missingReferencePauseResumesSameRun:true,laterGalleryExcluded:true,coreFallbackExcludesLaterRuns:true,recoveredImagesSurviveRestart:true,unrelatedResumeInputsRejected:true,sameRunContinuation:true,noRepeatedRead:true,externalModelRequests:0,productionTransactions:0},null,2));
+  await writeFile(path.join(evidence,'validation.json'),JSON.stringify({status:'PASS',host:process.env.FIELORA_PACKAGED_EXE?'packaged':'development',conversationScope,conversationDraftIsolation:true,newConversationDraftRestored:true,sendMovesAndClearsCorrectDraft:true,originalInputsDurableAcrossCoreRestart:true,legacyUiResumeRestoresMessageAttachments:true,textOnlyNewTurnRestoresHistoricalImages:true,legacyTextOnlyRetryRestoresImages:true,missingReferencePauseResumesSameRun:true,laterGalleryExcluded:true,coreFallbackExcludesLaterRuns:true,recoveredImagesSurviveRestart:true,unrelatedResumeInputsRejected:true,sameRunContinuation:true,noRepeatedRead:true,externalModelRequests:0,productionTransactions:0},null,2));
   console.log(`PASS Agent image continuity and drafts: ${evidence}`);
 }catch(error){
   console.error(error,output.slice(-5).join(''));process.exitCode=1;
@@ -282,7 +365,7 @@ try {
 }finally{
   await writeFile(path.join(evidence,'electron.log'),output.join('')).catch(()=>{});
   cdp?.close();await cleanupElectronProcess(child);
-  if(ids?.provider)spawnSync('cmdkey.exe',[`/delete:Fielora/provider/${ids.provider.id}`],{windowsHide:true,stdio:'ignore'});
+  if(ids?.provider&&process.platform==='win32')spawnSync('cmdkey.exe',[`/delete:Fielora/provider/${ids.provider.id}`],{windowsHide:true,stdio:'ignore'});
   assert.ok(path.resolve(dataRoot).startsWith(path.resolve(tmpdir())+path.sep));
   await rm(dataRoot,{recursive:true,force:true,maxRetries:12,retryDelay:200});
 }

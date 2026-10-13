@@ -13,6 +13,9 @@ pub enum ResponseFailure {
     EmptyResponse,
     OutputLimit,
     ContentFiltered,
+    RequestTimeout,
+    RateLimited,
+    ServiceUnavailable,
 }
 
 impl ResponseFailure {
@@ -26,6 +29,9 @@ impl ResponseFailure {
             Self::EmptyResponse => "PROVIDER_EMPTY_RESPONSE",
             Self::OutputLimit => "PROVIDER_OUTPUT_LIMIT",
             Self::ContentFiltered => "PROVIDER_CONTENT_FILTERED",
+            Self::RequestTimeout => "PROVIDER_REQUEST_TIMEOUT",
+            Self::RateLimited => "PROVIDER_RATE_LIMITED",
+            Self::ServiceUnavailable => "PROVIDER_UNAVAILABLE",
         }
     }
 
@@ -61,6 +67,9 @@ impl FinishReason {
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize)]
 pub struct ResponseDiagnostics {
     pub http_status: Option<u16>,
+    /// Parsed delay only; never retain the raw response header.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub retry_after_seconds: Option<u64>,
     pub event_count: usize,
     pub finish_reason: Option<FinishReason>,
     pub text_bytes: usize,

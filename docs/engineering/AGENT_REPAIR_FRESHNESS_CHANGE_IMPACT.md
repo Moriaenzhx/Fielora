@@ -1,0 +1,12 @@
+# Repair evidence freshness
+
+2026-10-10. User flow: resume a coding task after a failed check, make a guarded repair, then check the repaired inputs without repeatedly fixing an obsolete failure.
+
+The production trace shows a successful repair followed by two valid, identical line edits classified as argument errors. A later review cites the pre-repair failed command and a newer read, reviving the old diagnosis. This is a Capability feedback defect plus Harness evidence/recovery projection defect; provider stream interruption is a separate, unproven transport cause.
+
+- Guarded edits that would change no bytes return explicit `AGENT_EDIT_ALREADY_CURRENT` guidance after normal validation. They write nothing, create no checkpoint, grant no verification and do not renew progress. Mixed patch sets validate every patch before applying only actual changes. Missing/invalid hash diagnostics name only the public field.
+- Derive evidence applicability from the existing ordered receipts, including batch patches. Source changes are compared since the cited observation, not since review creation. A command followed by a workspace change needs rechecking; it is neither a current diagnosis nor a successful check. Review recording preserves historical evidence while omitting obsolete guidance from active context, including after cold restoration.
+- Review and normal work receive the same applicability projection. Preserve failures in the existing verification assessment until an eligible current check resolves them; no completion, permission, budget or repeated-action threshold is weakened. Unknown execution stays unknown.
+- Opaque workspace revision inequality alone is insufficient: the observed path set can grow during reads. Use actual writes or changed hashes of already-observed paths to invalidate a diagnosis. Existing review E2E caught this false invalidation; preserve its assertions and fix the projection.
+
+No schema migration, credentials, new state owner, mandatory planning or external model automation. Raw source/output retention remains unchanged. Rollback is code-only. Validate exact no-op and mixed atomic edits, guard diagnostics, pre/post-review source changes, batch edits, unrelated reads, cold restore, and a real desktop deterministic-model repair/check chain. Engineering PASS is not real-model or original-task acceptance; Coding Plan remains interactive only.

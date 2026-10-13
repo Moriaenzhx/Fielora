@@ -22,10 +22,11 @@ import {
   validateStateReference, validateSupersedeState, validateTransitionState, validateUpdateMode,
   validateBrowserBounds, validateBrowserNavigate, validateBrowserPageRequest,
   validateClipboardText,
-  validateCreateProvider, validateUpdateProvider, validateProviderReference, validateStoreCredential,
+  validateCreateProvider, validateUpdateProvider, validateProviderReference, validateStoreCredential, validateWebSearchCredential, validateWebSearchConfig, validateWebSearchProvider,
   validateStartModel, validateCancelModel, validateCreateCapture, validateCaptureReference,
   validateMutateCapture, validateAttachCapture, validatePromoteCapture, validateListCaptures,
   validatePickProject, validateCreateProject, validateUpdateProject, validateArchiveProject, validateWorkspaceProject, validateCreateConversation,
+  validatePrototypePreview, validateReleasePrototype,
   validateConversationReference, validateUpdateConversation, validateArchiveConversation,
   validateCreateConversationMessage, validateListConversationMessages, validateWorkspaceFile,
   validateApplyWorkspaceFile, validateRunTerminal, validateCancelTerminal, validateOpenWorkspaceProject,
@@ -50,10 +51,19 @@ import { StorageManager, directoryManifest, sha256File } from './storage-manager
 import { createPortableProfile, extractPortableProfile, portableLibraryInputs, type PortableInputFile } from './portable-profile';
 import { normalizeAppPreferences } from './renderer/app-preferences';
 import { ScheduledTaskService } from './scheduled-tasks';
+import { allowPrototypeFrameNavigation, PrototypePreviewRegistry, PROTOTYPE_SCHEME, sameFrameIdentity } from './prototype-preview';
 import type { CreateScheduledTaskRequest, ScheduledTaskRequest, ScheduledTaskView, UpdateScheduledTaskRequest } from './scheduled-task-types';
 
 declare const MAIN_WINDOW_WEBPACK_ENTRY: string;
 declare const MAIN_WINDOW_PRELOAD_WEBPACK_ENTRY: string;
+
+// Chromium 150 enforces Connection-Allowlist in native networking and the
+// RTCPeerConnection constructor only when this base feature is enabled. CSP
+// connect-src alone does not stop STUN. Only prototype responses set the empty
+// allowlist; ordinary Browse pages keep their existing networking behavior.
+const enabledFeatures = new Set(app.commandLine.getSwitchValue('enable-features').split(',').filter(Boolean));
+enabledFeatures.add('OverrideConnectionAllowlistOriginTrial');
+app.commandLine.appendSwitch('enable-features', [...enabledFeatures].join(','));
 
 // Windows native occlusion can mark a focused, visible WebContentsView hidden,
 // leaving DOM reads alive while its compositor and native input stop. Keep
@@ -64,11 +74,19 @@ if (process.platform === 'win32') {
   disabledFeatures.add('CalculateNativeWinOcclusion');
   app.commandLine.appendSwitch('disable-features', [...disabledFeatures].join(','));
 }
+// On macOS an OS-occluded native view can acknowledge CDP mouse input yet
+// deliver only mousemove, losing the press/release while DOM remains readable.
+// Keep Fielora's explicit active-page/bounds guards; do not background the
+// compositor merely because another native window currently covers it.
+if (process.platform === 'darwin') {
+  app.commandLine.appendSwitch('disable-backgrounding-occluded-windows');
+}
 
 app.setName('Fielora');
 
 protocol.registerSchemesAsPrivileged([
   { scheme: 'fielora', privileges: { standard: true, secure: true, supportFetchAPI: true } },
+  { scheme: PROTOTYPE_SCHEME, privileges: { standard: true, secure: true } },
 ]);
 
 // Historical Phase 04 builds used Electron's default @fielora/desktop profile.
@@ -92,6 +110,9 @@ let trustedOrigin = '';
 let quitting = false;
 let storageManager: StorageManager | undefined;
 let scheduledTaskService: ScheduledTaskService | undefined;
+const prototypePreviews = new PrototypePreviewRegistry();
+let prototypeEpoch = 0;
+function clearPrototypePreviews(): void { prototypeEpoch += 1; prototypePreviews.clear(); }
 const supervisor = new CoreProcessSupervisor(() => storage().coreEnvironment());
 const agentBrowserHost = new AgentBrowserHost(browser, (method, params) => supervisor.request(method, params), (runId, conversationId) => {
   withUsableWindow(appWindow, window => window.webContents.send(channels.coreEvent, { event: 'event.agent.browser', run_id: runId, conversation_id: conversationId }));
@@ -446,6 +467,26 @@ function registerBridgeHandlers(): void {
     assertBridgeEvent(event); const request=validateWorkspaceFile(payload);
     return workspaceRuntime.previewImage(await projectRoot(request.field_id), request.relative_path);
   });
+  ipcMain.handle(channels.workspacePrototypePreview, async (event, payload) => {
+    assertBridgeEvent(event);
+    try {
+      const epoch = prototypeEpoch;
+      const request = validatePrototypePreview(payload);
+      const file = await workspaceRuntime.readFile(await projectRoot(request.field_id), request.relative_path);
+      if (epoch !== prototypeEpoch) throw new Error('PROTOTYPE_UNAVAILABLE');
+      return prototypePreviews.create(file, request.expected_sha256);
+    } catch (error) {
+      const code = error instanceof Error ? error.message : '';
+      // Only stable codes cross this bridge; discard raw filesystem/path causes.
+      // eslint-disable-next-line preserve-caught-error
+      throw new Error(['PROTOTYPE_CHANGED', 'PROTOTYPE_TOO_LARGE', 'PROTOTYPE_TOO_MANY'].includes(code) ? code : 'PROTOTYPE_UNAVAILABLE');
+    }
+  });
+  ipcMain.handle(channels.workspacePrototypeRelease, (event, payload) => {
+    assertBridgeEvent(event);
+    prototypePreviews.release(validateReleasePrototype(payload).url);
+    return null;
+  });
   ipcMain.handle(channels.workspaceAttachmentPick, async (event) => {
     assertBridgeEvent(event);
     if (!appWindow || appWindow.isDestroyed()) throw new Error('App window is unavailable');
@@ -577,6 +618,11 @@ function registerBridgeHandlers(): void {
   handle(channels.providerCreate, validateCreateProvider, 'command.provider.create_config');
   handle(channels.providerUpdate, validateUpdateProvider, 'command.provider.update_config');
   handle(channels.providerStoreCredential, validateStoreCredential, 'command.provider.store_credential');
+  handle(channels.webSearchStoreCredential, validateWebSearchCredential, 'command.web_search.store_credential');
+  handle(channels.webSearchUpdate, validateWebSearchConfig, 'command.web_search.update');
+  ipcMain.handle(channels.webSearchConfig, (event) => { assertBridgeEvent(event); return supervisor.request('query.web_search.config'); });
+  handle(channels.webSearchDeleteCredential, validateWebSearchProvider, 'command.web_search.delete_credential');
+  ipcMain.handle(channels.webSearchTest, (event) => { assertBridgeEvent(event); return supervisor.request('command.web_search.test', {}, 30_000); });
   handle(channels.providerDeleteCredential, validateProviderReference, 'command.provider.delete_credential');
   handle(channels.providerRemove, validateProviderReference, 'command.provider.remove_config');
   handle(channels.providerRuntimeUpdate, validateUpdateModelRuntime, 'command.provider.update_model_runtime');
@@ -949,7 +995,7 @@ async function registerApplicationProtocol(): Promise<void> {
       return new Response(bytes, {
         headers: {
           'Content-Type': type,
-          'Content-Security-Policy': "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self'",
+          'Content-Security-Policy': "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self'; frame-src fielora-prototype:",
           'X-Content-Type-Options': 'nosniff',
         },
       });
@@ -986,6 +1032,8 @@ async function createWindow(): Promise<void> {
     },
   });
   appWindow = window;
+  const trustedContentsId = window.webContents.id;
+  const trustedSession = window.webContents.session;
   if (process.platform !== 'darwin') window.removeMenu();
   browserRuntime = new BrowserRuntime(window, (state) => {
     withUsableWindow(appWindow, (current) => current.webContents.send(channels.browserEvent, state));
@@ -998,7 +1046,51 @@ async function createWindow(): Promise<void> {
   window.webContents.on('will-redirect', (event, url) => {
     if (!isAllowedNavigation(url, trustedOrigin)) event.preventDefault();
   });
+  window.webContents.on('will-frame-navigate', (event) => {
+    if (event.isMainFrame) {
+      if (!isAllowedNavigation(event.url, trustedOrigin)) event.preventDefault();
+      return;
+    }
+    const fromMain = sameFrameIdentity(event.initiator, window.webContents.mainFrame)
+      && sameFrameIdentity(event.frame?.parent, window.webContents.mainFrame);
+    if (!allowPrototypeFrameNavigation(event.url, fromMain, false, prototypePreviews)) event.preventDefault();
+  });
+  window.webContents.on('did-start-navigation', (event) => {
+    if (event.isMainFrame && !event.isSameDocument) clearPrototypePreviews();
+  });
+  window.webContents.on('render-process-gone', clearPrototypePreviews);
+  // This is the trusted app's session only. Browse retains its independent
+  // session/policy. Generated subframes never fetch remote or app resources,
+  // even if document navigation would otherwise leave the response CSP behind.
+  window.webContents.session.webRequest.onBeforeRequest((details, callback) => {
+    if (details.webContentsId !== trustedContentsId) { callback({}); return; }
+    if (window.isDestroyed() || window.webContents.isDestroyed()) { callback({ cancel: true }); return; }
+    // Electron can return different JS wrappers for the same native frame.
+    // Main navigation is an explicit request fact, never object-identity based.
+    if (details.resourceType === 'mainFrame') {
+      callback({ cancel: !isAllowedNavigation(details.url, trustedOrigin) });
+      return;
+    }
+    const isChildRequest = details.resourceType === 'subFrame'
+      || Boolean(details.frame?.parent);
+    if (details.url.startsWith(`${PROTOTYPE_SCHEME}:`)) {
+      callback({ cancel: details.resourceType !== 'subFrame' || details.method !== 'GET' || !prototypePreviews.has(details.url) });
+      return;
+    }
+    if (isChildRequest) {
+      callback({ cancel: !(details.url.startsWith('data:') && ['image', 'font'].includes(details.resourceType)) });
+      return;
+    }
+    callback({});
+  });
+  window.webContents.session.setPermissionCheckHandler(() => false);
   window.webContents.session.setPermissionRequestHandler((_webContents, _permission, callback) => callback(false));
+  window.webContents.session.setDevicePermissionHandler(() => false);
+  window.webContents.session.setDisplayMediaRequestHandler((_request, callback) => callback({}));
+  const denyTrustedDownload = (event: Electron.Event, _item: Electron.DownloadItem, contents: Electron.WebContents) => {
+    if (contents?.id === trustedContentsId) event.preventDefault();
+  };
+  trustedSession.on('will-download', denyTrustedDownload);
   window.once('ready-to-show', () => withUsableWindow(window, (current) => current.show()));
   window.on('close', () => {
     if (appWindow !== window) return;
@@ -1006,8 +1098,10 @@ async function createWindow(): Promise<void> {
     const runtime = browserRuntime;
     browserRuntime = undefined;
     runtime?.destroy();
+    clearPrototypePreviews();
   });
   window.on('closed', () => {
+    trustedSession.removeListener('will-download', denyTrustedDownload);
     if (appWindow === window) appWindow = undefined;
   });
   if (app.isPackaged) await window.loadURL('fielora://app/index.html');
@@ -1029,6 +1123,7 @@ else {
     storageManager = await StorageManager.open(localAppData, developmentRoot);
     scheduledTaskService = await ScheduledTaskService.open(path.join(app.getPath('userData'), 'scheduled-tasks.json'), executeScheduledTask);
     registerBridgeHandlers();
+    protocol.handle(PROTOTYPE_SCHEME, (request) => prototypePreviews.response(request.url, request.method, trustedOrigin));
     if (app.isPackaged) await registerApplicationProtocol();
     supervisor.on('notification', (message) => {
       if (message.method === 'host.browser.execute') { agentBrowserHost.handle(message.params); return; }

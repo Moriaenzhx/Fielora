@@ -41,6 +41,17 @@ export interface WorkspaceFileView extends WorkspaceFileEntry {
   sha256: string;
 }
 
+export interface PrototypePreviewRequest extends WorkspaceFileRequest {
+  expected_sha256: string;
+}
+
+export interface PrototypePreviewView extends WorkspaceFileEntry {
+  url: string;
+  sha256: string;
+}
+
+export interface ReleasePrototypeRequest { url: string; }
+
 export interface WorkspaceImagePreview extends WorkspaceFileEntry {
   kind: 'IMAGE';
   mime_type: 'image/png' | 'image/jpeg' | 'image/webp' | 'image/gif';

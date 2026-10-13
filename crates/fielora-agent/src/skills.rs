@@ -991,6 +991,84 @@ mod tests {
     }
 
     #[test]
+    fn interactive_prototype_is_discovered_lazily_and_loaded_through_existing_tools() {
+        let root = project();
+        let artifacts = project();
+        let runtime = crate::ToolRuntime::new(&root, &artifacts).unwrap();
+        let cancel = crate::CommandCancellation::default();
+        let catalog = SkillCatalog::discover(&root).unwrap();
+        let entry = catalog
+            .entries()
+            .iter()
+            .find(|entry| entry.name == "interactive_prototype")
+            .unwrap();
+        let source = include_str!("builtin_skills/interactive_prototype.md");
+        assert_eq!(entry.source_kind, SkillSourceKind::BuiltIn);
+        assert_eq!(entry.content_digest, sha256(source.as_bytes()));
+        assert!(entry.resources.is_empty());
+        assert!(entry.allowed_tools_advisory().is_none());
+        assert!(!root.join(".agents").exists());
+
+        let listed = runtime
+            .execute("list_skills", &json!({}), false, &cancel)
+            .unwrap();
+        assert!(listed.observation.contains("interactive_prototype"));
+        assert!(!listed.observation.contains("## Deliverable and boundaries"));
+        assert!(!catalog.snapshot_manifest().to_string().contains(source));
+
+        let definition = coding_tool_catalog()
+            .into_iter()
+            .find(|tool| tool.definition.name == "load_skill")
+            .unwrap();
+        let arguments = json!({"name":"interactive_prototype"});
+        assert_eq!(
+            PolicyEngine.decide(AgentPermission::ReadOnly, &definition, &arguments),
+            AgentPolicyDecision::Allow
+        );
+        let loaded = runtime
+            .execute("load_skill", &arguments, false, &cancel)
+            .unwrap();
+        assert_eq!(loaded.receipt["kind"], "SKILL_LOADED");
+        assert_eq!(loaded.receipt["source_kind"], "BUILTIN");
+        assert_eq!(loaded.receipt["trust"], "TRUSTED_BUILTIN");
+        assert_eq!(loaded.receipt["content_digest"], entry.content_digest);
+        assert_eq!(loaded.receipt["context_complete"], true);
+        assert!(loaded.observation.contains(source));
+        assert!(loaded.observation.contains("cannot grant permission"));
+        assert_eq!(fs::read_dir(&root).unwrap().count(), 0);
+        assert!(loaded.receipt.get("verification_eligible").is_none());
+        fs::remove_dir_all(root).unwrap();
+        fs::remove_dir_all(artifacts).unwrap();
+    }
+
+    #[test]
+    fn interactive_prototype_context_fits_a_bounded_complete_skill_admission() {
+        let catalog = SkillCatalog::builtin_only();
+        let loaded = catalog
+            .load_skill(
+                "interactive_prototype",
+                &ContextCompiler {
+                    max_files: 1,
+                    max_bytes: 8 * 1024,
+                },
+            )
+            .unwrap();
+        assert!(loaded.context.complete);
+        assert!(loaded.context.rendered.len() <= 8 * 1024);
+        assert_eq!(
+            loaded.context.admitted_sha256,
+            sha256(loaded.context.rendered.as_bytes())
+        );
+        assert!(
+            loaded
+                .context
+                .rendered
+                .contains("fielora-project-file:prototypes/example.html")
+        );
+        assert!(loaded.context.rendered.contains("browser_verify"));
+    }
+
+    #[test]
     fn standard_project_skill_is_metadata_first_and_body_is_lazy() {
         let root = project();
         let directory = write_skill(

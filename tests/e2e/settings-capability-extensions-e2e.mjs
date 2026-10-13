@@ -70,7 +70,7 @@ try {
 
   await click(cdp, '[data-testid="settings-category-extensions"]');
   await wait(cdp, `document.querySelector('[data-testid="settings-capability-extensions"]')`);
-  assert.equal(await cdp.eval(`document.querySelectorAll('[role="tablist"] [role="tab"]').length`), 3);
+  assert.equal(await cdp.eval(`document.querySelectorAll('[role="tablist"] [role="tab"]').length`), 4);
   assert.equal(await cdp.eval(`document.querySelector('[data-testid="settings-capability-extensions"] > header').innerText`), '能力与扩展');
 
   await click(cdp, '[data-testid="settings-extension-tab-plugins"]');

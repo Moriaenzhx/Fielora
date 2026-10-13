@@ -1,0 +1,458 @@
+[
+  {
+    "name": "read_file",
+    "status": "COMPLETED",
+    "arguments": {
+      "path": "model.py"
+    },
+    "receipt": {
+      "byte_end": 13134,
+      "byte_start": 0,
+      "kind": "FILE_READ",
+      "next_byte_offset": 13134,
+      "sha256": "version-0",
+      "truncated": true,
+      "path": "model.py"
+    },
+    "error": null
+  },
+  {
+    "name": "read_file",
+    "status": "COMPLETED",
+    "arguments": {
+      "byte_offset": 13134,
+      "path": "model.py"
+    },
+    "receipt": {
+      "byte_end": 19147,
+      "byte_start": 13134,
+      "kind": "FILE_READ",
+      "next_byte_offset": null,
+      "sha256": "version-0",
+      "truncated": false,
+      "path": "model.py"
+    },
+    "error": null
+  },
+  {
+    "name": "list_files",
+    "status": "COMPLETED",
+    "arguments": {
+      "path": "."
+    },
+    "receipt": {
+      "kind": "FILE_LIST",
+      "truncated": true
+    },
+    "error": null
+  },
+  {
+    "name": "read_file",
+    "status": "COMPLETED",
+    "arguments": {
+      "path": "http.py"
+    },
+    "receipt": {
+      "byte_end": 8843,
+      "byte_start": 0,
+      "kind": "FILE_READ",
+      "next_byte_offset": null,
+      "sha256": "version-1",
+      "truncated": false,
+      "path": "http.py"
+    },
+    "error": null
+  },
+  {
+    "name": "read_file",
+    "status": "COMPLETED",
+    "arguments": {
+      "path": "importer.py"
+    },
+    "receipt": {
+      "byte_end": 3499,
+      "byte_start": 0,
+      "kind": "FILE_READ",
+      "next_byte_offset": null,
+      "sha256": "version-2",
+      "truncated": false,
+      "path": "importer.py"
+    },
+    "error": null
+  },
+  {
+    "name": "list_files",
+    "status": "COMPLETED",
+    "arguments": {},
+    "receipt": {
+      "kind": "FILE_LIST",
+      "truncated": false
+    },
+    "error": null
+  },
+  {
+    "name": "work_plan",
+    "status": "FAILED",
+    "arguments": {},
+    "receipt": {
+      "kind": "TOOL_EXECUTION_FAILED"
+    },
+    "error": "AGENT_TOOL_ARGUMENTS_INVALID"
+  },
+  {
+    "name": "run_command",
+    "status": "COMPLETED",
+    "arguments": {
+      "argv": [
+        "-a",
+        "256",
+        "data.db",
+        "input/clients.csv",
+        "input/projects.csv",
+        "input/receipts.csv"
+      ],
+      "program": "shasum"
+    },
+    "receipt": {
+      "exit_code": 0,
+      "kind": "COMMAND",
+      "success": true,
+      "verification_eligible": false,
+      "workspace_revision": "version-3"
+    },
+    "error": null
+  },
+  {
+    "name": "read_file",
+    "status": "COMPLETED",
+    "arguments": {
+      "line_end": 760,
+      "line_start": 361,
+      "path": "model.py"
+    },
+    "receipt": {
+      "byte_end": 19147,
+      "byte_start": 13127,
+      "kind": "FILE_READ",
+      "next_byte_offset": null,
+      "sha256": "version-0",
+      "truncated": false,
+      "path": "model.py"
+    },
+    "error": null
+  },
+  {
+    "name": "create_file",
+    "status": "COMPLETED",
+    "arguments": {
+      "path": "test_acceptance.py"
+    },
+    "receipt": {
+      "after_sha256": "version-4",
+      "kind": "FILE_CREATED"
+    },
+    "error": null
+  },
+  {
+    "name": "read_file",
+    "status": "COMPLETED",
+    "arguments": {
+      "path": "test_acceptance.py"
+    },
+    "receipt": {
+      "byte_end": 13008,
+      "byte_start": 0,
+      "kind": "FILE_READ",
+      "next_byte_offset": 13008,
+      "sha256": "version-4",
+      "truncated": true,
+      "path": "test_acceptance.py"
+    },
+    "error": null
+  },
+  {
+    "name": "run_command",
+    "status": "COMPLETED",
+    "arguments": {
+      "argv": [
+        "-m",
+        "unittest",
+        "test_acceptance_gaps",
+        "-v"
+      ],
+      "program": "python3"
+    },
+    "receipt": {
+      "exit_code": 0,
+      "kind": "COMMAND",
+      "success": true,
+      "verification_eligible": true,
+      "workspace_revision": "version-5"
+    },
+    "error": null
+  },
+  {
+    "name": "read_file",
+    "status": "COMPLETED",
+    "arguments": {
+      "byte_offset": 13008,
+      "path": "test_acceptance.py"
+    },
+    "receipt": {
+      "byte_end": 13686,
+      "byte_start": 13008,
+      "kind": "FILE_READ",
+      "next_byte_offset": null,
+      "sha256": "version-4",
+      "truncated": false,
+      "path": "test_acceptance.py"
+    },
+    "error": null
+  },
+  {
+    "name": "list_files",
+    "status": "COMPLETED",
+    "arguments": {
+      "path": "."
+    },
+    "receipt": {
+      "kind": "FILE_LIST",
+      "truncated": false
+    },
+    "error": null
+  },
+  {
+    "name": "read_file",
+    "status": "COMPLETED",
+    "arguments": {
+      "path": "legacy_mutations.py"
+    },
+    "receipt": {
+      "byte_end": 7400,
+      "byte_start": 0,
+      "kind": "FILE_READ",
+      "next_byte_offset": null,
+      "sha256": "version-6",
+      "truncated": false,
+      "path": "legacy_mutations.py"
+    },
+    "error": null
+  },
+  {
+    "name": "read_file",
+    "status": "COMPLETED",
+    "arguments": {
+      "path": "test_acceptance.py"
+    },
+    "receipt": {
+      "byte_end": 13008,
+      "byte_start": 0,
+      "kind": "FILE_READ",
+      "next_byte_offset": 13008,
+      "sha256": "version-4",
+      "truncated": true,
+      "path": "test_acceptance.py"
+    },
+    "error": null
+  },
+  {
+    "name": "read_file",
+    "status": "COMPLETED",
+    "arguments": {
+      "byte_offset": 13008,
+      "path": "test_acceptance.py"
+    },
+    "receipt": {
+      "byte_end": 13686,
+      "byte_start": 13008,
+      "kind": "FILE_READ",
+      "next_byte_offset": null,
+      "sha256": "version-4",
+      "truncated": false,
+      "path": "test_acceptance.py"
+    },
+    "error": null
+  },
+  {
+    "name": "read_file",
+    "status": "COMPLETED",
+    "arguments": {
+      "line_end": 360,
+      "line_start": 1,
+      "path": "model.py"
+    },
+    "receipt": {
+      "byte_end": 13127,
+      "byte_start": 0,
+      "kind": "FILE_READ",
+      "next_byte_offset": null,
+      "sha256": "version-0",
+      "truncated": false,
+      "path": "model.py"
+    },
+    "error": null
+  },
+  {
+    "name": "read_file",
+    "status": "COMPLETED",
+    "arguments": {
+      "path": "test_acceptance.py"
+    },
+    "receipt": {
+      "byte_end": 13008,
+      "byte_start": 0,
+      "kind": "FILE_READ",
+      "next_byte_offset": 13008,
+      "sha256": "version-4",
+      "truncated": true,
+      "path": "test_acceptance.py"
+    },
+    "error": null
+  },
+  {
+    "name": "read_file",
+    "status": "COMPLETED",
+    "arguments": {
+      "byte_offset": 13008,
+      "path": "test_acceptance.py"
+    },
+    "receipt": {
+      "byte_end": 13686,
+      "byte_start": 13008,
+      "kind": "FILE_READ",
+      "next_byte_offset": null,
+      "sha256": "version-4",
+      "truncated": false,
+      "path": "test_acceptance.py"
+    },
+    "error": null
+  },
+  {
+    "name": "read_file",
+    "status": "COMPLETED",
+    "arguments": {
+      "path": "legacy_mutations.py"
+    },
+    "receipt": {
+      "byte_end": 7400,
+      "byte_start": 0,
+      "kind": "FILE_READ",
+      "next_byte_offset": null,
+      "sha256": "version-6",
+      "truncated": false,
+      "path": "legacy_mutations.py"
+    },
+    "error": null
+  },
+  {
+    "name": "read_file",
+    "status": "COMPLETED",
+    "arguments": {
+      "line_end": 120,
+      "line_start": 1,
+      "path": "model.py"
+    },
+    "receipt": {
+      "byte_end": 3874,
+      "byte_start": 0,
+      "kind": "FILE_READ",
+      "next_byte_offset": null,
+      "sha256": "version-0",
+      "truncated": false,
+      "path": "model.py"
+    },
+    "error": null
+  },
+  {
+    "name": "read_file",
+    "status": "COMPLETED",
+    "arguments": {
+      "byte_offset": 13008,
+      "max_bytes": 65536,
+      "path": "test_acceptance.py"
+    },
+    "receipt": {
+      "byte_end": 13686,
+      "byte_start": 13008,
+      "kind": "FILE_READ",
+      "next_byte_offset": null,
+      "sha256": "version-4",
+      "truncated": false,
+      "path": "test_acceptance.py"
+    },
+    "error": null
+  },
+  {
+    "name": "read_file",
+    "status": "COMPLETED",
+    "arguments": {
+      "line_end": 360,
+      "line_start": 121,
+      "path": "model.py"
+    },
+    "receipt": {
+      "byte_end": 13127,
+      "byte_start": 3874,
+      "kind": "FILE_READ",
+      "next_byte_offset": null,
+      "sha256": "version-0",
+      "truncated": false,
+      "path": "model.py"
+    },
+    "error": null
+  },
+  {
+    "name": "read_file",
+    "status": "COMPLETED",
+    "arguments": {
+      "max_bytes": 65536,
+      "path": "http.py"
+    },
+    "receipt": {
+      "byte_end": 8843,
+      "byte_start": 0,
+      "kind": "FILE_READ",
+      "next_byte_offset": null,
+      "sha256": "version-1",
+      "truncated": false,
+      "path": "http.py"
+    },
+    "error": null
+  },
+  {
+    "name": "read_file",
+    "status": "COMPLETED",
+    "arguments": {
+      "line_end": 200,
+      "line_start": 1,
+      "path": "test_acceptance.py"
+    },
+    "receipt": {
+      "byte_end": 6924,
+      "byte_start": 0,
+      "kind": "FILE_READ",
+      "next_byte_offset": null,
+      "sha256": "version-4",
+      "truncated": false,
+      "path": "test_acceptance.py"
+    },
+    "error": null
+  },
+  {
+    "name": "read_file",
+    "status": "COMPLETED",
+    "arguments": {
+      "path": "test_acceptance.py"
+    },
+    "receipt": {
+      "byte_end": 13008,
+      "byte_start": 0,
+      "kind": "FILE_READ",
+      "next_byte_offset": 13008,
+      "sha256": "version-4",
+      "truncated": true,
+      "path": "test_acceptance.py"
+    },
+    "error": null
+  }
+]

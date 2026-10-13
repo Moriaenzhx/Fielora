@@ -32,6 +32,7 @@ import type {
   OpenWorkspaceProjectRequest,
   ReadWorkspaceAttachmentRequest, SaveWorkspaceAttachmentRequest, StoreWorkspaceAttachmentRequest,
   WorkspaceFileRequest, WorkspaceProjectRequest,
+  PrototypePreviewRequest, ReleasePrototypeRequest,
 } from './workspace-types';
 
 const UUID_V7 = /^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
@@ -185,6 +186,32 @@ export function validatePrepareProviderSend(value: unknown): PrepareProviderSend
   return { provider_config_id: id(input.provider_config_id), model_id: input.model_id == null ? null : boundedUnicodeText(input.model_id, 256, 1024, 'model') };
 }
 export function validateStoreCredential(value:unknown):StoreCredentialRequest{const input=object(value);exact(input,['provider_config_id','secret']);return{provider_config_id:id(input.provider_config_id),secret:boundedUnicodeText(input.secret,2048,2048,'credential')};}
+
+export function validateWebSearchCredential(value: unknown): import('@fielora/contracts').StoreWebSearchCredentialRequest {
+  const input = object(value); exact(input, ['secret', 'provider_id']);
+  const secret = boundedUnicodeText(input.secret, 2048, 2048, 'credential').trim();
+  if (!/^[\x21-\x7e]+$/.test(secret)) throw new Error('Invalid search credential');
+  return { secret, ...validateWebSearchProvider(input.provider_id == null ? {} : {provider_id:input.provider_id}) };
+}
+const searchProviders = new Set(['exa.search.v1', 'brave.search.v1', 'searxng.search.v1']);
+export function validateWebSearchProvider(value: unknown): import('@fielora/contracts').WebSearchProviderRequest {
+  const input = object(value ?? {}); exact(input, ['provider_id']);
+  return input.provider_id == null ? {} : {provider_id:enumValue(input.provider_id, searchProviders, 'search provider')};
+}
+export function validateWebSearchConfig(value: unknown): import('@fielora/contracts').UpdateWebSearchConfigRequest {
+  const input = object(value); exact(input, ['provider_id', 'endpoint']);
+  const provider_id = enumValue(input.provider_id, searchProviders, 'search provider');
+  const endpoint = input.endpoint == null ? null : boundedUnicodeText(input.endpoint, 4096, 4096, 'search endpoint').trim();
+  if (provider_id !== 'searxng.search.v1') {
+    if (endpoint !== null) throw new Error('Invalid search endpoint');
+  } else {
+    let url: URL;
+    try { url = new URL(endpoint ?? ''); } catch { throw new Error('Invalid search endpoint'); }
+    const loopback = url.hostname === 'localhost' || url.hostname === '[::1]' || /^127\.(?:\d{1,3}\.){2}\d{1,3}$/.test(url.hostname);
+    if (!['https:', 'http:'].includes(url.protocol) || (url.protocol === 'http:' && !loopback) || url.username || url.password || url.search || url.hash) throw new Error('Invalid search endpoint');
+  }
+  return {provider_id, endpoint};
+}
 function contextChip(value:unknown):ContextChip{const input=object(value);exact(input,['kind','source_identity','source_revision_or_navigation_generation','display_label','content','sensitivity','completeness']);return{kind:enumValue(input.kind,new Set(['CURRENT_FIELD','CURRENT_FOCUS','CURRENT_PAGE','CURRENT_SELECTION','CAPTURE','USER_NOTE']),'context kind') as ContextChip['kind'],source_identity:boundedText(input.source_identity,256,'context identity'),source_revision_or_navigation_generation:boundedText(input.source_revision_or_navigation_generation,64,'context generation'),display_label:boundedText(input.display_label,160,'context label'),content:boundedUnicodeText(input.content,4000,16*1024,'context content',true),sensitivity:enumValue(input.sensitivity,new Set(['NORMAL','SENSITIVE','BLOCKED']),'sensitivity') as ContextChip['sensitivity'],completeness:enumValue(input.completeness,new Set(['COMPLETE','PARTIAL']),'completeness') as ContextChip['completeness']};}
 export function validateStartModel(value:unknown):StartModelInvocationRequest{const input=object(value);exact(input,['provider_config_id','model_id','intent','user_input','context_package','response_mode']);if(!(input.model_id===null||typeof input.model_id==='string')||!Array.isArray(input.context_package)||input.context_package.length>8||input.response_mode!=='TEXT')throw new Error('Invalid model invocation');const chips=input.context_package.map(contextChip);const totalScalars=chips.reduce((total,chip)=>total+[...chip.content].length,0);const totalBytes=chips.reduce((total,chip)=>total+new TextEncoder().encode(chip.content).byteLength,0);if(totalScalars>12000||totalBytes>48*1024)throw new Error('Invalid context package');return{provider_config_id:id(input.provider_config_id),model_id:input.model_id===null?null:boundedUnicodeText(input.model_id,256,1024,'model'),intent:enumValue(input.intent,new Set(['ASK','CONTINUE']),'intent') as StartModelInvocationRequest['intent'],user_input:boundedUnicodeText(input.user_input,8000,32*1024,'user input'),context_package:chips,response_mode:'TEXT'};}
 export function validateCancelModel(value:unknown):CancelModelInvocationRequest{const input=object(value);exact(input,['invocation_id']);return{invocation_id:id(input.invocation_id)};}
@@ -324,6 +351,17 @@ export function validateResolveAgentApproval(value:unknown):ResolveAgentApproval
 export function validateActivateMcpConnection(value:unknown):ActivateMcpConnectionRequest{const input=object(value);exact(input,['run_id','connection_id']);const connectionId=boundedText(input.connection_id,64,'MCP connection');if(!/^[A-Za-z0-9._-]+$/.test(connectionId))throw new Error('Invalid MCP connection');return{run_id:id(input.run_id,'Agent run'),connection_id:connectionId};}
 function relativePath(value:unknown):string{const result=boundedUnicodeText(value,4096,16384,'relative path');if(/^(?:[a-zA-Z]:|[\\/])/.test(result)||result.replaceAll('\\','/').split('/').some((part)=>part===''||part==='..'))throw new Error('Invalid relative path');return result.replaceAll('\\','/');}
 export function validateWorkspaceFile(value:unknown):WorkspaceFileRequest{const input=object(value);exact(input,['field_id','relative_path']);return{field_id:id(input.field_id),relative_path:relativePath(input.relative_path)};}
+export function validatePrototypePreview(value:unknown):PrototypePreviewRequest{
+  const input=object(value);exact(input,['field_id','relative_path','expected_sha256']);
+  const relative_path=relativePath(input.relative_path);
+  if(!/\.html?$/i.test(relative_path)||typeof input.expected_sha256!=='string'||!/^[0-9a-f]{64}$/.test(input.expected_sha256))throw new Error('PROTOTYPE_UNAVAILABLE');
+  return{field_id:id(input.field_id),relative_path,expected_sha256:input.expected_sha256};
+}
+export function validateReleasePrototype(value:unknown):ReleasePrototypeRequest{
+  const input=object(value);exact(input,['url']);
+  if(typeof input.url!=='string'||!/^fielora-prototype:\/\/[0-9a-f]{32}\/index\.html$/.test(input.url))throw new Error('PROTOTYPE_UNAVAILABLE');
+  return{url:input.url};
+}
 export function validateStoreWorkspaceAttachment(value:unknown):StoreWorkspaceAttachmentRequest{const input=object(value);exact(input,['id','name','size','mime_type','data_url','width','height','source']);const mime=enumValue(input.mime_type,new Set(['image/png','image/jpeg','image/webp']),'attachment mime');const dataUrl=boundedUnicodeText(input.data_url,1500000,1500000,'attachment data');if(!dataUrl.startsWith(`data:${mime};base64,`)||!/^[A-Za-z0-9+/]+={0,2}$/.test(dataUrl.slice(dataUrl.indexOf(',')+1)))throw new Error('Invalid attachment data');return{id:boundedUnicodeText(input.id,128,256,'attachment id'),name:boundedUnicodeText(input.name,260,1024,'attachment name'),size:integer(input.size,1,1048576,'attachment size'),mime_type:mime,data_url:dataUrl,width:integer(input.width,1,32768,'attachment width'),height:integer(input.height,1,32768,'attachment height'),source:enumValue(input.source,new Set(['clipboard','file_picker','drag_drop']),'attachment source') as StoreWorkspaceAttachmentRequest['source']};}
 export function validateReadWorkspaceAttachment(value:unknown):ReadWorkspaceAttachmentRequest{const input=object(value);exact(input,['content_ref']);if(typeof input.content_ref!=='string'||!/^[0-9a-f]{64}\.(?:png|jpg|webp)$/.test(input.content_ref))throw new Error('Invalid attachment reference');return{content_ref:input.content_ref};}
 export function validateSaveWorkspaceAttachment(value:unknown):SaveWorkspaceAttachmentRequest{const input=object(value);exact(input,['content_ref','filename']);const reference=validateReadWorkspaceAttachment({content_ref:input.content_ref});const filename=boundedUnicodeText(input.filename,260,1024,'attachment filename');if(/[\\/:*?"<>|]/.test(filename)||filename==='.'||filename==='..')throw new Error('Invalid attachment filename');return{...reference,filename};}

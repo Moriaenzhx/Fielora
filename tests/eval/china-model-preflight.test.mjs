@@ -1,11 +1,40 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
+import { spawnSync } from 'node:child_process';
+import path from 'node:path';
 import {
   assessLiveAuthorization,
   assessChinaModelConfigs,
   assessQwenConfigs,
   validateEvalDocuments,
 } from '../../scripts/eval-agent-china-preflight.mjs';
+
+test('offline detector oracle rejects copied-logic tests and detects real decision faults', () => {
+  const root = path.resolve(import.meta.dirname, '../..');
+  const result = spawnSync(process.platform === 'win32' ? 'python' : 'python3',
+    ['-B', 'scripts/agent-convergence-case.py', 'self-test', '--case', 'detector'], {cwd:root, encoding:'utf8', timeout:30000});
+  assert.equal(result.status, 0, result.stderr || result.error?.message);
+  const report = JSON.parse(result.stdout);
+  assert.equal(report.status,'PASS');
+  assert.equal(report.cases,14);
+  assert.ok(report.strong.every(row=>row.discrimination_passed));
+  assert.ok(report.weak.slice(1).every(row=>!row.discrimination_passed));
+});
+
+test('offline cross-file export oracle accepts correct behavior and rejects controlled defects', () => {
+  const root = path.resolve(import.meta.dirname, '../..');
+  const result = spawnSync(process.platform === 'win32' ? 'python' : 'python3',
+    ['-B', 'scripts/agent-convergence-case.py', 'self-test', '--case', 'task-export'],
+    {cwd:root, encoding:'utf8', timeout:60000});
+  assert.equal(result.status, 0, result.stderr || result.error?.message);
+  const report = JSON.parse(result.stdout);
+  assert.equal(report.status, 'PASS');
+  assert.equal(report.cases, 12);
+  assert.equal(report.baseline_tests, 2);
+  assert.equal(report.unfinished_seed_rejected, true);
+  assert.equal(report.reference_passed, true);
+  assert.equal(report.rejected_faults.length, 7);
+});
 
 const baseline = {
   schema_version: 1,

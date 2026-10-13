@@ -54,6 +54,7 @@ import type { BrowserContextCandidate, BrowserNavigateRequest, BrowserPageReques
 import type {
   ApplyWorkspaceFileRequest, CancelTerminalRequest, PickProjectRequest, RunTerminalRequest,
   LibraryImagePreviewView, ScreenshotImagePreviewView, TerminalEvent, TerminalRunResult, WorkspaceFileEntry, WorkspaceFileRequest, WorkspaceFileView, WorkspaceImagePreview,
+  PrototypePreviewRequest, PrototypePreviewView, ReleasePrototypeRequest,
   OpenWorkspaceProjectRequest, WorkspaceProjectOpenTargetView,
   CopyWorkspaceAttachmentResult, ReadWorkspaceAttachmentRequest, SaveWorkspaceAttachmentRequest, SaveWorkspaceAttachmentResult, StoreWorkspaceAttachmentRequest,
   WorkspaceAttachmentSelection, WorkspaceAttachmentView, WorkspaceEnvironmentView, WorkspaceProjectRequest,
@@ -120,6 +121,8 @@ export interface FieloraBridge {
     listFiles(request: WorkspaceProjectRequest): Promise<WorkspaceFileEntry[]>;
     readFile(request: WorkspaceFileRequest): Promise<WorkspaceFileView>;
     previewFile(request: WorkspaceFileRequest): Promise<WorkspaceImagePreview>;
+    previewPrototype(request: PrototypePreviewRequest): Promise<PrototypePreviewView>;
+    releasePrototype(request: ReleasePrototypeRequest): Promise<null>;
     applyFile(request: ApplyWorkspaceFileRequest): Promise<WorkspaceFileView>;
     getEnvironment(request: WorkspaceProjectRequest): Promise<WorkspaceEnvironmentView>;
     getOpenTargets(request: WorkspaceProjectRequest): Promise<WorkspaceProjectOpenTargetView[]>;
@@ -213,6 +216,13 @@ export interface FieloraBridge {
   model: {
     start(request: StartModelInvocationRequest): Promise<StartModelInvocationResult>;
     cancel(request: CancelModelInvocationRequest): Promise<null>;
+  };
+  webSearch: {
+    config(): Promise<import('@fielora/contracts').WebSearchConfigView>;
+    update(request: import('@fielora/contracts').UpdateWebSearchConfigRequest): Promise<import('@fielora/contracts').WebSearchConfigView>;
+    storeCredential(request: import('@fielora/contracts').StoreWebSearchCredentialRequest): Promise<import('@fielora/contracts').WebSearchConfigView>;
+    deleteCredential(request?: import('@fielora/contracts').WebSearchProviderRequest): Promise<import('@fielora/contracts').WebSearchConfigView>;
+    test(): Promise<import('@fielora/contracts').WebSearchProbeView>;
   };
   agent: {
     start(request: StartAgentRunRequest): Promise<AgentRunView>;

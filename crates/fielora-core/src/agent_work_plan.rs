@@ -9,6 +9,8 @@ use serde::Deserialize;
 use serde_json::{Value, json};
 use std::collections::HashSet;
 
+const MAX_CRITERIA: usize = 32;
+
 pub fn catalog() -> ToolSpec {
     ToolSpec {
         definition: ModelToolDefinition {
@@ -17,7 +19,7 @@ pub fn catalog() -> ToolSpec {
             input_schema: json!({"type":"object","properties":{
                 "write_paths":{"type":"array","minItems":1,"maxItems":16,"items":{"type":"string","maxLength":256}},
                 "preserve":{"type":"array","minItems":1,"maxItems":8,"items":{"type":"string","maxLength":300}},
-                "criteria":{"type":"array","minItems":1,"maxItems":8,"items":{"type":"object","properties":{"id":{"type":"string","maxLength":80},"expected":{"type":"string","maxLength":300},
+                "criteria":{"type":"array","minItems":1,"maxItems":MAX_CRITERIA,"items":{"type":"object","properties":{"id":{"type":"string","maxLength":80},"expected":{"type":"string","maxLength":300},
                     "result":{"type":"object","description":"Optional per-case result. Keep stable IDs. A passed result needs a successful current eligible verification receipt and relevant source/test/fixture input_paths. Shell exit 0 or printed PASS is insufficient. Omit unchanged results to retain them; changed inputs become stale. This records evidence, not proof of coverage or task completion.","properties":{
                         "outcome":{"type":"string","enum":["pending","passed","failed"]},"actual":{"type":"string","maxLength":600},
                         "tool_call_id":{"type":"string","maxLength":128},"input_paths":{"type":"array","minItems":1,"maxItems":8,"items":{"type":"string","maxLength":256}}
@@ -78,7 +80,160 @@ struct NextStep {
 }
 
 fn bounded(s: &str, max: usize) -> bool {
-    !s.trim().is_empty() && s.len() <= max
+    !s.trim().is_empty() && s.chars().count() <= max
+}
+
+/// Validate the advertised bounded schema, returning only public field paths,
+/// types and limits. Never echo arbitrary argument values or unknown keys.
+pub fn argument_diagnostics(arguments: &Value) -> Vec<Value> {
+    fn visit(value: &Value, schema: &Value, path: &str, issues: &mut Vec<Value>) {
+        if issues.len() >= 8 {
+            return;
+        }
+        let actual = match value {
+            Value::Null => "null",
+            Value::Bool(_) => "boolean",
+            Value::Number(_) => "number",
+            Value::String(_) => "string",
+            Value::Array(_) => "array",
+            Value::Object(_) => "object",
+        };
+        let expected = schema["type"].as_str().unwrap_or("");
+        if !(actual == expected || (expected == "integer" && value.as_u64().is_some())) {
+            issues.push(
+                json!({"field":path,"constraint":"type","expected":expected,"actual":actual}),
+            );
+            return;
+        }
+        if let Some(values) = value.as_array() {
+            for (key, violated) in [
+                (
+                    "minItems",
+                    schema["minItems"]
+                        .as_u64()
+                        .is_some_and(|n| values.len() < n as usize),
+                ),
+                (
+                    "maxItems",
+                    schema["maxItems"]
+                        .as_u64()
+                        .is_some_and(|n| values.len() > n as usize),
+                ),
+            ] {
+                if violated {
+                    issues.push(json!({"field":path,"constraint":key,"limit":schema[key],"actual":values.len()}));
+                    return;
+                }
+            }
+            for (i, item) in values.iter().enumerate() {
+                visit(item, &schema["items"], &format!("{path}[{i}]"), issues);
+            }
+        } else if let Some(object) = value.as_object() {
+            let properties = schema["properties"].as_object().unwrap();
+            if schema["additionalProperties"] == false
+                && object.keys().any(|k| !properties.contains_key(k))
+            {
+                issues.push(
+                    json!({"field":path,"constraint":"additionalProperties","expected":false}),
+                );
+            }
+            for (key, child) in properties {
+                let field = if path == "$" {
+                    key.clone()
+                } else {
+                    format!("{path}.{key}")
+                };
+                if let Some(value) = object.get(key) {
+                    visit(value, child, &field, issues);
+                } else if schema["required"]
+                    .as_array()
+                    .is_some_and(|keys| keys.contains(&json!(key)))
+                {
+                    issues.push(json!({"field":field,"constraint":"required"}));
+                }
+                if issues.len() >= 8 {
+                    break;
+                }
+            }
+        } else if let Some(text) = value.as_str() {
+            let count = text.chars().count();
+            let min = schema["minLength"].as_u64().unwrap_or(1) as usize;
+            let max = schema["maxLength"].as_u64().unwrap_or(4096) as usize;
+            if text.trim().is_empty() || count < min || count > max {
+                issues.push(
+                    json!({"field":path,"constraint":"length","min":min,"max":max,"actual":count}),
+                );
+            }
+        } else if schema["minimum"]
+            .as_u64()
+            .is_some_and(|n| value.as_u64().is_none_or(|v| v < n))
+        {
+            issues.push(json!({"field":path,"constraint":"minimum","limit":schema["minimum"]}));
+        }
+        if schema["enum"]
+            .as_array()
+            .is_some_and(|values| !values.contains(value))
+        {
+            issues.push(json!({"field":path,"constraint":"enum","allowed":schema["enum"]}));
+        }
+    }
+    let mut issues = vec![];
+    if arguments.to_string().len() > 64 * 1024 {
+        return vec![json!({"field":"$","constraint":"serialized_bytes","max":64*1024})];
+    }
+    visit(
+        arguments,
+        &catalog().definition.input_schema,
+        "$",
+        &mut issues,
+    );
+    if issues.is_empty() {
+        let mut ids = HashSet::new();
+        for (i, c) in arguments["criteria"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .enumerate()
+        {
+            if !ids.insert(c["id"].as_str()) {
+                issues.push(json!({"field":format!("criteria[{i}].id"),"constraint":"unique"}));
+                break;
+            }
+        }
+        for field in ["write_paths", "criteria"] {
+            for (i, value) in arguments[field]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .enumerate()
+            {
+                let paths = if field == "write_paths" {
+                    vec![value]
+                } else {
+                    value["result"]["input_paths"]
+                        .as_array()
+                        .map(|v| v.iter().collect())
+                        .unwrap_or_default()
+                };
+                if paths
+                    .iter()
+                    .any(|p| p.as_str().is_none_or(|p| !relative(p)))
+                {
+                    issues.push(json!({"field":format!("{field}[{i}]"),"constraint":"project_relative_path"}));
+                    break;
+                }
+            }
+        }
+    }
+    issues.truncate(8);
+    issues
+}
+
+pub fn argument_recovery(arguments: &Value) -> String {
+    format!(
+        "AGENT_TOOL_ARGUMENTS_INVALID: work_plan was not recorded. Field diagnostics: {}. Correct only these fields if the optional plan is useful; retain the original requirements and continue authorized work. Do not omit requirements merely to clear this error or reread unchanged source to repair planning metadata.",
+        json!(argument_diagnostics(arguments))
+    )
 }
 fn relative(s: &str) -> bool {
     bounded(s, 256)
@@ -137,6 +292,9 @@ pub fn execute_checked(
     cancellation: &CommandCancellation,
     current_revision: Option<&str>,
 ) -> Result<ToolExecution, AgentError> {
+    if !argument_diagnostics(arguments).is_empty() {
+        return Err(AgentError::ToolArgumentsInvalid);
+    }
     let plan: Plan =
         serde_json::from_value(arguments.clone()).map_err(|_| AgentError::ToolArgumentsInvalid)?;
     let mut ids = HashSet::new();
@@ -147,7 +305,7 @@ pub fn execute_checked(
         || plan.preserve.len() > 8
         || plan.preserve.iter().any(|s| !bounded(s, 900))
         || plan.criteria.is_empty()
-        || plan.criteria.len() > 8
+        || plan.criteria.len() > MAX_CRITERIA
         || plan
             .criteria
             .iter()
@@ -431,7 +589,11 @@ pub fn acceptance_fixture(
                 .messages
                 .iter()
                 .find_map(|m| match m {
-                    AgentModelMessage::User(s) if s.starts_with(CONTEXT_MARKER) => Some(s),
+                    AgentModelMessage::User(s)
+                        if s.starts_with(crate::agent_work_state::CURRENT_WORK_MARKER) =>
+                    {
+                        Some(s)
+                    }
                     _ => None,
                 })
                 .ok_or(ModelError::ProviderProtocolError)?;
@@ -445,10 +607,19 @@ pub fn acceptance_fixture(
                 json!({"program":"/usr/bin/python3","argv":["-B","-m","unittest","test_acceptance.Cases.test_source"],"timeout_ms":5000}),
             )
         }
-        8 => call("work_plan", plan(7, true)),
+        8 => call(
+            "finish_task",
+            json!({"outcome":"completed","remaining_work":[],"required_evidence":[],"intent":"action","request_quote":"执行隔离验证，保留原始输入。","summary":"Premature claim: a passing command did not reconcile the stale case.","evidence_tool_call_ids":[tools[7].id]}),
+        ),
+        9 => {
+            if tools[8].error_code.as_deref() != Some("AGENT_ACCEPTANCE_SCOPE_REQUIRED") {
+                return Err(ModelError::ProviderProtocolError);
+            }
+            call("work_plan", plan(7, true))
+        }
         _ => call(
             "finish_task",
-            json!({"outcome":"completed","intent":"action","request_quote":"执行隔离验证，保留原始输入。","summary":"隔离验收记录已恢复；只重验受影响的文件。","evidence_tool_call_ids":[tools[7].id]}),
+            json!({"outcome":"completed","remaining_work":[],"required_evidence":[],"intent":"action","request_quote":"执行隔离验证，保留原始输入。","summary":"隔离验收记录已恢复；只重验受影响的文件。","evidence_tool_call_ids":[tools[7].id]}),
         ),
     }
 }
@@ -504,9 +675,9 @@ pub const CONTEXT_MARKER: &str = "FIELORA_CURRENT_WORK_PLAN\n";
 
 pub const RESUME_MARKER: &str = "FIELORA_RESUME_RECONCILIATION\n";
 
-pub fn continuation_context(task: &str) -> String {
+pub fn continuation_context() -> String {
     format!(
-        "{RESUME_MARKER}Resume the SAME user task: {task}\nReconcile before extending: compare the carried edits and plan with the original user request/reference images. Previously generated criteria and code additions are unverified hypotheses, not new user requirements. A prior 'continued' action does not endorse them. If a newly added field causes a missing-data dependency, first check whether the user requested that field; remove mistaken additions instead of filling invented dependencies. For an implementation request, inspect current changes and perform the narrow relevant acceptance check before broad discovery. For an explanation or review question, answer that question using relevant evidence; do not turn historical changes into renewed implementation or testing obligations. Preserve the recorded current-request interpretation unless the actual user wording warrants correcting it. Preserve user work and existing APIs. Old WORK_PLAN_REQUIRED, WORK_SCOPE_MISMATCH and evidence errors are historical; work_plan is now optional/advisory, so do not replay those planning loops. No extra approval or full plan rewrite is needed for an already-authorized relevant fix. Only actual current-result checks can support completion."
+        "{RESUME_MARKER}Continue the current Task and applicable user corrections. Use the latest source/results already present to choose the next necessary action. Carried plans, edits and reviews are unverified history, not new requirements: remove mistaken additions instead of inventing dependencies. Preserve user work and APIs. Planning and review are optional; do not restart discovery merely because this Run resumed. Missing source or diagnostics may require targeted retrieval; historical success is not current verification. Unknown side effects must be reconciled before replay."
     )
 }
 
@@ -568,51 +739,75 @@ pub fn fixture_call(step: u32, tools: &[AgentToolCallView]) -> Option<(&'static 
 }
 
 #[cfg(test)]
-pub fn context(tools: &[AgentToolCallView], wrote: bool, verified: bool) -> Option<String> {
-    let plan = projection(tools)?;
-    Some(context_from_plan(&plan, wrote, verified))
-}
-
-pub fn current_context(
-    tools: &[AgentToolCallView],
-    root: &std::path::Path,
-    artifacts: &std::path::Path,
-    wrote: bool,
-    verified: bool,
-) -> Option<String> {
-    Some(context_from_plan(
-        &current_projection(tools, root, artifacts)?,
-        wrote,
-        verified,
-    ))
-}
-
-fn context_from_plan(plan: &Value, wrote: bool, verified: bool) -> String {
-    let outstanding = plan["criteria"].as_array().is_some_and(|criteria| {
-        criteria.iter().any(|criterion| {
-            criterion
-                .get("check")
-                .is_some_and(|check| check["status"] != "passed")
-        })
-    });
-    format!(
-        "{CONTEXT_MARKER}{plan}\nThis retained plan is an ADVISORY MODEL HYPOTHESIS, including plans from older versions. It is not a write allowlist or user requirement. Source quotes describe code; interpretations remain tentative. The original user request and images take precedence. Do not complete dependencies of a mistakenly added field just because the current template or previous plan contains it. Reconcile current changes with the originally reported differences, then verify. No mandatory work_plan update is needed to change a relevant file. Preserve existing APIs unless the user requested otherwise. Current workspace changed={wrote}; current result verified={verified}. {}",
-        if outstanding {
-            "Acceptance is outstanding. Some retained cases are pending, failed or stale even if another check passed. Resolve those cases; retain unchanged passing cases. Do not claim all criteria passed."
-        } else if wrote && !verified {
-            "Acceptance is outstanding. Prepare or run the relevant check now; inspect only concrete prerequisites or a failed check's cause. More searches and Git diffs are not verification."
-        } else if verified {
-            "Current checks passed. Close out the scoped result; do not expand into adjacent features."
-        } else {
-            "Resolve the stated differences using the observed owners and smallest edit. Empty or malformed searches do not prove absence."
-        }
-    )
-}
-
-#[cfg(test)]
 mod tests {
     use super::*;
     use std::fs;
+
+    #[test]
+    fn plan_diagnostics_share_schema_limits_and_never_echo_bad_values() {
+        let base = json!({"write_paths":["tests.py"],"preserve":["data"],"criteria":[{"id":"http","expected":"HTTP assertions"}],"next_step":{"kind":"edit","action":"Add missing coverage"}});
+        assert!(argument_diagnostics(&base).is_empty());
+        let mut oversized = base.clone();
+        oversized["criteria"] = json!(
+            (0..MAX_CRITERIA + 1)
+                .map(|i| json!({"id":i.to_string(),"expected":"case"}))
+                .collect::<Vec<_>>()
+        );
+        assert_eq!(
+            argument_diagnostics(&oversized),
+            vec![
+                json!({"field":"criteria","constraint":"maxItems","limit":MAX_CRITERIA,"actual":MAX_CRITERIA+1})
+            ]
+        );
+        assert_eq!(
+            catalog().definition.input_schema["properties"]["criteria"]["maxItems"],
+            MAX_CRITERIA
+        );
+        let mut invalid = base.clone();
+        invalid["next_step"]["kind"] = json!("PRIVATE_BAD_VALUE");
+        invalid["PRIVATE_BAD_KEY"] = json!("PRIVATE_BAD_VALUE");
+        let report = argument_recovery(&invalid);
+        assert!(report.contains("next_step.kind") && report.contains("enum"));
+        assert!(!report.contains("PRIVATE_BAD"));
+        invalid = base.clone();
+        invalid["criteria"][0]["id"] = json!([]);
+        assert_eq!(argument_diagnostics(&invalid)[0]["field"], "criteria[0].id");
+        invalid = base.clone();
+        invalid["criteria"][0]["expected"] = json!("测".repeat(301));
+        assert_eq!(argument_diagnostics(&invalid)[0]["actual"], 301);
+        invalid = base.clone();
+        invalid["write_paths"][0] = json!("../private");
+        assert_eq!(
+            argument_diagnostics(&invalid)[0]["constraint"],
+            "project_relative_path"
+        );
+        invalid = base.clone();
+        invalid["criteria"]
+            .as_array_mut()
+            .unwrap()
+            .push(base["criteria"][0].clone());
+        assert_eq!(argument_diagnostics(&invalid)[0]["constraint"], "unique");
+    }
+
+    #[test]
+    fn ten_acceptance_cases_are_recorded_without_dropping_requirements() {
+        let root = std::env::temp_dir().join(format!("fielora-ten-cases-{}", uuid::Uuid::now_v7()));
+        fs::create_dir_all(&root).unwrap();
+        let runtime = ToolRuntime::new(&root, &root.join("artifacts")).unwrap();
+        let criteria = (0..10)
+            .map(|i| json!({"id":format!("case-{i}"),"expected":format!("Requirement {i}")}))
+            .collect::<Vec<_>>();
+        let args = json!({"write_paths":["tests.py"],"preserve":["original database"],"criteria":criteria,"next_step":{"kind":"edit","action":"Implement remaining assertions"}});
+        let result = execute(&runtime, &args, &[], &CommandCancellation::default());
+        fs::remove_dir_all(root).unwrap();
+        assert_eq!(
+            result.unwrap().receipt["plan"]["criteria"]
+                .as_array()
+                .unwrap()
+                .len(),
+            10
+        );
+    }
 
     #[test]
     fn acceptance_cases_require_real_checks_and_survive_only_matching_inputs() {
@@ -758,9 +953,9 @@ mod tests {
         assert_eq!(missing.receipt["verification_eligible"], false);
         args.as_object_mut().unwrap().remove("evidence");
         assert!(execute(&runtime, &args, &tools, &cancel).is_ok());
-        let recovery = continuation_context("只修改截图中到账确认的错误字段，不改接口");
+        let recovery = continuation_context();
         assert!(recovery.starts_with(RESUME_MARKER));
-        assert!(recovery.contains("只修改截图中到账确认的错误字段，不改接口"));
+        assert!(recovery.contains("current Task and applicable user corrections"));
         assert!(recovery.contains("remove mistaken additions"));
         fs::remove_dir_all(root).unwrap();
     }
@@ -858,9 +1053,15 @@ mod tests {
             .checkpoint(&tools, 24, true, false);
         assert!(checkpoint["work_plan"].to_string().contains("action:135"));
         assert_eq!(checkpoint["work_plan"]["interpretations_verified"], false);
-        let retained = context(&tools, true, false).unwrap();
-        assert!(retained.contains("Acceptance is outstanding"));
-        assert!(retained.contains("interpretations remain tentative"));
+        let current = crate::agent_work_state::CurrentWork::refreshed(
+            &tools,
+            &root,
+            &root.join("artifacts"),
+            crate::agent_verification::Assessment::fixture(false),
+        );
+        let retained = current.context(&tools, &[]);
+        assert!(retained.contains("relevant assertion"));
+        assert!(retained.contains("advisory plan, never user authorization"));
         fs::remove_dir_all(root).unwrap();
     }
 }

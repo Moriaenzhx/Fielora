@@ -46,6 +46,8 @@ const bridge: FieloraBridge = {
     listFiles: (request) => ipcRenderer.invoke(channels.workspaceFileList, request),
     readFile: (request) => ipcRenderer.invoke(channels.workspaceFileRead, request),
     previewFile: (request) => ipcRenderer.invoke(channels.workspaceFilePreview, request),
+    previewPrototype: (request) => ipcRenderer.invoke(channels.workspacePrototypePreview, request),
+    releasePrototype: (request) => ipcRenderer.invoke(channels.workspacePrototypeRelease, request),
     applyFile: (request) => ipcRenderer.invoke(channels.workspaceFileApply, request),
     getEnvironment: (request) => ipcRenderer.invoke(channels.workspaceEnvironment, request),
     getOpenTargets: (request) => ipcRenderer.invoke(channels.workspaceOpenTargets, request),
@@ -147,6 +149,13 @@ const bridge: FieloraBridge = {
   model: {
     start: (request) => ipcRenderer.invoke(channels.modelStart, request),
     cancel: (request) => ipcRenderer.invoke(channels.modelCancel, request),
+  },
+  webSearch: {
+    config: () => ipcRenderer.invoke(channels.webSearchConfig),
+    update: (request) => ipcRenderer.invoke(channels.webSearchUpdate, request),
+    storeCredential: (request) => ipcRenderer.invoke(channels.webSearchStoreCredential, request),
+    deleteCredential: (request = {}) => ipcRenderer.invoke(channels.webSearchDeleteCredential, request),
+    test: () => ipcRenderer.invoke(channels.webSearchTest),
   },
   agent: {
     start: (request) => ipcRenderer.invoke(channels.agentStart, request),

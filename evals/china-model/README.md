@@ -1,5 +1,7 @@
 # Fielora China Model Eval V0.1
 
+2026-10-10: the current product target is matched-model coding parity with OpenCode and a measured improvement in task completion experience. See [the comparison protocol](OPENCODE_COMPARISON.md). Source inspection and two matched interactive projects are ready; live comparative quality remains NOT_RUN. The metadata preflight below is not that acceptance.
+
 Status: `SIX-FAMILY PREFLIGHT + QWEN CODING PLAN INTERACTIVE / AUTOMATED LIVE QUALITY BLOCKED`
 
 This directory extends the existing Fielora Complete Agent harness for Qwen,

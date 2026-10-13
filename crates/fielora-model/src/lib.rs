@@ -6,6 +6,7 @@
 //! responsibilities.
 
 mod compatibility;
+mod http_response;
 mod profile;
 mod response;
 use fielora_contracts::ModelRuntimeSettings;
@@ -186,6 +187,12 @@ pub struct ProviderContinuation {
     fields: serde_json::Map<String, Value>,
     endpoint_key: String,
 }
+impl ProviderContinuation {
+    /// Size only: account for protocol state without exposing or persisting it.
+    pub fn input_bytes(&self) -> usize {
+        serde_json::to_vec(&self.fields).map_or(0, |bytes| bytes.len())
+    }
+}
 impl std::fmt::Debug for ProviderContinuation {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.write_str("ProviderContinuation([REDACTED])")
@@ -294,7 +301,7 @@ pub enum ModelError {
     #[error("{}", failure.code())]
     Response {
         failure: ResponseFailure,
-        diagnostics: ResponseDiagnostics,
+        diagnostics: Box<ResponseDiagnostics>,
     },
     #[error("PROVIDER_REQUEST_REJECTED")]
     ProviderRequestRejected(u16),
@@ -308,6 +315,8 @@ pub enum ModelError {
     ContextBlocked,
     #[error("CUSTOM_ENDPOINT_REJECTED")]
     CustomEndpointRejected,
+    #[error("PROVIDER_DNS_FAILED")]
+    ProviderDnsFailed,
     #[error("MODEL_CONFIGURATION_UNSUPPORTED")]
     ConfigurationUnsupported,
     #[error("PROVIDER_MODEL_MISMATCH")]
@@ -341,6 +350,7 @@ impl ModelError {
             Self::ContextTooLarge => "CONTEXT_TOO_LARGE",
             Self::ContextBlocked => "CONTEXT_BLOCKED",
             Self::CustomEndpointRejected => "CUSTOM_ENDPOINT_REJECTED",
+            Self::ProviderDnsFailed => "PROVIDER_DNS_FAILED",
             Self::ConfigurationUnsupported => "MODEL_CONFIGURATION_UNSUPPORTED",
             Self::ProviderModelMismatch => "PROVIDER_MODEL_MISMATCH",
             Self::InvocationCancelled => "INVOCATION_CANCELLED",
@@ -1345,6 +1355,7 @@ impl AgentStreamAccumulator {
             failure,
             diagnostics: ResponseDiagnostics {
                 http_status: self.http_status,
+                retry_after_seconds: None,
                 event_count: self.event_count,
                 finish_reason: self.finish_reason,
                 text_bytes: self.text.len(),
@@ -1355,7 +1366,8 @@ impl AgentStreamAccumulator {
                 output_tokens: self.usage.as_ref().and_then(|usage| usage.output_tokens),
                 failure_stage: None,
                 argument_json_error: None,
-            },
+            }
+            .into(),
         }
     }
 
@@ -1607,22 +1619,30 @@ async fn endpoint_url(
             {
                 return Err(ModelError::CustomEndpointRejected);
             }
-            let addresses = lookup_host((host.as_str(), port))
-                .await
-                .map_err(|_| ModelError::CustomEndpointRejected)?
-                .collect::<Vec<_>>();
-            if addresses.is_empty()
-                || addresses
-                    .iter()
-                    .any(|addr| !is_public_internet_ip(addr.ip()))
-            {
-                return Err(ModelError::CustomEndpointRejected);
-            }
+            let addresses = validated_endpoint_addresses(lookup_host((host.as_str(), port)).await)?;
             let path = url.path().trim_end_matches('/');
             url.set_path(&format!("{path}/chat/completions"));
             Ok((url, Some((host, addresses))))
         }
     }
+}
+
+fn validated_endpoint_addresses(
+    resolved: Result<impl Iterator<Item = SocketAddr>, std::io::Error>,
+) -> Result<Vec<SocketAddr>, ModelError> {
+    let addresses = resolved
+        .map_err(|_| ModelError::ProviderDnsFailed)?
+        .collect::<Vec<_>>();
+    if addresses.is_empty() {
+        return Err(ModelError::ProviderDnsFailed);
+    }
+    if addresses
+        .iter()
+        .any(|addr| !is_public_internet_ip(addr.ip()))
+    {
+        return Err(ModelError::CustomEndpointRejected);
+    }
+    Ok(addresses)
 }
 
 fn next_sse_delimiter(buffer: &[u8]) -> Option<(usize, usize)> {
@@ -1765,8 +1785,16 @@ async fn checked_response(
     if status.is_success() {
         return Ok(response);
     }
-    if !matches!(status.as_u16(), 400 | 413 | 422) {
-        map_status(status)?;
+    if !matches!(status.as_u16(), 400 | 413 | 422)
+        && let Err(mut error) = map_status(status)
+    {
+        if let ModelError::Response { diagnostics, .. } = &mut error {
+            diagnostics.retry_after_seconds = http_response::retry_after_seconds(
+                response.headers(),
+                std::time::SystemTime::now(),
+            );
+        }
+        return Err(error);
     }
     let fallback = ModelError::ProviderRequestRejected(status.as_u16());
     let read = async {
@@ -1792,8 +1820,18 @@ fn map_status(status: StatusCode) -> Result<(), ModelError> {
         200..=299 => Ok(()),
         401 | 403 => Err(ModelError::CredentialRejected),
         404 => Err(ModelError::ModelNotAvailable),
-        408 | 429 => Err(ModelError::ProviderRateLimited),
-        500..=599 => Err(ModelError::ProviderUnavailable),
+        408 | 429 | 500..=599 => Err(ModelError::Response {
+            failure: match status.as_u16() {
+                408 => ResponseFailure::RequestTimeout,
+                429 => ResponseFailure::RateLimited,
+                _ => ResponseFailure::ServiceUnavailable,
+            },
+            diagnostics: ResponseDiagnostics {
+                http_status: Some(status.as_u16()),
+                ..Default::default()
+            }
+            .into(),
+        }),
         _ => Err(ModelError::ProviderRequestRejected(status.as_u16())),
     }
 }
@@ -2062,6 +2100,33 @@ mod tests {
         ));
     }
 
+    #[test]
+    fn endpoint_dns_outages_are_distinct_from_unsafe_answers() {
+        let failure = Err::<std::vec::IntoIter<SocketAddr>, _>(std::io::Error::other(
+            "synthetic resolver failure",
+        ));
+        assert_eq!(
+            validated_endpoint_addresses(failure),
+            Err(ModelError::ProviderDnsFailed)
+        );
+        assert_eq!(
+            validated_endpoint_addresses(Ok(Vec::new().into_iter())),
+            Err(ModelError::ProviderDnsFailed)
+        );
+        let public: SocketAddr = "1.1.1.1:443".parse().unwrap();
+        let private: SocketAddr = "127.0.0.1:443".parse().unwrap();
+        assert_eq!(
+            validated_endpoint_addresses(Ok(vec![public].into_iter())),
+            Ok(vec![public])
+        );
+        for addresses in [vec![private], vec![public, private]] {
+            assert_eq!(
+                validated_endpoint_addresses(Ok(addresses.into_iter())),
+                Err(ModelError::CustomEndpointRejected)
+            );
+        }
+    }
+
     #[tokio::test]
     async fn custom_endpoint_rejects_ip_literals_and_non_dns_hosts_before_network() {
         for base_url in [
@@ -2256,6 +2321,16 @@ mod tests {
     }
 
     #[test]
+    fn http_timeout_and_rate_limit_are_distinct_and_retain_status() {
+        let timeout = map_status(StatusCode::REQUEST_TIMEOUT).unwrap_err();
+        let rate = map_status(StatusCode::TOO_MANY_REQUESTS).unwrap_err();
+        assert_eq!(timeout.code(), "PROVIDER_REQUEST_TIMEOUT");
+        assert_eq!(timeout.http_status(), Some(408));
+        assert_eq!(rate.code(), "PROVIDER_RATE_LIMITED");
+        assert_eq!(rate.http_status(), Some(429));
+    }
+
+    #[test]
     fn representative_http_and_stream_failures_have_stable_error_mapping() {
         assert_eq!(
             map_status(StatusCode::UNAUTHORIZED),
@@ -2266,13 +2341,14 @@ mod tests {
             Err(ModelError::ModelNotAvailable)
         );
         assert_eq!(
-            map_status(StatusCode::TOO_MANY_REQUESTS),
-            Err(ModelError::ProviderRateLimited)
+            map_status(StatusCode::TOO_MANY_REQUESTS)
+                .unwrap_err()
+                .code(),
+            "PROVIDER_RATE_LIMITED"
         );
-        assert_eq!(
-            map_status(StatusCode::BAD_GATEWAY),
-            Err(ModelError::ProviderUnavailable)
-        );
+        let unavailable = map_status(StatusCode::BAD_GATEWAY).unwrap_err();
+        assert_eq!(unavailable.code(), "PROVIDER_UNAVAILABLE");
+        assert_eq!(unavailable.http_status(), Some(502));
         assert_eq!(
             map_status(StatusCode::BAD_REQUEST),
             Err(ModelError::ProviderRequestRejected(400))

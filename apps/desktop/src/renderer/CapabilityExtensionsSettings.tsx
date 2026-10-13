@@ -3,8 +3,9 @@ import { PluginSettings } from './PluginSettings';
 import { AppIcon, type AppIconName } from './ui';
 import { SkillsSettings } from './SkillsSettings';
 import { useUiLocale } from './ui-locale';
+import { WebSearchSettings } from './WebSearchSettings';
 
-export type CapabilityExtensionTab = 'SKILLS' | 'MCP' | 'PLUGINS';
+export type CapabilityExtensionTab = 'SKILLS' | 'MCP' | 'PLUGINS' | 'WEB_SEARCH';
 
 export function CapabilityExtensionsSettings({ activeTab, fieldId, onTabChange }: {
   activeTab: CapabilityExtensionTab;
@@ -13,6 +14,7 @@ export function CapabilityExtensionsSettings({ activeTab, fieldId, onTabChange }
 }) {
   const { t } = useUiLocale();
   const tabs: Array<{ id: CapabilityExtensionTab; label: string; icon: AppIconName }> = [
+    { id: 'WEB_SEARCH', label: t('联网搜索', 'Web search'), icon: 'browse' },
     { id: 'SKILLS', label: 'Skills', icon: 'files' },
     { id: 'MCP', label: 'MCP', icon: 'environment' },
     { id: 'PLUGINS', label: t('插件', 'Plugins'), icon: 'extensions' },
@@ -34,6 +36,7 @@ export function CapabilityExtensionsSettings({ activeTab, fieldId, onTabChange }
     </div>
     <section id="settings-extension-panel" className="settings-extension-panel" role="tabpanel" aria-labelledby={`settings-extension-tab-${activeTab.toLowerCase()}`}>
       {activeTab === 'SKILLS' && <SkillsSettings fieldId={fieldId} embedded/>}
+      {activeTab === 'WEB_SEARCH' && <WebSearchSettings/>}
       {activeTab === 'MCP' && <McpSettings embedded/>}
       {activeTab === 'PLUGINS' && <PluginSettings embedded/>}
     </section>

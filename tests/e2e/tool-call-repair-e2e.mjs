@@ -9,7 +9,8 @@ import { launchElectron, connectToFieloraApp, waitForExpression, captureScreensh
 // Real desktop/Core retry loop; synthetic model responses, no remote credentials.
 // Model separately validates large code and malformed JSON over local HTTP/SSE.
 const root = path.resolve(import.meta.dirname, '../..');
-const evidence = await mkdtemp(path.join(tmpdir(), 'fielora-tool-repair-evidence-'));
+const evidence = process.env.FIELORA_E2E_EVIDENCE_DIR ?? await mkdtemp(path.join(tmpdir(), 'fielora-tool-repair-evidence-'));
+await mkdir(evidence, { recursive: true });
 const q = JSON.stringify;
 for (const rejected of [false, true]) {
   const label = rejected ? 'rejected' : 'repaired';
@@ -47,7 +48,8 @@ for (const rejected of [false, true]) {
     assert.equal(retries.length,1,'Only one automatic retry');
     assert.equal(retries[0].payload.tool_validation_feedback,true);
     assert.equal(retries[0].payload.response_diagnostics.failure_stage,'TOOL_ARGUMENTS_JSON');
-    assert.equal(retries[0].payload.response_diagnostics.argument_json_error.category,'SYNTAX');
+    assert.equal(retries[0].payload.response_diagnostics.argument_json_error.category,'EOF');
+    assert.notEqual(retries[0].payload.previous_prompt.tool_schema_sha256,retries[0].payload.retry_prompt.tool_schema_sha256,'Large EOF changes write generation constraints, not just prose');
     assert.notDeepEqual(retries[0].payload.previous_prompt,retries[0].payload.retry_prompt,'Correction must change the model input');
     assert.equal(await readFile(path.join(projectRoot,'requirements.txt'),'utf8'),'Flask==3.0.0\n');
     const tools=db.prepare('SELECT name,status,arguments_json FROM agent_tool_calls WHERE run_id=? ORDER BY created_at').all(run.id).map(t=>({...t,args:JSON.parse(t.arguments_json)}));
@@ -65,6 +67,15 @@ for (const rejected of [false, true]) {
     await reload();await click(`[data-testid="conversation-${run.conversation_id}"]`);
     await wait("document.querySelector('[data-testid=agent-pause-notice]')");
     if(rejected) {
+      // A full host restart must recover guidance from durable parser facts.
+      await cdp.eval('setTimeout(()=>window.fielora.core.quit(),0);true').catch(()=>{});
+      cdp.close(); cdp=null; await cleanupElectronProcess(child); child=null;
+      const restarted=await launchElectron({root:path.join(root,'apps/desktop'),dataRoot,output,
+        executablePath:process.env.FIELORA_PACKAGED_EXE ?? process.execPath,
+        args:process.env.FIELORA_PACKAGED_EXE ? [] : [path.join(root,'node_modules/@electron-forge/cli/dist/electron-forge.js'),'start']});
+      child=restarted.child; cdp=await connectToFieloraApp({port:restarted.port,output,enablePage:true,timeoutMs:120000});
+      await wait("window.fieloraTest && window.fielora.core.getHealth().then(h=>h.state==='READY')");
+      await click(`[data-testid="conversation-${run.conversation_id}"]`);
       await click('.agent-pause-actions .is-primary');
       await wait(`window.fielora.agent.list({conversation_id:${q(run.conversation_id)}}).then(rs=>rs.some(r=>r.id===${q(run.id)} && r.status==='PAUSED' && r.current_step>${run.current_step}))`);
       assert.equal(db.prepare("SELECT COUNT(*) n FROM agent_events WHERE run_id=? AND kind='RUN_RESUMED'").get(run.id).n,1);
@@ -76,7 +87,11 @@ for (const rejected of [false, true]) {
     assert.ok(!JSON.stringify(events).includes('synthetic-tool-repair-only'));
     const finalRun=db.prepare('SELECT id,conversation_id,status,error_code,current_step FROM agent_runs WHERE id=?').get(run.id);
     const finalEvents=db.prepare('SELECT kind,payload_json FROM agent_events WHERE run_id=? ORDER BY sequence').all(run.id).map(e=>({kind:e.kind,payload:JSON.parse(e.payload_json)}));
-    await writeFile(path.join(evidence,`${label}.json`),JSON.stringify({status:'PASS',scope:'isolated synthetic model/Core retry; not real-provider business acceptance',run,events,tools,finalRun,finalEvents,explicitResumeVerified:rejected},null,2));
+    if(rejected) {
+      const resumedRetry=finalEvents.filter(e=>e.payload.kind==='MODEL_RETRY').at(-1);
+      assert.equal(resumedRetry.payload.previous_prompt.tool_schema_sha256,retries[0].payload.retry_prompt.tool_schema_sha256,'Cold resume restores the same small-write schemas before another retry');
+    }
+    await writeFile(path.join(evidence,`${label}.json`),JSON.stringify({status:'PASS',scope:'isolated synthetic model/Core retry; not real-provider business acceptance',run,events,tools,finalRun,finalEvents,explicitResumeVerified:rejected,coldRestartVerified:rejected},null,2));
   } catch(error) {
     if(cdp)await captureScreenshot(cdp,path.join(evidence,`${label}-failure.png`)).catch(()=>{});
     console.error(output.join('').slice(-4000));throw error;

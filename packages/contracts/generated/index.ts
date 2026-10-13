@@ -602,11 +602,25 @@ export type ListAgentEventsRequest = { run_id: AgentRunId, after_sequence: numbe
 
 export type AgentToolCallView = { id: ToolCallId, run_id: AgentRunId, name: string, effect: AgentToolEffect, status: AgentToolStatus, policy_decision: AgentPolicyDecision, arguments: unknown, receipt: unknown | null, error_code: string | null, created_at: number, updated_at: number, };
 
-export type ApprovalView = { id: ApprovalId, run_id: AgentRunId, tool_call_id: ToolCallId, decision: ApprovalDecision | null, nonce: string, created_at: number, resolved_at: number | null, };
+export type ApprovalView = { id: ApprovalId, run_id: AgentRunId, tool_call_id: ToolCallId, decision: ApprovalDecision | null, nonce: string, confirmation_stage?: number, required_confirmations?: number, operation_digest?: string, created_at: number, resolved_at: number | null, };
 
 export type ResolveAgentApprovalRequest = { run_id: AgentRunId, approval_id: ApprovalId, nonce: string, decision: ApprovalDecision, };
 
 export type McpConfigStatus = "CONFIGURED" | "CONFIG_NOT_FOUND" | "CONFIG_MALFORMED";
+
+export type WebSearchConfigView = { provider_id: string, available: boolean, credential_present: boolean, providers: Array<WebSearchProviderView>, config_error: string | null, };
+
+export type WebSearchProviderView = { provider_id: string, display_name: string, endpoint: string | null, credential_mode: string, credential_present: boolean, available: boolean, };
+
+export type WebSearchProviderRequest = { provider_id?: string, };
+
+export type UpdateWebSearchConfigRequest = { provider_id: string, endpoint: string | null, };
+
+export type StoreWebSearchCredentialRequest = { secret: string, provider_id?: string, };
+
+export type WebSearchSourceView = { title: string, url: string, published_at: string | null, };
+
+export type WebSearchProbeView = { provider_id: string, success: boolean, error_code: string | null, result_count: number, sources: Array<WebSearchSourceView>, checked_at: number, };
 
 export type McpRunActivationState = "NOT_ACTIVE" | "ACTIVATION_QUEUED" | "AWAITING_APPROVAL" | "STARTING" | "ACTIVE_IN_CURRENT_RUN" | "PROCESS_UNAVAILABLE" | "ACTIVATION_DENIED" | "ACTIVATION_FAILED";
 

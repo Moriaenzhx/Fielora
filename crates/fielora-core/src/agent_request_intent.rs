@@ -7,7 +7,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
 pub const TOOL: &str = "record_request_intent";
-pub const GUIDANCE: &str = "Use record_request_intent when the current request asks about actions rather than requesting them, or when completion guidance conflicts with the user's actual request. Cite the current user's wording and distinguish answer_only, action, and workspace_change. Interpret the whole request, including negation, quotation, corrections and mixed clauses. An explanation plus an explicit repair is workspace_change; a question about an earlier repair may be answer_only. This records your interpretation, not authorization or proof. Actual effects and unresolved outcomes still require evidence. Do not perform an unwanted edit to satisfy a lexical hint.";
+pub const GUIDANCE: &str = "Optional interpretation correction, never a prerequisite to reading, editing or execution. Use record_request_intent when the current request asks about actions rather than requesting them, or when completion guidance conflicts with the user's actual request. Cite a short exact contiguous quote from the current user's wording, without inserted ellipses, and distinguish answer_only, action, and workspace_change. Interpret the whole request, including negation, quotation, corrections and mixed clauses. An explanation plus an explicit repair is workspace_change; a question about an earlier repair may be answer_only. This records your interpretation, not authorization, task progress or proof. Do not repeat a successfully recorded interpretation unless the request or your interpretation changes. Actual effects and unresolved outcomes still require evidence. Do not perform an unwanted edit to satisfy a lexical hint.";
 
 #[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq)]
 #[serde(rename_all = "snake_case")]
@@ -56,15 +56,17 @@ pub fn record(
         serde_json::from_value(arguments.clone()).map_err(|_| AgentError::ToolArgumentsInvalid)?;
     let quote = source_quote(task, &args.request_quote);
     let Some(quote) = quote else {
-        return Err(AgentError::WorkGuidance { code:"AGENT_CURRENT_REQUEST_QUOTE_REQUIRED", detail:"Quote the current user's actual wording. No intent was recorded; historical text and paraphrases are not valid source quotes.".into() });
+        return Err(AgentError::WorkGuidance { code:"AGENT_CURRENT_REQUEST_QUOTE_REQUIRED", detail:"No interpretation recorded. This optional tool is not a prerequisite to useful work. If correcting intent is necessary, copy a short exact contiguous quote from the current request; no inserted ellipses or paraphrases. Otherwise continue the authorized task.".into() });
     };
     Ok(ToolExecution {
         receipt:json!({"kind":"CURRENT_REQUEST_INTERPRETATION","run_id":run_id,"request_sha256":crate::agent_turn_context::digest(task),"intent":args.intent,"request_quote":quote,"source":"MODEL_INTERPRETATION","verification_eligible":false,"grants_authority":false}),
-        observation:"Interpretation recorded for this request only. It is not proof of semantic correctness, authorization, action completion or verification. Answer the current question using evidence; preserve explicit user corrections. Actual action attempts still retain their obligations.".into(),
+        observation:"Interpretation recorded for this request only. Continue the current task using evidence; preserve explicit user corrections. Do not record the same interpretation again. This is not proof of semantic correctness, authorization, task progress, action completion or verification. Actual action attempts still retain their obligations.".into(),
     })
 }
 
-fn source_quote<'a>(task: &'a str, quote: &str) -> Option<&'a str> {
+/// Shared by interpretation and terminal proposals. Accept only a contiguous
+/// source quote, allowing typographic quote variants; store original bytes.
+pub(crate) fn source_quote<'a>(task: &'a str, quote: &str) -> Option<&'a str> {
     fn normalized(c: char) -> char {
         match c {
             '“' | '”' => '"',

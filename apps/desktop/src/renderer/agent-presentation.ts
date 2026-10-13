@@ -29,6 +29,8 @@ export interface AgentPresentation {
   phases: AgentWorkPhase[];
   changedFiles: number;
   passedVerifications: number;
+  requirementCoverage?: 'UNKNOWN';
+  verificationEvidence?: AgentVerificationEvidence;
   canonicalPhase: boolean;
   activeStep: number;
   totalSteps: number;
@@ -44,6 +46,13 @@ export interface AgentResultViewModel {
   duration: string;
   changedFiles: number;
   verificationPassed: boolean;
+  verificationEvidence?: AgentVerificationEvidence;
+}
+
+export interface AgentVerificationEvidence {
+  label: string;
+  detail: string;
+  checks: Array<{ id: string; command: string; state: string }>;
 }
 
 export type AgentTerminalStatus = 'COMPLETED' | 'FAILED' | 'CANCELLED';
@@ -120,7 +129,7 @@ export function buildAgentResultViewModel(
           : '修改';
     evidence.push(`${presentation.changedFiles} 个文件${changeLabel}`);
   }
-  if (presentation?.passedVerifications) evidence.push('验证通过');
+  if (presentation?.passedVerifications && !presentation.verificationEvidence) evidence.push('已记录检查通过 · 覆盖范围未确认');
   const concrete = concreteTerminalResult(status, presentation, tools);
   return {
     outcome: presentation?.outcome ?? (status === 'COMPLETED' ? 'SUCCESS' : status),
@@ -130,6 +139,7 @@ export function buildAgentResultViewModel(
     duration: presentation?.elapsed ?? '',
     changedFiles: presentation?.changedFiles ?? 0,
     verificationPassed: Boolean(presentation?.passedVerifications),
+    verificationEvidence: presentation?.verificationEvidence,
   };
 }
 
@@ -193,6 +203,7 @@ export function agentOpeningNarrative(presentation: AgentPresentation): string {
 }
 
 export function toolTitle(name: string): string {
+  if (name === 'computer') return '操作电脑应用';
   if (name === 'browser_server') return '管理开发服务';
   if (name === 'browser') return '操作浏览器页面';
   if (name === 'work_plan') return '明确修改范围与验收条件';
@@ -228,6 +239,7 @@ export function toolDetail(tool: AgentToolCallView): string {
   }
   if (tool.name === 'browser_verify' && tool.receipt && typeof tool.receipt === 'object' && 'requirement' in tool.receipt) return String(tool.receipt.requirement).slice(0, 140);
   if (tool.name === 'run_command') detail = [values.program, ...(Array.isArray(values.argv) ? values.argv.slice(0, 5) : [])].filter(Boolean).map(String).join(' ');
+  else if (tool.name === 'computer') detail = [values.app_id, values.action].filter(Boolean).map(String).join(' · ');
   else if (Array.isArray(values.paths)) detail = values.paths.slice(0, 3).map(String).join('、');
   else if (Array.isArray(values.patches)) detail = values.patches.slice(0, 3).map((patch) => patch && typeof patch === 'object' && 'path' in patch ? String((patch as { path: unknown }).path) : '').filter(Boolean).join('、');
   else if (typeof values.path === 'string') detail = values.path;
@@ -327,7 +339,8 @@ function failureNarrative(errorCode: string | null, changedFiles: number): strin
     AGENT_MAX_STEPS: '这次工作达到了步骤上限，还没有形成完整结果。',
     AGENT_MAX_STEPS_REACHED: '这次工作达到了步骤上限，还没有形成完整结果。',
     AGENT_FILE_CHANGED: '文件在写入前确实发生了变化，Agent 没有覆盖新内容。',
-    AGENT_TEXT_MATCH_FAILED: '这次精确修改没有唯一匹配，Agent 已改用更明确的行范围继续处理。',
+    AGENT_TEXT_MATCH_FAILED: '这次精确修改没有唯一匹配，未写入文件，需要对照当前内容处理。',
+    AGENT_EDIT_ALREADY_CURRENT: '目标内容已经一致，本次没有重复写入，仍需核对当前检查结果。',
     AGENT_PATCH_CONFLICT: '修改范围存在歧义，Agent 没有扩大写入范围。',
     FAST_EDIT_EVIDENCE_RECOVERY_FAILED: '补充读取目标范围时失败，现有证据不足以安全修改。',
     FAST_EDIT_CHANGESET_INVALID: '自动补充证据并重试后，修改范围仍不能通过安全校验。',
@@ -335,7 +348,7 @@ function failureNarrative(errorCode: string | null, changedFiles: number): strin
   } as Record<string, string>)[errorCode ?? ''] ?? '工作在形成完整结果前中断了。';
   return changedFiles > 0
     ? `${cause} 项目中已有 ${changedFiles} 个文件发生变化，建议先查看修改再决定是否继续。`
-    : `${cause} 项目文件没有发生变化。`;
+    : `${cause} 已执行的操作保留在记录中，命令产生的变化请在对应步骤核对。`;
 }
 
 type CanonicalPhaseName = 'LOCATE' | 'EDIT' | 'VERIFY' | 'FINALIZE';
@@ -524,7 +537,7 @@ function canonicalNarrative(payload: CanonicalPhasePayload, run: AgentRunView, c
   if (run.status === 'COMPLETED') return { headline: '已经完成', narrative: fact.target_entity
     ? `${entity}已经按本次请求完成调整，其他范围保持不变。`
     : `本次修改已经完成，范围保持在 ${changedFiles} 个直接相关文件内。` };
-  if (run.status === 'FAILED') return { headline: changedFiles > 0 ? '只完成了部分修改' : '这次没有修改项目', narrative: failureNarrative(run.error_code, changedFiles) };
+  if (run.status === 'FAILED') return { headline: changedFiles > 0 ? '只完成了部分修改' : '这次没有完成', narrative: failureNarrative(run.error_code, changedFiles) };
   if (run.status === 'WAITING_APPROVAL') return { headline: '需要你确认下一步', narrative: payload.active_phase === 'VERIFY' ? '修改已经应用，批准后只运行与本次变更匹配的验证。' : `找到了${entity}的相关配置，批准后只修改这次列出的文件。` };
   if (payload.active_phase === 'LOCATE' && fact.narrative_key === 'EVIDENCE_RECOVERY') return { headline: '正在补充直接证据', narrative: `初始上下文不能证明${entity}的准确位置，正在进行一次有界搜索和并行读取。` };
   if (payload.active_phase === 'LOCATE') return { headline: '正在定位相关实现', narrative: `我先确认${entity}所在的准确页面和控件范围。` };
@@ -575,7 +588,14 @@ export function buildAgentPresentation(
   const eventVerificationPasses = events.filter((event) => event.kind === 'VERIFICATION_RECORDED'
     && event.payload && typeof event.payload === 'object'
     && (event.payload as { receipt?: { outcome?: unknown } }).receipt?.outcome === 'PASS').length;
-  const passedVerifications = Math.max(tools.filter(receiptPassed).length, eventVerificationPasses);
+  let passedVerifications = Math.max(tools.filter(receiptPassed).length, eventVerificationPasses);
+  const current = currentAcceptance(run, events);
+  if (current?.verification) {
+    passedVerifications = current.verification.passed === true
+      ? Math.max(1, current.verification.checks?.filter(check => check.state === 'PASSED').length ?? 0) : 0;
+  }
+  const requirementCoverage = current?.requirement_coverage === 'UNKNOWN' ? 'UNKNOWN' as const : undefined;
+  const verificationEvidence = verificationEvidenceFor(current);
   const activeTool = [...tools].reverse().find((tool) => ['RUNNING', 'WAITING_APPROVAL', 'PROPOSED'].includes(tool.status)) ?? tools.at(-1) ?? null;
   const canonical = canonicalPayload(events);
 
@@ -594,7 +614,7 @@ export function buildAgentPresentation(
       id, label, detail: canonicalDetail(name, canonical), state: canonicalState(canonical.phases[name]),
     }));
     return {
-      ...wording, elapsed, summary, phases, changedFiles, passedVerifications, canonicalPhase: true,
+      ...wording, elapsed, summary, phases, changedFiles, passedVerifications, requirementCoverage, verificationEvidence, canonicalPhase: true,
       activeStep: activeStepFor(phases, ['COMPLETED', 'FAILED', 'CANCELLED'].includes(run.status)), totalSteps: phases.length,
       primaryChange: primaryChangeFor(tools), outcome: resultOutcome(run, events, changedFiles),
     };
@@ -619,7 +639,7 @@ export function buildAgentPresentation(
     narrative = activeTool ? `下一步将${toolTitle(activeTool.name)}。确认后只执行界面中列出的这一次操作。` : '下一步操作需要你的确认，批准范围只对这一次有效。';
   } else if (run.status === 'PAUSED') {
     headline = '工作已暂停';
-    narrative = changedFiles > 0 ? `目前已有 ${changedFiles} 个文件发生变化，可以继续或先查看修改。` : '当前没有项目文件变化，可以随时继续。';
+    narrative = changedFiles > 0 ? `目前已有 ${changedFiles} 个文件发生变化，可以继续或先查看修改。` : '已有执行记录保留，可以检查进展后继续。';
   } else if (run.status === 'COMPLETED') {
     headline = '已经完成';
     narrative = changedFiles > 0
@@ -630,7 +650,7 @@ export function buildAgentPresentation(
     narrative = failureNarrative(run.error_code, changedFiles);
   } else if (run.status === 'CANCELLED') {
     headline = '这次工作已停止';
-    narrative = changedFiles > 0 ? `停止前已有 ${changedFiles} 个文件发生变化，可以先查看修改。` : '停止前没有修改项目文件。';
+    narrative = changedFiles > 0 ? `停止前已有 ${changedFiles} 个文件发生变化，可以先查看修改。` : '停止前的操作已保留，命令产生的变化请在对应步骤核对。';
   }
 
   const summary = [elapsed];
@@ -639,17 +659,93 @@ export function buildAgentPresentation(
 
   const phases = genericPlan(run, events, tools);
   return {
-    headline, narrative, elapsed, summary, phases, changedFiles, passedVerifications, canonicalPhase: false,
+    headline, narrative, elapsed, summary, phases, changedFiles, passedVerifications, requirementCoverage, verificationEvidence, canonicalPhase: false,
     activeStep: activeStepFor(phases, ['COMPLETED', 'FAILED', 'CANCELLED'].includes(run.status)), totalSteps: phases.length,
     primaryChange: primaryChangeFor(tools), outcome: resultOutcome(run, events, changedFiles),
   };
 }
 
-export function agentPausePresentation(run: AgentRunView): { reason: string; action: string; canResume: boolean } {
+interface CurrentAcceptance {
+  requirement_coverage?: unknown;
+  verification?: { passed?: unknown; checks?: Array<{ tool_call_id?: unknown; program?: unknown; argv?: unknown; display_directory?: unknown; state?: unknown }>; blockers?: Array<{ reason?: unknown; details?: { program?: unknown; argv?: unknown; display_directory?: unknown } }> };
+}
+
+function verificationEvidenceFor(current: CurrentAcceptance | undefined): AgentVerificationEvidence | undefined {
+  if (!current?.verification) return undefined;
+  const states: Record<string, string> = { PASSED: '通过', FAILED: '失败', STALE: '版本已变化', STALE_FAILED: '失败后待重验',
+    NOT_EXECUTED: '未执行', RETIRED_TARGET: '临时副本已清理', INPUT_CHANGED_DURING_CHECK: '执行时输入变化', OUTCOME_UNKNOWN: '结果未知', NO_CHECK_RESULT: '无检查结果' };
+  const checks = (current.verification.checks ?? []).flatMap((check, index) => {
+    if (typeof check.program !== 'string' || !Array.isArray(check.argv) || !check.argv.every(arg => typeof arg === 'string')) return [];
+    const directory = typeof check.display_directory === 'string' && check.display_directory !== '.' ? `（${check.display_directory}）` : '';
+    // This is a read-only transcript label, never a shell command to execute.
+    return [{ id: typeof check.tool_call_id === 'string' ? check.tool_call_id : `check-${index}`,
+      command: `${[check.program, ...check.argv].join(' ')}${directory}`,
+      state: typeof check.state === 'string' ? states[check.state] ?? '结果未知' : '结果未知' }];
+  });
+  if (current.verification.passed !== true && checks.length === 0 && !current.verification.blockers?.length) return undefined;
+  return {
+    label: current.verification.passed === true ? '已记录检查通过 · 需求覆盖未确认' : '检查尚未通过 · 查看执行结果',
+    detail: '以下是平台记录的命令结果。报告中的完成结论由模型提供；测试是否覆盖全部需求尚未获得独立确认。',
+    checks,
+  };
+}
+
+function currentAcceptance(run: AgentRunView, events: readonly AgentEventView[]): CurrentAcceptance | undefined {
+  for (const event of [...events].filter(event => event.run_id === run.id).sort((a, b) => b.sequence - a.sequence)) {
+    const payload = event.payload as Record<string, unknown> | null;
+    const current = event.kind === 'RUN_COMPLETED' ? payload?.acceptance
+      : event.kind === 'CHECKPOINT_CREATED' && payload?.kind === 'GENERAL_WORK_STATE_V1' ? payload.current_work : undefined;
+    if (current && typeof current === 'object') return current as CurrentAcceptance;
+  }
+  return undefined;
+}
+
+/** Latest derived check state only; historical plans are not user requirements. */
+export function agentPendingChecks(run: AgentRunView, events: readonly AgentEventView[]): string[] {
+  if (run.status !== 'PAUSED') return [];
+  const checkpoint = events.filter(event => event.run_id === run.id && event.kind === 'CHECKPOINT_CREATED')
+    .sort((a, b) => b.sequence - a.sequence)
+    .map(event => event.payload as Record<string, unknown>)
+    .find(payload => payload?.kind === 'GENERAL_WORK_STATE_V1');
+  const current = checkpoint?.current_work as { unresolved_checks?: unknown } | undefined;
+  const blockers = currentAcceptance(run, events)?.verification?.blockers ?? [];
+  const reasons: Record<string, string> = { NO_CHECK_RESULT: '执行未产生检查结果', OUTCOME_UNKNOWN: '执行结果尚不明确', FAILED: '检查未通过', STALE_FAILED: '先前失败的检查需要重验', INPUT_CHANGED_DURING_CHECK: '检查期间输入发生变化', CURRENT_INPUT_UNAVAILABLE: '当前检查输入不可用', CURRENT_CHECK_REQUIRED: '尚无当前检查结果', BROWSER_ASSERTION_FAILED: '页面检查未通过', REQUIRED_BROWSER_CASES_UNVERIFIED: '页面验收尚未完成', SKILL_CHECK_REQUIRED: '技能检查尚未完成', NON_SKILL_CHECK_REQUIRED: '其他修改尚未验证' };
+  const commands = blockers.slice(0, 3).map(blocker => {
+    const args = Array.isArray(blocker.details?.argv) ? blocker.details.argv.filter(arg => typeof arg === 'string').join(' ') : '';
+    const directory = typeof blocker.details?.display_directory === 'string' && blocker.details.display_directory !== '.' ? blocker.details.display_directory : '';
+    return `${reasons[String(blocker.reason)] ?? '检查尚未完成'}${directory ? `（${directory.slice(0, 120)}）` : ''}${args ? `：${args.slice(0, 160)}` : ''}`;
+  });
+  const cases = Array.isArray(current?.unresolved_checks) ? current.unresolved_checks : [];
+  return [...commands, ...cases.slice(0, 3).flatMap((item: unknown) => {
+    if (!item || typeof item !== 'object') return [];
+    const check = item as { expected?: unknown; check?: { status?: unknown } };
+    if (typeof check.expected !== 'string') return [];
+    const label = ({ pending: '待验证', failed: '未通过', stale: '输入已变化' } as Record<string, string>)[String(check.check?.status)];
+    return label ? [`${check.expected.slice(0, 240)}（${label}）`] : [];
+  })].slice(0, 3);
+}
+
+export function agentPausePresentation(run: AgentRunView, events: readonly AgentEventView[] = []): { reason: string; action: string; canResume: boolean } {
   if (run.error_code === 'AGENT_USER_INPUT_REQUIRED') return { reason: '需要你补充信息。请在输入框回答上方问题，发送后将继续当前任务；任务尚未完成。', action: '', canResume: false };
   const exhausted = run.current_step >= run.max_steps;
   const extra = Math.min(24, 4096 - run.max_steps);
   if (exhausted && extra <= 0) return { reason: '已达到本任务的累计执行上限。进展已保存，请查看执行记录后新建任务继续。', action: '', canResume: false };
+  const modelFailure = events.filter(event => event.run_id === run.id && event.kind === 'MODEL_FAILED')
+    .sort((a, b) => b.sequence - a.sequence)[0]?.payload as Record<string, unknown> | undefined;
+  const currentFailure = modelFailure?.step === run.current_step && modelFailure?.error_code === run.error_code ? modelFailure : undefined;
+  const diagnostics = currentFailure?.response_diagnostics as Record<string, unknown> | undefined;
+  const retrySeconds = diagnostics?.retry_after_seconds;
+  const retryAdvice = typeof retrySeconds === 'number' && Number.isSafeInteger(retrySeconds) && retrySeconds >= 0
+    ? `服务端在本次拒绝时建议等待 ${retrySeconds} 秒后重试；这不保证届时恢复。`
+    : '';
+  let protocolReason: string | undefined;
+  if (run.error_code === 'PROVIDER_RATE_LIMITED') {
+    protocolReason = currentFailure?.http_status === 429
+      ? `模型服务返回限流响应，进展已保存。${retryAdvice || '服务端未提供可用的重试间隔，可稍后继续。'}尚不能据此判断额度是否耗尽。`
+      : '旧版将模型服务限流和请求超时合并记录，具体原因未保留。进展已保存，可稍后继续当前任务。';
+  } else if (['PROVIDER_REQUEST_TIMEOUT', 'PROVIDER_UNAVAILABLE'].includes(run.error_code ?? '') && retryAdvice) {
+    protocolReason = `${providerResponseReason(run.error_code) ?? '模型服务暂时不可用，进展已保存。'}${retryAdvice}`;
+  }
   const reasons: Record<string, string> = {
     PROVIDER_MODEL_MISMATCH: '模型与协议不匹配。请在模型配置中编辑连接，选择对应服务商和套餐后重试。',
     MODEL_CONFIGURATION_UNSUPPORTED: '模型服务或推理设置已变化，无法沿用此任务的配置。请检查模型设置后创建新任务。',
@@ -665,6 +761,7 @@ export function agentPausePresentation(run: AgentRunView): { reason: string; act
     AGENT_BUDGET_EXHAUSTED: '本轮执行额度已用尽，任务尚未完成。进展和工具回执已保存，可接着处理。',
     AGENT_NO_PROGRESS: '连续多轮没有新增工具证据，已暂停。继续时会重新核对现状和下一步。',
     AGENT_REPEATED_ACTIONS: '调整提示后仍在重复相同操作、没有获得新信息，已保存进展并暂停。',
+    AGENT_CONTEXT_BUDGET_EXCEEDED: '当前请求和必要上下文超过工作容量，进展已保存。请缩小附件或任务范围后继续。',
     AGENT_TIME_BUDGET_EXHAUSTED: '累计模型与工具运行时间达到本轮 60 分钟预算，进展已保存。继续将开启新的资源额度。',
     AGENT_TOKEN_BUDGET_EXHAUSTED: '此任务曾因旧版 Token 额度暂停。该限制已取消；继续后按当前设置的执行时长运行。',
     AGENT_ACTION_REQUIRED: '尚无回执证明请求的操作已完成，已保留为未完成状态。',
@@ -672,14 +769,17 @@ export function agentPausePresentation(run: AgentRunView): { reason: string; act
     AGENT_TASK_BLOCKED: '任务遇到阻塞，具体原因见上方说明；任务尚未完成。条件改变后可继续工作。',
     AGENT_REFERENCED_IMAGES_UNAVAILABLE: '历史图片未能读取，任务已暂停。点击继续工作会重新尝试恢复本对话中的原图。',
     AGENT_REFERENCE_READ_REQUIRED: '指定的参考源码尚未读取，无法完成对照。进展已保存；继续后将读取参考文件并验证目标修改。',
-    AGENT_VERIFICATION_REQUIRED: '尚未通过与需求对应的验证，模型连续未补充检查或修正动作，任务已暂停。进展已保存，可继续完成检查。',
+    AGENT_VERIFICATION_REQUIRED: '当前检查仍有未解决项，任务已暂停。具体原因见待验证项和执行详情；已通过的检查无需无变化地重复运行。',
+    AGENT_ACCEPTANCE_SCOPE_REQUIRED: '仍有已记录的检查未解决，不能宣称全部完成。请查看具体待验证项；误加的计划项需要说明排除原因。',
     AGENT_OUTCOME_EVIDENCE_INVALID: '模型提交的完成依据未通过校验，任务尚未完成。请查看上方具体原因；继续后需要修正依据并补充必要验证。',
+    AGENT_OUTCOME_QUOTE_REQUIRED: '任务结果中的请求引用与当前任务不匹配。进展已保存；继续后需要修正引用，再校验完成依据。',
+    AGENT_OUTCOME_ARGUMENTS_INVALID: '模型提交的任务结果格式不正确，任务尚未完成。具体字段原因见执行详情；继续后可修正结果格式。',
     AGENT_BROWSER_LOGIN_REQUIRED: '需要你在右侧浏览器完成登录。请勿在对话中发送密码；登录后点击继续工作，Agent 将重新检查页面并接着验证。已有修改已保存，任务尚未完成。',
     AGENT_BROWSER_OUTCOME_REVIEW_REQUIRED: '之前的浏览器输入缺少可信结果，任务仍未完成，已有修改已保存。为避免重复提交，Agent 没有重放操作；需要先核对该操作在页面中的实际结果。',
     AGENT_RECOVERY_REQUIRED: '有操作的结果尚不明确，继续前将先核对执行结果。',
   };
   return {
-    reason: providerResponseReason(run.error_code) ?? reasons[run.error_code ?? ''] ?? '工作已暂停，进展已保存。',
+    reason: protocolReason ?? providerResponseReason(run.error_code) ?? reasons[run.error_code ?? ''] ?? '工作已暂停，进展已保存。',
     action: exhausted ? `继续工作（增加 ${extra} 步）` : '继续工作',
     canResume: true,
   };

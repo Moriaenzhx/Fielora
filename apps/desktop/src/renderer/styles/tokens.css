@@ -21,7 +21,7 @@
   --fl-action-primary-focus: color-mix(in srgb, var(--fl-action-primary) 30%, transparent);
   --fl-action-primary-disabled: color-mix(in srgb, var(--fl-action-primary) 16%, var(--fl-color-surface-subtle));
   --fl-action-primary-foreground: #ffffff;
-  --fl-color-code-background-base: #e2e4e6;
+  --fl-color-code-background-base: #f7f8fa;
   --fl-color-code-background: var(--fl-color-code-background-base);
 
   /* Brand aliases remain stable while the active accent completes the visual language. */
@@ -347,7 +347,7 @@
   --fl-color-emphasis-hover: #a795ff;
   --fl-action-primary: #9680ff;
   --fl-action-primary-foreground: #181a1f;
-  --fl-color-code-background-base: #2b3039;
+  --fl-color-code-background-base: #1b1e24;
   --fl-color-app: #17191e;
   --fl-color-canvas: #11131a;
   --fl-color-navigation: #171a22;

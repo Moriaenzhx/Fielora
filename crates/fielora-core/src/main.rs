@@ -1,7 +1,16 @@
 mod agent_browser;
+mod agent_browser_download;
+mod agent_browser_history;
+mod agent_browser_scope;
+mod agent_browser_scope_fixture;
+mod agent_coding_loop;
 mod agent_command_policy_fixture;
+mod agent_computer;
+mod agent_computer_fixture;
 mod agent_image_history;
 mod agent_model_repair;
+mod agent_operation_fixture;
+mod agent_operation_policy;
 mod agent_recovery;
 mod agent_request_intent;
 mod agent_request_scope;
@@ -10,7 +19,10 @@ mod agent_skill_verification;
 mod agent_task_outcome;
 mod agent_turn_context;
 mod agent_user_input;
+mod agent_verification;
 mod agent_visual_context;
+mod agent_web;
+mod agent_web_fixture;
 mod agent_work_plan;
 mod agent_work_review;
 mod agent_work_state;
@@ -55,7 +67,12 @@ use uuid::Uuid;
 
 const MAX_FRAME_BYTES: usize = 8 * 1024 * 1024;
 const PROTOCOL: ProtocolVersion = ProtocolVersion { major: 1, minor: 0 };
-const CAPABILITIES: [&str; 98] = [
+const CAPABILITIES: [&str; 103] = [
+    "web_search.config",
+    "web_search.update",
+    "web_search.store_credential",
+    "web_search.delete_credential",
+    "web_search.test",
     "provider.prepare_send",
     "system.build_provenance",
     "provider.update_model_runtime",
@@ -398,6 +415,9 @@ fn run() -> Result<(), CoreError> {
         cancellation.cancel();
     }
     runtime.agent.prepare_for_shutdown();
+    if let Ok(service) = runtime.agent.web_search_service() {
+        service.cancel_probe();
+    }
     if let Some(async_runtime) = runtime.async_runtime.take() {
         async_runtime.shutdown_timeout(std::time::Duration::from_millis(750));
     }
@@ -513,6 +533,38 @@ fn handle_frame(runtime: &mut Runtime, bytes: &[u8]) -> Dispatch {
     }
 
     let id = request.id.clone();
+    // Keep the parent read loop responsive during a bounded network test.
+    if request.method == "command.web_search.test" {
+        if !request.params.as_object().is_some_and(|p| p.is_empty()) {
+            return Dispatch::Continue(vec![domain_error_response(
+                id,
+                DomainError::Validation("WEB_SEARCH_TEST_INVALID".into()),
+                trace_id,
+            )]);
+        }
+        match (
+            runtime.agent.web_search_service(),
+            runtime.async_runtime.as_ref(),
+        ) {
+            (Ok(service), Some(executor)) => {
+                let sender = runtime.event_sender.clone();
+                executor.spawn_blocking(move || {
+                    let _ = sender.send(success_response(
+                        id,
+                        serde_json::to_value(service.probe()).expect("search probe DTO"),
+                    ));
+                });
+                return Dispatch::Continue(vec![]);
+            }
+            _ => {
+                return Dispatch::Continue(vec![domain_error_response(
+                    id,
+                    DomainError::Validation("WEB_SEARCH_UNAVAILABLE".into()),
+                    trace_id,
+                )]);
+            }
+        }
+    }
     let result = dispatch_request(runtime, &mut request, TraceId::new(trace_id.clone()));
     match result {
         Ok((result, event)) => {
@@ -897,6 +949,31 @@ fn dispatch_request(
             serialize(runtime.agent.resolve_approval(params)?)
         }
         "query.agent.mcp_connections" => serialize(runtime.agent.mcp_connections()),
+        "query.web_search.config" => serialize(runtime.agent.web_search_service()?.status()),
+        "command.web_search.update" => {
+            let params: UpdateWebSearchConfigRequest = parse_params(&request.params)?;
+            serialize(runtime.agent.web_search_service()?.update(params)?)
+        }
+        "command.web_search.store_credential" => {
+            let params: StoreWebSearchCredentialRequest =
+                serde_json::from_value(std::mem::take(&mut request.params))
+                    .map_err(|_| DomainError::Validation("WEB_SEARCH_CREDENTIAL_INVALID".into()))?;
+            serialize(
+                runtime
+                    .agent
+                    .web_search_service()?
+                    .store_credential(params.provider_id.as_deref(), params.secret)?,
+            )
+        }
+        "command.web_search.delete_credential" => {
+            let params: WebSearchProviderRequest = parse_params(&request.params)?;
+            serialize(
+                runtime
+                    .agent
+                    .web_search_service()?
+                    .delete_credential(params.provider_id.as_deref())?,
+            )
+        }
         "query.agent.mcp_runtime" => {
             let params: AgentRunRequest = parse_params(&request.params)?;
             serialize(runtime.agent.mcp_runtime(params.run_id)?)

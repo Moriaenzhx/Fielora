@@ -1043,6 +1043,64 @@ impl StorageHandle {
             if current.decision.is_some() {
                 return Err(DomainError::TerminalResource);
             }
+            let run = get_agent_run(connection, &owner, &request.run_id)?;
+            let tool = get_agent_tool_call(connection, &owner, &current.tool_call_id)?;
+            if run.status != AgentRunStatus::WaitingApproval
+                || tool.status != AgentToolStatus::WaitingApproval
+            {
+                return Err(DomainError::InvalidStateTransition);
+            }
+            if request.decision == ApprovalDecision::AllowOnce
+                && current.required_confirmations == Some(2)
+                && current.confirmation_stage == Some(1)
+            {
+                // Persist the first decision and the replacement nonce atomically.
+                // No runnable ToolCall or RUNNING Run exists between confirmations.
+                let nonce = format!(
+                    "{}{}",
+                    Uuid::now_v7().as_simple(),
+                    Uuid::now_v7().as_simple()
+                );
+                let mut next = current.clone();
+                next.nonce = nonce.clone();
+                next.confirmation_stage = Some(2);
+                let transaction = connection.transaction().map_err(storage_domain)?;
+                let changed = transaction.execute(
+                    "UPDATE agent_approvals SET nonce=?1 WHERE id=?2 AND decision IS NULL AND nonce=?3",
+                    params![nonce, current.id.0, request.nonce],
+                ).map_err(storage_domain)?;
+                if changed != 1 {
+                    return Err(DomainError::TerminalResource);
+                }
+                let payloads = [
+                    (
+                        AgentEventKind::CheckpointCreated,
+                        serde_json::json!({"reason":"APPROVAL_FIRST_CONFIRMATION","approval_id":current.id,"tool_call_id":current.tool_call_id,"operation_digest":current.operation_digest,"confirmation_stage":1}),
+                    ),
+                    (
+                        AgentEventKind::ApprovalRequested,
+                        serde_json::json!({"approval":next,"tool":{"id":tool.id,"name":tool.name,"effect":tool.effect,"arguments":tool.arguments},"reason":"SECOND_CONFIRMATION_REQUIRED"}),
+                    ),
+                ];
+                for (offset, (kind, payload)) in payloads.into_iter().enumerate() {
+                    transaction.execute(
+                        "INSERT INTO agent_events(id,run_id,sequence,schema_version,kind,payload_json,created_at) VALUES(?1,?2,?3,1,?4,?5,?6)",
+                        params![Uuid::now_v7().to_string(), request.run_id.0, revision_to_domain(run.next_sequence + offset as u64)?, wire(&kind), payload.to_string(), now],
+                    ).map_err(storage_domain)?;
+                }
+                transaction
+                    .execute(
+                        "UPDATE agent_runs SET next_sequence=?1,updated_at=?2 WHERE id=?3",
+                        params![
+                            revision_to_domain(run.next_sequence + 2)?,
+                            now,
+                            request.run_id.0
+                        ],
+                    )
+                    .map_err(storage_domain)?;
+                transaction.commit().map_err(storage_domain)?;
+                return get_agent_approval(connection, &owner, &request.approval_id);
+            }
             let tool_status = match request.decision {
                 ApprovalDecision::AllowOnce => AgentToolStatus::Proposed,
                 ApprovalDecision::Deny => AgentToolStatus::Denied,
@@ -1065,6 +1123,51 @@ impl StorageHandle {
             ).map_err(storage_domain)?;
             transaction.commit().map_err(storage_domain)?;
             get_agent_approval(connection, &owner, &request.approval_id)
+        })
+    }
+
+    /// A scoped grant is sourced only from a completed human approval in this Run.
+    /// Model arguments and completed tools without approval never grant it.
+    pub fn agent_operation_scope_authorized(
+        &self,
+        run_id: AgentRunId,
+        scope_digest: String,
+    ) -> Result<bool, DomainError> {
+        let owner = self.local_user.clone();
+        request_task(&self.sender, move |connection| {
+            if get_agent_run(connection, &owner, &run_id)?
+                .status
+                .is_terminal()
+            {
+                return Ok(false);
+            }
+            connection.query_row(
+                "SELECT EXISTS(SELECT 1 FROM agent_approvals a JOIN agent_tool_calls t ON t.id=a.tool_call_id WHERE a.run_id=?1 AND a.decision='ALLOW_ONCE' AND json_extract(t.arguments_json,'$._operation_policy.kind')='COMPUTER_OBSERVATION' AND json_extract(t.arguments_json,'$._operation_policy.scope_digest')=?2)",
+                params![run_id.0, scope_digest], |row| row.get(0),
+            ).map_err(storage_domain)
+        })
+    }
+
+    pub fn agent_operation_approval_satisfied(
+        &self,
+        tool_call_id: ToolCallId,
+        operation_digest: String,
+    ) -> Result<bool, DomainError> {
+        let owner = self.local_user.clone();
+        request_task(&self.sender, move |connection| {
+            let tool = get_agent_tool_call(connection, &owner, &tool_call_id)?;
+            if tool.arguments["_operation_policy"]["operation_digest"].as_str()
+                != Some(operation_digest.as_str())
+            {
+                return Ok(false);
+            }
+            let id: Option<String> = connection.query_row("SELECT id FROM agent_approvals WHERE tool_call_id=?1 AND decision='ALLOW_ONCE'", params![tool_call_id.0], |row| row.get(0)).optional().map_err(storage_domain)?;
+            let Some(id) = id else {
+                return Ok(false);
+            };
+            let approval = get_agent_approval(connection, &owner, &ApprovalId::new(id))?;
+            Ok(approval.required_confirmations.is_some()
+                && approval.confirmation_stage == approval.required_confirmations)
         })
     }
 
@@ -3898,6 +4001,9 @@ fn agent_approval_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<Approval
             .map(parse_wire)
             .transpose()?,
         nonce: row.get(4)?,
+        confirmation_stage: None,
+        required_confirmations: None,
+        operation_digest: None,
         created_at: row.get(5)?,
         resolved_at: row.get(6)?,
     })
@@ -3908,11 +4014,31 @@ fn get_agent_approval(
     owner: &PrincipalId,
     id: &ApprovalId,
 ) -> Result<ApprovalView, DomainError> {
-    connection.query_row(
+    let mut approval = connection.query_row(
         "SELECT a.id,a.run_id,a.tool_call_id,a.decision,a.nonce,a.created_at,a.resolved_at FROM agent_approvals a JOIN agent_runs r ON r.id=a.run_id JOIN fields f ON f.id=r.field_id WHERE a.id=?1 AND f.owner_principal_id=?2",
         params![id.0,owner.0],
         agent_approval_from_row,
-    ).optional().map_err(storage_domain)?.ok_or(DomainError::NotFound)
+    ).optional().map_err(storage_domain)?.ok_or(DomainError::NotFound)?;
+    let tool = get_agent_tool_call(connection, owner, &approval.tool_call_id)?;
+    let guard = &tool.arguments["_operation_policy"];
+    if let (Some(required @ 1..=2), Some(digest)) = (
+        guard["required_confirmations"].as_u64(),
+        guard["operation_digest"].as_str(),
+    ) {
+        if digest.len() != 64 || !digest.bytes().all(|b| b.is_ascii_hexdigit()) {
+            return Err(DomainError::Validation(
+                "AGENT_OPERATION_POLICY_INVALID".into(),
+            ));
+        }
+        let first: bool = connection.query_row(
+            "SELECT EXISTS(SELECT 1 FROM agent_events WHERE run_id=?1 AND kind='CHECKPOINT_CREATED' AND json_extract(payload_json,'$.reason')='APPROVAL_FIRST_CONFIRMATION' AND json_extract(payload_json,'$.approval_id')=?2 AND json_extract(payload_json,'$.operation_digest')=?3)",
+            params![approval.run_id.0, approval.id.0, digest], |row| row.get(0),
+        ).map_err(storage_domain)?;
+        approval.confirmation_stage = Some(if required == 2 && first { 2 } else { 1 });
+        approval.required_confirmations = Some(required as u8);
+        approval.operation_digest = Some(digest.into());
+    }
+    Ok(approval)
 }
 
 fn get_conversation_message(
@@ -4234,7 +4360,10 @@ fn validate_result_file_provenance(
     };
     let tool = get_agent_tool_call(connection, owner, tool_call_id)?;
     let run = get_agent_run(connection, owner, &tool.run_id)?;
-    if run.conversation_id != conversation.id || tool.status != AgentToolStatus::Completed {
+    if run.conversation_id != conversation.id
+        || tool.status != AgentToolStatus::Completed
+        || tool.error_code.is_some()
+    {
         return Err(DomainError::Validation(
             "RESULT_REFERENCE_PROVENANCE_INVALID".into(),
         ));
@@ -4244,15 +4373,43 @@ fn validate_result_file_provenance(
             "RESULT_REFERENCE_PROVENANCE_INVALID".into(),
         ));
     };
-    let receipt_path = receipt
-        .get("path")
-        .and_then(Value::as_str)
-        .or_else(|| tool.arguments.get("path").and_then(Value::as_str));
-    if receipt_path != Some(relative_path) {
+    // Use the native operation's successful output, never its requested path.
+    // Patch sets carry a version per changed file; unchanged_paths and removed
+    // sources do not establish a new file version.
+    let fact = match (tool.name.as_str(), receipt["kind"].as_str()) {
+        ("read_file", Some("FILE_READ" | "JSON_READ"))
+        | ("create_file", Some("FILE_CREATED"))
+        | ("write_file", Some("FILE_WRITTEN"))
+        | ("replace_text", Some("TEXT_REPLACED"))
+        | ("restore_file", Some("FILE_RESTORED"))
+        | ("file.extract", Some("RICH_FILE_EXTRACT"))
+        | ("artifact.export", Some("ARTIFACT_EXPORTED")) => Some(receipt),
+        ("stat_path", Some("PATH_METADATA")) if receipt["path_kind"].as_str() == Some("FILE") => {
+            Some(receipt)
+        }
+        ("apply_patches", Some("PATCH_SET_APPLIED")) => {
+            receipt["patches"].as_array().and_then(|patches| {
+                patches
+                    .iter()
+                    .find(|patch| patch["path"].as_str() == Some(relative_path))
+            })
+        }
+        ("move_file", Some("FILE_MOVED")) if receipt["to"].as_str() == Some(relative_path) => {
+            Some(receipt)
+        }
+        _ => None,
+    };
+    let Some(fact) = fact.filter(|fact| {
+        if tool.name == "move_file" {
+            fact["to"].as_str() == Some(relative_path)
+        } else {
+            fact["path"].as_str() == Some(relative_path)
+        }
+    }) else {
         return Err(DomainError::Validation(
             "RESULT_REFERENCE_PROVENANCE_INVALID".into(),
         ));
-    }
+    };
     if let Some((line_start, line_end)) = line_range
         && (tool.name != "read_file"
             || receipt.get("line_start").and_then(Value::as_u64) != Some(u64::from(line_start))
@@ -4263,9 +4420,13 @@ fn validate_result_file_provenance(
         ));
     }
     if let Some(expected) = expected_sha256 {
-        let receipt_hash = ["sha256", "after_sha256", "content_sha256"]
-            .into_iter()
-            .find_map(|key| receipt.get(key).and_then(Value::as_str));
+        let receipt_hash = match tool.name.as_str() {
+            "file.extract" => fact["source_sha256"].as_str(),
+            "artifact.export" => fact["output_sha256"].as_str(),
+            _ => fact["after_sha256"]
+                .as_str()
+                .or_else(|| fact["sha256"].as_str()),
+        };
         if receipt_hash != Some(expected) {
             return Err(DomainError::Validation(
                 "RESULT_REFERENCE_PROVENANCE_INVALID".into(),
@@ -12441,6 +12602,212 @@ mod tests {
             }));
         }
         fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn observation_scope_needs_human_approval_and_ends_with_the_task() {
+        let root = temporary_root();
+        {
+            let worker = start(&root, 1);
+            let handle = worker.handle();
+            let (_, _, run) = artifact_run_fixture(&handle, &root, 2);
+            let tool=handle.create_agent_tool_call(run.id.clone(),"computer".into(),AgentToolEffect::Process,AgentPolicyDecision::Ask,json!({"action":"observe","_operation_policy":{"kind":"COMPUTER_OBSERVATION","required_confirmations":1,"operation_digest":"b".repeat(64),"scope_digest":"scope"}}),10).unwrap();
+            assert!(
+                !handle
+                    .agent_operation_scope_authorized(run.id.clone(), "scope".into())
+                    .unwrap()
+            );
+            let approval = handle
+                .create_agent_approval(run.id.clone(), tool.id, 11)
+                .unwrap();
+            assert!(
+                !handle
+                    .agent_operation_scope_authorized(run.id.clone(), "scope".into())
+                    .unwrap()
+            );
+            handle
+                .resolve_agent_approval(
+                    ResolveAgentApprovalRequest {
+                        run_id: run.id.clone(),
+                        approval_id: approval.id,
+                        nonce: approval.nonce,
+                        decision: ApprovalDecision::AllowOnce,
+                    },
+                    12,
+                )
+                .unwrap();
+            assert!(
+                handle
+                    .agent_operation_scope_authorized(run.id.clone(), "scope".into())
+                    .unwrap()
+            );
+            assert!(
+                !handle
+                    .agent_operation_scope_authorized(run.id.clone(), "other-scope".into())
+                    .unwrap()
+            );
+            handle
+                .append_agent_event(
+                    run.id.clone(),
+                    AgentEventKind::RunCancelled,
+                    json!({}),
+                    AgentProjectionUpdate {
+                        status: Some(AgentRunStatus::Cancelled),
+                        ..Default::default()
+                    },
+                    13,
+                )
+                .unwrap();
+            assert!(
+                !handle
+                    .agent_operation_scope_authorized(run.id, "scope".into())
+                    .unwrap()
+            );
+        }
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn operation_two_confirmations_are_atomic_durable_and_replay_resistant() {
+        for outcome in ["allow", "deny", "cancel"] {
+            let root = temporary_root();
+            let (run_id, tool_id, first, second) = {
+                let worker = start(&root, 1);
+                let handle = worker.handle();
+                let (_, _, run) = artifact_run_fixture(&handle, &root, 2);
+                let tool=handle.create_agent_tool_call(run.id.clone(),"run_command".into(),AgentToolEffect::Process,AgentPolicyDecision::Ask,json!({"program":"rm","argv":["-rf","fixture-only"],"_operation_policy":{"kind":"CLEAR_SCOPE","required_confirmations":2,"operation_digest":"a".repeat(64)}}),10).unwrap();
+                let first = handle
+                    .create_agent_approval(run.id.clone(), tool.id.clone(), 11)
+                    .unwrap();
+                assert_eq!(first.confirmation_stage, Some(1));
+                let second = handle
+                    .resolve_agent_approval(
+                        ResolveAgentApprovalRequest {
+                            run_id: run.id.clone(),
+                            approval_id: first.id.clone(),
+                            nonce: first.nonce.clone(),
+                            decision: ApprovalDecision::AllowOnce,
+                        },
+                        12,
+                    )
+                    .unwrap();
+                assert_ne!(first.nonce, second.nonce);
+                assert_eq!(second.confirmation_stage, Some(2));
+                assert!(second.decision.is_none());
+                assert_eq!(
+                    handle.get_agent_run(run.id.clone()).unwrap().status,
+                    AgentRunStatus::WaitingApproval
+                );
+                assert_eq!(
+                    handle.list_agent_tool_calls(run.id.clone()).unwrap()[0].status,
+                    AgentToolStatus::WaitingApproval
+                );
+                assert!(
+                    !handle
+                        .agent_operation_approval_satisfied(tool.id.clone(), "a".repeat(64))
+                        .unwrap()
+                );
+                assert!(
+                    handle
+                        .resolve_agent_approval(
+                            ResolveAgentApprovalRequest {
+                                run_id: run.id.clone(),
+                                approval_id: first.id.clone(),
+                                nonce: first.nonce.clone(),
+                                decision: ApprovalDecision::AllowOnce
+                            },
+                            13
+                        )
+                        .is_err()
+                );
+                (run.id, tool.id, first, second)
+            };
+            {
+                let worker = start(&root, 14);
+                let handle = worker.handle();
+                assert_eq!(
+                    handle.get_agent_run(run_id.clone()).unwrap().status,
+                    AgentRunStatus::WaitingApproval
+                );
+                let events = handle
+                    .list_agent_events(ListAgentEventsRequest {
+                        run_id: run_id.clone(),
+                        after_sequence: None,
+                        limit: Some(200),
+                    })
+                    .unwrap();
+                let restored = events
+                    .iter()
+                    .rev()
+                    .find(|event| event.kind == AgentEventKind::ApprovalRequested)
+                    .unwrap();
+                assert_eq!(restored.payload["approval"]["nonce"], second.nonce);
+                assert_eq!(restored.payload["approval"]["confirmation_stage"], 2);
+                assert!(
+                    !events
+                        .iter()
+                        .any(|event| event.kind == AgentEventKind::ToolStarted)
+                );
+                if outcome == "cancel" {
+                    handle
+                        .append_agent_event(
+                            run_id.clone(),
+                            AgentEventKind::RunCancelled,
+                            json!({}),
+                            AgentProjectionUpdate {
+                                status: Some(AgentRunStatus::Cancelled),
+                                ..Default::default()
+                            },
+                            15,
+                        )
+                        .unwrap();
+                }
+                let result = handle.resolve_agent_approval(
+                    ResolveAgentApprovalRequest {
+                        run_id: run_id.clone(),
+                        approval_id: second.id.clone(),
+                        nonce: second.nonce.clone(),
+                        decision: if outcome == "deny" {
+                            ApprovalDecision::Deny
+                        } else {
+                            ApprovalDecision::AllowOnce
+                        },
+                    },
+                    16,
+                );
+                if outcome == "cancel" {
+                    assert!(result.is_err());
+                } else {
+                    let resolved = result.unwrap();
+                    assert!(resolved.decision.is_some());
+                    assert_eq!(
+                        handle
+                            .agent_operation_approval_satisfied(tool_id.clone(), "a".repeat(64))
+                            .unwrap(),
+                        outcome == "allow"
+                    );
+                    assert!(
+                        !handle
+                            .agent_operation_approval_satisfied(tool_id.clone(), "b".repeat(64))
+                            .unwrap()
+                    );
+                }
+                assert!(
+                    handle
+                        .resolve_agent_approval(
+                            ResolveAgentApprovalRequest {
+                                run_id: run_id.clone(),
+                                approval_id: first.id,
+                                nonce: first.nonce,
+                                decision: ApprovalDecision::AllowOnce
+                            },
+                            17
+                        )
+                        .is_err()
+                );
+            }
+            fs::remove_dir_all(root).unwrap();
+        }
     }
 
     #[test]

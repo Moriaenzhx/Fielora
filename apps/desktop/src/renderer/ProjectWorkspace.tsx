@@ -15,10 +15,11 @@ import { PrimaryNav } from './PrimaryNav';
 import { AppIcon, FileTypeIcon, type AppIconName } from './ui';
 import { BrowsePanel } from './BrowseScreen';
 import { AgentTurn } from './AgentTurn';
+import { researchUrl } from './web-research';
 import { ConversationTurnNavigation } from './ConversationTurnNavigation';
 import { AgentHumanReview } from './AgentHumanReview';
 import { AttachmentThumbnail, ConversationImageGallery, ImageContextMenu, ImagePreview } from './AttachmentMedia';
-import { AGENT_PROJECTION_UNAVAILABLE_MESSAGE, loadCompleteAgentEventSequence, mergeAgentEventPages } from './agent-projection';
+import { AGENT_PROJECTION_UNAVAILABLE_MESSAGE, agentForConversation, sameAgentSelection, loadCompleteAgentEventSequence, mergeAgentEventPages, type ConversationAgentSelection } from './agent-projection';
 import { buildAgentReview, buildDurableAgentReview, type AgentReviewFile } from './agent-review';
 import { MarkdownMessage } from './MarkdownMessage';
 import { ResizableDivider } from './ResizableDivider';
@@ -751,7 +752,7 @@ export function ProjectWorkspace({ onNow, onBrowse, onFields, onSettings, newCon
     return Number.isFinite(stored) ? Math.min(Math.max(stored, 170), 520) : 250;
   });
   const composerScope = composerDraftKey(projectId, conversationId);
-  const { prompt, setPrompt, attachments, setAttachments, update: updateComposerDraft, move: moveComposerDraft, clear: clearComposerDraft } = useComposerDraft(composerScope);
+  const { prompt, setPrompt, attachments, setAttachments, snapshot: composerDraftSnapshot, update: updateComposerDraft, move: moveComposerDraft, clear: clearComposerDraft } = useComposerDraft(composerScope);
   const [projectDraftProviderId, setProjectDraftProviderId] = useState<string | null>(null);
   const [previewAttachment, setPreviewAttachment] = useState<WorkspaceAttachmentView | null>(null);
   const [imageContextMenu, setImageContextMenu] = useState<{ left: number; top: number; attachment: WorkspaceAttachmentView } | null>(null);
@@ -795,6 +796,8 @@ export function ProjectWorkspace({ onNow, onBrowse, onFields, onSettings, newCon
   const recognitionRef = useRef<SpeechRecognitionLike | null>(null);
   const composerRef = useRef<HTMLTextAreaElement | null>(null);
   const selectedConversationRef = useRef('');
+  const agentSelectionRef = useRef<ConversationAgentSelection>({ projectId: '', conversationId: '', generation: 0 });
+  const composerSendTransferRef = useRef<{ selection: ConversationAgentSelection; conversationId: string } | null>(null);
   const handledNewConversationRequest = useRef(0);
   const handledAddProjectRequest = useRef(0);
   const handledWorkspaceRequest = useRef(0);
@@ -806,7 +809,7 @@ export function ProjectWorkspace({ onNow, onBrowse, onFields, onSettings, newCon
   const copiedMessageResetRef = useRef<number | null>(null);
   const creatingConversationForRef = useRef(new Set<string>());
   const sendingRef = useRef(false);
-  const queuedFollowUpStartingRef = useRef(false);
+  const queuedFollowUpStartingRef = useRef(new Set<string>());
   const conversationRefreshGenerationRef = useRef(0);
   const [projectActionsLayer, setProjectActionsLayer] = useState<HTMLElement | null>(null);
   const [terminalLayer, setTerminalLayer] = useState<HTMLElement | null>(null);
@@ -915,6 +918,7 @@ export function ProjectWorkspace({ onNow, onBrowse, onFields, onSettings, newCon
 
   const project = projects.find((item) => item.field_id === projectId) ?? null;
   const conversation = conversations.find((item) => item.id === conversationId) ?? null;
+  const foregroundAgent = agentForConversation(activeAgentRef.current, conversationId);
   const activeProviders = useMemo(() => providers.filter((item) => item.lifecycle_status !== 'REMOVED'), [providers]);
   const singleActiveProvider = useMemo(() => (activeProviders.length === 1 ? activeProviders[0] : null), [activeProviders]);
   const defaultConversationProvider = useMemo(() => activeProviders.find((item) => item.credential_present) ?? singleActiveProvider ?? activeProviders[0] ?? null, [activeProviders, singleActiveProvider]);
@@ -936,9 +940,10 @@ export function ProjectWorkspace({ onNow, onBrowse, onFields, onSettings, newCon
   const displayedAgentReview = historicalReview?.review ?? agentReview;
   const hasEnvironmentChanges = displayedAgentReview.files.length > 0 || Boolean(environment?.changed_files);
   const environmentPinned = environmentLayout === 'PANEL' && hasEnvironmentChanges && !environmentPanelDismissed && !workspaceOpen;
-  const agentRunIsTerminal = agentRun ? ['COMPLETED', 'FAILED', 'CANCELLED'].includes(agentRun.status) : false;
-  const agentExecuting = agentRun?.status === 'RUNNING' || agentRun?.status === 'QUEUED';
-  const awaitingAgentAnswer = agentRun?.status === 'PAUSED' && agentRun.error_code === 'AGENT_USER_INPUT_REQUIRED';
+  const agentRunIsCurrent = agentRun?.conversation_id === conversationId;
+  const agentRunIsTerminal = agentRunIsCurrent && agentRun ? ['COMPLETED', 'FAILED', 'CANCELLED'].includes(agentRun.status) : false;
+  const agentExecuting = agentRunIsCurrent && (agentRun?.status === 'RUNNING' || agentRun?.status === 'QUEUED');
+  const awaitingAgentAnswer = agentRunIsCurrent && agentRun?.status === 'PAUSED' && agentRun.error_code === 'AGENT_USER_INPUT_REQUIRED';
   const clarificationSubmissionRef = useRef<{ runId: string; text: string; messageId: string } | null>(null);
   const sortedProjects = useMemo(() => {
     const next = [...projects];
@@ -1160,7 +1165,7 @@ export function ProjectWorkspace({ onNow, onBrowse, onFields, onSettings, newCon
     setProjectId((current) => preferred ?? (next.some((item) => item.field_id === current) ? current : next[0]?.field_id ?? ''));
     setProjectsLoaded(true);
   }, []);
-  const refreshConversations = useCallback(async (fieldId: string, preferred?: string, draftSource?: string) => {
+  const refreshConversations = useCallback(async (fieldId: string, preferred?: string, draftSource?: string, selection?: ConversationAgentSelection) => {
     const generation = ++conversationRefreshGenerationRef.current;
     const next = await window.fielora.conversation.list({ field_id: fieldId });
     const draftCandidates = next;
@@ -1193,7 +1198,7 @@ export function ProjectWorkspace({ onNow, onBrowse, onFields, onSettings, newCon
       normalized = next.map((item) => replacements.get(item.id) ?? item);
       unsentIds = new Set(draftHistories.filter((item) => !hasUserMessage(item.messages)).map((item) => item.conversation.id));
     }
-    if (generation !== conversationRefreshGenerationRef.current) return;
+    if (generation !== conversationRefreshGenerationRef.current || (selection && !sameAgentSelection(agentSelectionRef.current, selection))) return;
     if (preferred && draftSource) moveComposerDraft(draftSource, composerDraftKey(fieldId, preferred));
     // Keep every page addressable; only the sidebar projection hides unsent drafts.
     setConversations(normalized);
@@ -1204,8 +1209,9 @@ export function ProjectWorkspace({ onNow, onBrowse, onFields, onSettings, newCon
     });
   }, [moveComposerDraft]);
   const refreshMessages = useCallback(async (id: string) => {
+    const selection = agentSelectionRef.current;
     const next = await window.fielora.conversation.listMessages({ conversation_id: id });
-    if (selectedConversationRef.current === id) {
+    if (sameAgentSelection(agentSelectionRef.current, selection) && selectedConversationRef.current === id) {
       setMessages(next);
       if (hasUserMessage(next)) setUnsentConversationIds((current) => {
         if (!current.has(id)) return current;
@@ -1213,7 +1219,8 @@ export function ProjectWorkspace({ onNow, onBrowse, onFields, onSettings, newCon
       });
     }
   }, []);
-  const loadAgentRun = useCallback(async (run: AgentRunView, reset = false) => {
+  const loadAgentRun = useCallback(async (run: AgentRunView, reset = false, selection = agentSelectionRef.current) => {
+    if (!sameAgentSelection(agentSelectionRef.current, selection) || selection.conversationId !== run.conversation_id) return;
     const projectionStarted = performance.now();
     const sameRun = agentRunIdRef.current === run.id;
     const existing = !reset && sameRun ? agentEventsRef.current : [];
@@ -1230,8 +1237,8 @@ export function ProjectWorkspace({ onNow, onBrowse, onFields, onSettings, newCon
       window.fielora.agent.mcpRuntime({ run_id: run.id }).catch(() => null),
       needsTools ? window.fielora.artifact.listFileReviews({ run_id: run.id }).catch(() => ({ revisions: [] })) : Promise.resolve({ revisions: agentFileRevisionsRef.current }),
     ]);
-    if (selectedConversationRef.current !== run.conversation_id) return;
-    const activeRunId = activeAgentRef.current?.runId;
+    if (!sameAgentSelection(agentSelectionRef.current, selection) || selectedConversationRef.current !== run.conversation_id) return;
+    const activeRunId = agentForConversation(activeAgentRef.current, run.conversation_id)?.runId;
     if (agentRunIdRef.current && agentRunIdRef.current !== run.id && activeRunId !== run.id) return;
     const events = mergeAgentEventPages(existing, incremental);
     agentEventsRef.current = events;
@@ -1244,13 +1251,14 @@ export function ProjectWorkspace({ onNow, onBrowse, onFields, onSettings, newCon
     performance.measure('fielora.agent.projection', { start: projectionStarted });
     if (['QUEUED', 'RUNNING', 'WAITING_APPROVAL', 'PAUSED'].includes(run.status)) {
       if (activeAgentRef.current?.runId !== run.id) activeAgentRef.current = { runId: run.id, conversationId: run.conversation_id, output: '', step: 0 };
-    } else if (activeAgentRef.current?.runId === run.id) activeAgentRef.current = null;
+    } else activeAgentRef.current = null;
   }, []);
   const refreshConversationAgent = useCallback(async (id: string) => {
+    const selection = agentSelectionRef.current;
     const runs = (await window.fielora.agent.list({ conversation_id: id })).filter((run) => !run.task.startsWith('[SUBAGENT ') && !run.task.startsWith('[HUMAN_COMMAND '));
-    if (selectedConversationRef.current !== id) return;
+    if (!sameAgentSelection(agentSelectionRef.current, selection) || selectedConversationRef.current !== id) return;
     if (!runs[0]) { agentRunIdRef.current = ''; agentEventsRef.current = []; agentToolsRef.current = []; agentFileRevisionsRef.current = []; setAgentRun(null); setAgentEvents([]); setAgentTools([]); setAgentFileRevisions([]); setMcpRuntime(null); activeAgentRef.current = null; return; }
-    await loadAgentRun(runs[0], true);
+    await loadAgentRun(runs[0], true, selection);
   }, [loadAgentRun]);
 
   useEffect(() => {
@@ -1297,12 +1305,22 @@ export function ProjectWorkspace({ onNow, onBrowse, onFields, onSettings, newCon
     return () => { cancelled = true; window.clearInterval(timer); window.removeEventListener('focus', refresh); document.removeEventListener('visibilitychange', refresh); };
   }, [environmentOpen, environmentRefresh, projectId, agentRun?.status, terminalRunId]);
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     selectedConversationRef.current = conversationId;
+    const transfer = composerSendTransferRef.current;
+    const sendingCreatedConversation = transfer?.conversationId === conversationId && sameAgentSelection(agentSelectionRef.current, transfer.selection);
+    composerSendTransferRef.current = null;
+    const selection = { projectId, conversationId, generation: agentSelectionRef.current.generation + 1 };
+    agentSelectionRef.current = selection;
+    // Only release this foreground reference. Core owns other conversations'
+    // background runs; switching the visible conversation never cancels them.
+    activeAgentRef.current = null;
+    sendingRef.current = sendingCreatedConversation;
+    setBusy(sendingCreatedConversation); setError(''); setAgentStopping(false); setMcpBusyConnectionId('');
+    setAgentRun(null); setAgentEvents([]); setAgentTools([]); setMcpRuntime(null);
     setStreamingOutput('');
     setStreamingStep(0);
     setQueuedFollowUps(readQueuedFollowUps(conversationId));
-    queuedFollowUpStartingRef.current = false;
     setHistoricalReview(null); setAgentReviewPath('');
     const conversationOverride = conversationId ? localStorage.getItem(`fielora:conversation-permission:${conversationId}`) : null;
     const projectDefault = projectId ? localStorage.getItem(`fielora:project-permission:${projectId}`) : null;
@@ -1315,8 +1333,8 @@ export function ProjectWorkspace({ onNow, onBrowse, onFields, onSettings, newCon
     setAgentProjectionNotice('');
     setAgentFileRevisions([]);
     if (!conversationId) { setMessages([]); setAgentRun(null); setAgentEvents([]); setAgentTools([]); setMcpRuntime(null); activeAgentRef.current = null; return; }
-    void refreshMessages(conversationId).catch((reason) => setError(reasonMessage(reason)));
-    void refreshConversationAgent(conversationId).catch(() => setAgentProjectionNotice(AGENT_PROJECTION_UNAVAILABLE_MESSAGE));
+    void refreshMessages(conversationId).catch((reason) => { if (sameAgentSelection(agentSelectionRef.current, selection)) setError(reasonMessage(reason)); });
+    void refreshConversationAgent(conversationId).catch(() => { if (sameAgentSelection(agentSelectionRef.current, selection)) setAgentProjectionNotice(AGENT_PROJECTION_UNAVAILABLE_MESSAGE); });
   }, [conversationId, projectId, refreshConversationAgent, refreshMessages]);
 
   useEffect(() => () => recognitionRef.current?.stop(), []);
@@ -1367,12 +1385,15 @@ export function ProjectWorkspace({ onNow, onBrowse, onFields, onSettings, newCon
       do {
         refresh.pending = false;
         const nextRunId = refresh.runId;
+        const selection = agentSelectionRef.current;
         try {
           const run = await window.fielora.agent.get({ run_id: nextRunId });
-          if (run.task.startsWith('[SUBAGENT ') || selectedConversationRef.current !== run.conversation_id) continue;
+          if (!sameAgentSelection(agentSelectionRef.current, selection) || run.task.startsWith('[SUBAGENT ') || selectedConversationRef.current !== run.conversation_id) continue;
           if (agentRunIdRef.current && agentRunIdRef.current !== run.id && activeAgentRef.current?.runId !== run.id) continue;
-          await loadAgentRun(run);
+          await loadAgentRun(run, false, selection);
+          if (!sameAgentSelection(agentSelectionRef.current, selection)) continue;
           if (run.status === 'PAUSED' && ['AGENT_USER_INPUT_REQUIRED', 'AGENT_TASK_BLOCKED'].includes(run.error_code ?? '')) await refreshMessages(run.conversation_id);
+          if (!sameAgentSelection(agentSelectionRef.current, selection)) continue;
           if (['COMPLETED', 'FAILED', 'CANCELLED'].includes(run.status) && !terminalAgentRefreshRef.current.has(run.id)) {
             terminalAgentRefreshRef.current.add(run.id);
             if (activeAgentRef.current?.runId === run.id) activeAgentRef.current = null;
@@ -1380,12 +1401,12 @@ export function ProjectWorkspace({ onNow, onBrowse, onFields, onSettings, newCon
             setStreamingStep(0);
             await Promise.all([
               refreshMessages(run.conversation_id),
-              refreshConversations(run.field_id, run.conversation_id),
-              window.fielora.workspace.listFiles({ field_id: run.field_id }).then(setFiles),
+              refreshConversations(run.field_id, run.conversation_id, undefined, selection),
+              window.fielora.workspace.listFiles({ field_id: run.field_id }).then((files) => { if (sameAgentSelection(agentSelectionRef.current, selection)) setFiles(files); }),
             ]);
           }
         } catch {
-          setAgentProjectionNotice(AGENT_PROJECTION_UNAVAILABLE_MESSAGE);
+          if (sameAgentSelection(agentSelectionRef.current, selection)) setAgentProjectionNotice(AGENT_PROJECTION_UNAVAILABLE_MESSAGE);
         }
       } while (refresh.pending);
     } finally {
@@ -1395,12 +1416,12 @@ export function ProjectWorkspace({ onNow, onBrowse, onFields, onSettings, newCon
 
   useEffect(() => window.fielora.core.subscribe((event) => {
     if (event.event === 'event.agent.browser') {
-      if (activeAgentRef.current?.runId === (event as { run_id: string }).run_id) openDockTool('BROWSER');
+      if (agentForConversation(activeAgentRef.current, selectedConversationRef.current)?.runId === (event as { run_id: string }).run_id) openDockTool('BROWSER');
       return;
     }
     if (event.event === 'event.agent.text_delta') {
       const delta = event as AgentTextDeltaEvent;
-      const active = activeAgentRef.current;
+      const active = agentForConversation(activeAgentRef.current, selectedConversationRef.current);
       if (!active || active.runId !== delta.run_id) return;
       if (active.step !== delta.step) {
         active.step = delta.step;
@@ -1460,7 +1481,7 @@ export function ProjectWorkspace({ onNow, onBrowse, onFields, onSettings, newCon
     } catch (reason) { setError(reasonMessage(reason)); }
   }
 
-  async function createConversationFor(targetProject: ProjectView, options: { provider?: ProviderConfigView; preserveComposer?: boolean } = {}): Promise<ConversationView | null> {
+  async function createConversationFor(targetProject: ProjectView, options: { provider?: ProviderConfigView; preserveComposer?: boolean; selection?: ConversationAgentSelection } = {}): Promise<ConversationView | null> {
     const fieldId = targetProject.field_id;
     setProjectId(fieldId);
     setCollapsedProjectIds((current) => {
@@ -1480,16 +1501,19 @@ export function ProjectWorkspace({ onNow, onBrowse, onFields, onSettings, newCon
       const candidates = currentDraft ? [currentDraft, ...existing.filter((item) => item.id !== currentDraft.id)] : existing;
       for (const candidate of candidates) {
         const history = await withUiTimeout(window.fielora.conversation.listMessages({ conversation_id: candidate.id }), 12_000, '读取现有对话超时，请重试。');
+        if (options.selection && !sameAgentSelection(agentSelectionRef.current, options.selection)) return null;
         if (!hasUserMessage(history)) {
           if (options.preserveComposer) {
             moveComposerDraft(composerScope, composerDraftKey(fieldId, candidate.id));
             localStorage.setItem(`fielora:conversation-permission:${candidate.id}`, permission);
           }
-          await refreshConversations(fieldId, candidate.id);
+          if (options.selection) composerSendTransferRef.current = { selection: options.selection, conversationId: candidate.id };
+          await refreshConversations(fieldId, candidate.id, undefined, options.selection);
           return candidate;
         }
       }
       const ready = options.provider ?? defaultConversationProvider;
+      if (options.selection && !sameAgentSelection(agentSelectionRef.current, options.selection)) return null;
       const created = await withUiTimeout(window.fielora.conversation.create({
         field_id: fieldId, title: '新对话', provider_config_id: ready?.id ?? null, model_id: ready?.default_model ?? null,
       }), 12_000, '创建对话超时，请重试。');
@@ -1498,10 +1522,11 @@ export function ProjectWorkspace({ onNow, onBrowse, onFields, onSettings, newCon
       }
       // Transfer after loading, immediately before publishing the selected page:
       // typing while creation/listing is pending still belongs to this draft.
-      await refreshConversations(fieldId, created.id, options.preserveComposer ? composerScope : composerDraftKey(fieldId, ''));
+      if (options.selection) composerSendTransferRef.current = { selection: options.selection, conversationId: created.id };
+      await refreshConversations(fieldId, created.id, options.preserveComposer ? composerScope : composerDraftKey(fieldId, ''), options.selection);
       return created;
     } catch (reason) {
-      setError(`无法创建新对话：${reasonMessage(reason)}`);
+      if (!options.selection || sameAgentSelection(agentSelectionRef.current, options.selection)) setError(`无法创建新对话：${reasonMessage(reason)}`);
       return null;
     } finally {
       creatingConversationForRef.current.delete(fieldId);
@@ -1630,64 +1655,74 @@ export function ProjectWorkspace({ onNow, onBrowse, onFields, onSettings, newCon
   }
 
   async function decideApproval(decision: 'ALLOW_ONCE' | 'DENY') {
-    if (!agentRun || !approval) return;
+    if (!agentRun || !agentRunIsCurrent || !approval) return;
+    const selection = agentSelectionRef.current;
     setBusy(true); setError('');
     try {
       await window.fielora.agent.resolveApproval({ run_id: agentRun.id, approval_id: approval.id, nonce: approval.nonce, decision });
       const next = await window.fielora.agent.get({ run_id: agentRun.id });
-      await loadAgentRun(next);
-    } catch (reason) { setError(reasonMessage(reason)); }
-    finally { setBusy(false); }
+      if (sameAgentSelection(agentSelectionRef.current, selection)) await loadAgentRun(next);
+    } catch (reason) { if (sameAgentSelection(agentSelectionRef.current, selection)) setError(reasonMessage(reason)); }
+    finally { if (sameAgentSelection(agentSelectionRef.current, selection)) setBusy(false); }
   }
 
   async function resumeAgent() {
-    if (!agentRun || sendingRef.current) return;
+    if (!agentRun || !agentRunIsCurrent || sendingRef.current) return;
+    const selection = agentSelectionRef.current;
     sendingRef.current = true;
     setBusy(true); setError('');
     try {
       const ownership = agentTurnOwnership(messages, agentRun, agentEvents);
       const images = await restoredAgentImages(agentRun.task, agentRun.conversation_id, ownership.userMessageId);
+      if (!sameAgentSelection(agentSelectionRef.current, selection)) return;
       const next = await window.fielora.agent.resume({ resource_budget: readAppPreferences(window.localStorage).agentResourceBudget, run_id: agentRun.id, attachments: agentImageInputs(images) });
+      if (!sameAgentSelection(agentSelectionRef.current, selection)) return;
       activeAgentRef.current = { runId: next.id, conversationId: next.conversation_id, output: '', step: 0 }; await loadAgentRun(next);
     }
-    catch (reason) { setError(reasonMessage(reason)); }
-    finally { sendingRef.current = false; setBusy(false); }
+    catch (reason) { if (sameAgentSelection(agentSelectionRef.current, selection)) setError(reasonMessage(reason)); }
+    finally { if (sameAgentSelection(agentSelectionRef.current, selection)) { sendingRef.current = false; setBusy(false); } }
   }
 
   async function activateMcpConnection(connectionId: string) {
-    if (!agentRun || mcpBusyConnectionId) return;
+    if (!agentRun || !agentRunIsCurrent || mcpBusyConnectionId) return;
+    const selection = agentSelectionRef.current;
     setMcpBusyConnectionId(connectionId); setError('');
     try {
       await window.fielora.agent.activateMcpConnection({ run_id: agentRun.id, connection_id: connectionId });
       const next = await window.fielora.agent.get({ run_id: agentRun.id });
-      await loadAgentRun(next);
+      if (sameAgentSelection(agentSelectionRef.current, selection)) await loadAgentRun(next);
     } catch (reason) {
+      if (!sameAgentSelection(agentSelectionRef.current, selection)) return;
       setError(`MCP 激活请求失败：${reasonMessage(reason)}`);
       const runtime = await window.fielora.agent.mcpRuntime({ run_id: agentRun.id }).catch(() => null);
-      setMcpRuntime(runtime);
+      if (sameAgentSelection(agentSelectionRef.current, selection)) setMcpRuntime(runtime);
     } finally {
-      setMcpBusyConnectionId('');
+      if (sameAgentSelection(agentSelectionRef.current, selection)) setMcpBusyConnectionId('');
     }
   }
 
   async function cancelAgent() {
-    if (!agentRun || sendingRef.current) return;
+    if (!agentRun || !agentRunIsCurrent || sendingRef.current) return;
+    const selection = agentSelectionRef.current;
     sendingRef.current = true; setBusy(true); setError(''); setAgentStopping(true);
-    try { const next = await window.fielora.agent.cancel({ run_id: agentRun.id }); await loadAgentRun(next); }
-    catch (reason) { setError(reasonMessage(reason)); }
-    finally { sendingRef.current = false; setBusy(false); setAgentStopping(false); }
+    try { const next = await window.fielora.agent.cancel({ run_id: agentRun.id }); if (sameAgentSelection(agentSelectionRef.current, selection)) await loadAgentRun(next); }
+    catch (reason) { if (sameAgentSelection(agentSelectionRef.current, selection)) setError(reasonMessage(reason)); }
+    finally { if (sameAgentSelection(agentSelectionRef.current, selection)) { sendingRef.current = false; setBusy(false); setAgentStopping(false); } }
   }
 
   async function retryAgent() {
-    if (!project || !conversation || !agentRun || agentRun.status !== 'FAILED' || activeAgentRef.current || sendingRef.current) return;
+    if (!project || !conversation || !agentRun || !agentRunIsCurrent || agentRun.status !== 'FAILED' || agentForConversation(activeAgentRef.current, conversationId) || sendingRef.current) return;
     const provider = activeProviders.find((item) => item.id === agentRun.provider_config_id) ?? effectiveConversationProvider;
     if (!provider || !provider.credential_present) { setError('原模型配置已不可用，请先在设置中检查。'); return; }
+    const selection = agentSelectionRef.current;
+    const workSurface = selectedActiveArtifactContext();
     sendingRef.current = true;
     setBusy(true); setError('');
     try {
       await prepareProviderSend(provider.id, agentRun.model_id);
       const ownership = agentTurnOwnership(messages, agentRun, agentEvents);
       const retryImages = await restoredAgentImages(agentRun.task, agentRun.conversation_id, ownership.userMessageId);
+      if (!sameAgentSelection(agentSelectionRef.current, selection)) return;
       const started = await window.fielora.agent.start({
         resource_budget: readAppPreferences(window.localStorage).agentResourceBudget,
         field_id: project.field_id,
@@ -1699,16 +1734,17 @@ export function ProjectWorkspace({ onNow, onBrowse, onFields, onSettings, newCon
         permission: agentRun.permission,
         max_steps: null,
         attachments: agentImageInputs(retryImages),
-        active_work_surface: selectedActiveArtifactContext(),
+        active_work_surface: workSurface,
       });
+      if (!sameAgentSelection(agentSelectionRef.current, selection)) return;
       foregroundAgentRunsRef.current.add(started.id);
       activeAgentRef.current = { runId: started.id, conversationId: conversation.id, output: '', step: 0 };
       agentRunIdRef.current = started.id; agentEventsRef.current = []; agentToolsRef.current = []; agentFileRevisionsRef.current = [];
       setAgentRun(started); setAgentEvents([]); setAgentTools([]); setAgentFileRevisions([]); setMcpRuntime(null); setStreamingOutput(''); setStreamingStep(0);
-      await loadAgentRun(await window.fielora.agent.get({ run_id: started.id }), true);
-      scrollToLatestAnswer();
-    } catch (reason) { setError(reasonMessage(reason)); }
-    finally { sendingRef.current = false; setBusy(false); }
+      await loadAgentRun(await window.fielora.agent.get({ run_id: started.id }), true, selection);
+      if (sameAgentSelection(agentSelectionRef.current, selection)) scrollToLatestAnswer();
+    } catch (reason) { if (sameAgentSelection(agentSelectionRef.current, selection)) setError(reasonMessage(reason)); }
+    finally { if (sameAgentSelection(agentSelectionRef.current, selection)) { sendingRef.current = false; setBusy(false); } }
   }
 
   async function pickAttachments() {
@@ -1803,8 +1839,8 @@ export function ProjectWorkspace({ onNow, onBrowse, onFields, onSettings, newCon
   }
 
   async function queueFollowUp(content: string) {
-    const active = activeAgentRef.current;
-    if (!project || !conversation || !active) return;
+    const active = agentForConversation(activeAgentRef.current, conversationId);
+    if (!project || !conversation || !active || selectedConversationRef.current !== conversation.id) return;
     const userText = content.trim();
     if (!userText) return;
     if (composerAttachments.some((item) => item.status === 'READY')) {
@@ -1820,11 +1856,9 @@ export function ProjectWorkspace({ onNow, onBrowse, onFields, onSettings, newCon
       permission,
       createdAt: Date.now(),
     };
-    setQueuedFollowUps((current) => {
-      const next = [...current, queued];
-      persistQueuedFollowUps(conversation.id, next);
-      return next;
-    });
+    const next = [...readQueuedFollowUps(conversation.id), queued];
+    persistQueuedFollowUps(conversation.id, next);
+    setQueuedFollowUps(next);
     setPrompt('');
     scrollToLatestAnswer();
   }
@@ -1832,11 +1866,9 @@ export function ProjectWorkspace({ onNow, onBrowse, onFields, onSettings, newCon
   function removeQueuedFollowUp(id: string) {
     if (!conversation) return;
     setQueuedFollowUpMenuId('');
-    setQueuedFollowUps((current) => {
-      const next = current.filter((item) => item.id !== id);
-      persistQueuedFollowUps(conversation.id, next);
-      return next;
-    });
+    const next = readQueuedFollowUps(conversation.id).filter((item) => item.id !== id);
+    persistQueuedFollowUps(conversation.id, next);
+    setQueuedFollowUps(next);
   }
 
   function editQueuedFollowUp(item: QueuedFollowUp) {
@@ -1878,10 +1910,18 @@ export function ProjectWorkspace({ onNow, onBrowse, onFields, onSettings, newCon
   }
 
   async function startQueuedFollowUp(item: QueuedFollowUp) {
-    if (!project || !conversation || activeAgentRef.current || !agentRunIsTerminal) return;
+    if (!project || !conversation || agentForConversation(activeAgentRef.current, conversationId) || !agentRunIsTerminal) return;
+    const selection = agentSelectionRef.current;
+    const workSurface = selectedActiveArtifactContext();
     const provider = effectiveConversationProvider;
     if (!provider || !provider.credential_present) throw new Error('追加任务对应的模型服务当前不可用，请在设置中检查。');
+    // Validate persisted queues too: an older UI may have attached this item to
+    // another conversation's run. Never turn that reference into execution.
+    const previous = await window.fielora.agent.get({ run_id: item.afterRunId });
+    if (previous.conversation_id !== conversation.id) throw new Error('这条追加消息属于另一段对话，请移除后重新发送。');
+    if (!sameAgentSelection(agentSelectionRef.current, selection)) return;
     await prepareProviderSend(provider.id, provider.default_model);
+    if (!sameAgentSelection(agentSelectionRef.current, selection)) return;
     let messageId = item.messageId;
     if (!messageId) {
       const message = await window.fielora.conversation.createMessage({
@@ -1889,64 +1929,67 @@ export function ProjectWorkspace({ onNow, onBrowse, onFields, onSettings, newCon
         provider_config_id: null, model_id: null, invocation_id: null, references: [],
       });
       messageId = message.id;
-      setQueuedFollowUps((current) => {
-        const next = current.map((queued) => queued.id === item.id ? { ...queued, messageId } : queued);
-        persistQueuedFollowUps(conversation.id, next);
-        return next;
-      });
+      const next = readQueuedFollowUps(conversation.id).map((queued) => queued.id === item.id ? { ...queued, messageId } : queued);
+      persistQueuedFollowUps(conversation.id, next);
+      if (!sameAgentSelection(agentSelectionRef.current, selection)) return;
+      setQueuedFollowUps(next);
       await refreshMessages(conversation.id);
     }
     const selectedHint = item.selectedFilePath ? `\n\nThe currently selected project file is: ${item.selectedFilePath}` : '';
+    const images = await historicalInputImages(item.content, conversation.id);
+    if (!sameAgentSelection(agentSelectionRef.current, selection)) return;
     const started = await window.fielora.agent.start({
         resource_budget: readAppPreferences(window.localStorage).agentResourceBudget,
       field_id: project.field_id, conversation_id: conversation.id,
       user_message_id: messageId,
       provider_config_id: provider.id, model_id: provider.default_model,
       task: `${item.content}${selectedHint}`.slice(0, 32_000), permission: item.permission, max_steps: null,
-      attachments: agentImageInputs(await historicalInputImages(item.content, conversation.id)),
-      active_work_surface: selectedActiveArtifactContext(),
+      attachments: agentImageInputs(images),
+      active_work_surface: workSurface,
     });
+    const next = readQueuedFollowUps(conversation.id).filter((queued) => queued.id !== item.id);
+    persistQueuedFollowUps(conversation.id, next);
+    if (!sameAgentSelection(agentSelectionRef.current, selection)) return;
+    setQueuedFollowUps(next);
     foregroundAgentRunsRef.current.add(started.id);
     activeAgentRef.current = { runId: started.id, conversationId: conversation.id, output: '', step: 0 };
     agentRunIdRef.current = started.id; agentEventsRef.current = []; agentToolsRef.current = []; agentFileRevisionsRef.current = [];
     setAgentRun(started); setAgentEvents([]); setAgentTools([]); setAgentFileRevisions([]); setMcpRuntime(null); setStreamingOutput(''); setStreamingStep(0);
-    await loadAgentRun(await window.fielora.agent.get({ run_id: started.id }), true);
-    scrollToLatestAnswer();
-    setQueuedFollowUps((current) => {
-      const next = current.filter((queued) => queued.id !== item.id);
-      persistQueuedFollowUps(conversation.id, next);
-      return next;
-    });
+    await loadAgentRun(await window.fielora.agent.get({ run_id: started.id }), true, selection);
+    if (sameAgentSelection(agentSelectionRef.current, selection)) scrollToLatestAnswer();
   }
 
   async function answerAgentQuestion(content: string, run: AgentRunView) {
     const text = content.trim();
-    if (!text || !conversation || run.conversation_id !== conversation.id) return;
+    if (!text || !conversation || run.conversation_id !== conversation.id || selectedConversationRef.current !== conversation.id) return;
     if (composerAttachments.some(item => item.status === 'READY')) { setError('请先用文字回答当前问题；附件仍保留在输入框中。'); return; }
+    const selection = agentSelectionRef.current;
     sendingRef.current = true;
     setBusy(true); setError('');
     try {
       await prepareProviderSend(run.provider_config_id, run.model_id);
+      if (!sameAgentSelection(agentSelectionRef.current, selection)) return;
       let submission = clarificationSubmissionRef.current;
       if (!submission || submission.runId !== run.id || submission.text !== text) {
         const message = await window.fielora.conversation.createMessage({ conversation_id: run.conversation_id, role: 'USER', content: text, status: 'COMPLETED', provider_config_id: null, model_id: null, invocation_id: null, references: [] });
         submission = { runId: run.id, text, messageId: message.id };
-        clarificationSubmissionRef.current = submission;
+        if (sameAgentSelection(agentSelectionRef.current, selection)) clarificationSubmissionRef.current = submission;
       }
       const resumed = await window.fielora.agent.resume({ resource_budget: readAppPreferences(window.localStorage).agentResourceBudget, run_id: run.id, user_message_id: submission.messageId });
+      if (!sameAgentSelection(agentSelectionRef.current, selection)) return;
       clarificationSubmissionRef.current = null;
       setPrompt(''); setStreamingOutput(''); setStreamingStep(0);
       activeAgentRef.current = { runId: resumed.id, conversationId: resumed.conversation_id, output: '', step: 0 };
       await Promise.all([loadAgentRun(resumed), refreshMessages(resumed.conversation_id)]);
-      scrollToLatestAnswer();
-    } catch (reason) { setError(reasonMessage(reason)); }
-    finally { sendingRef.current = false; setBusy(false); }
+      if (sameAgentSelection(agentSelectionRef.current, selection)) scrollToLatestAnswer();
+    } catch (reason) { if (sameAgentSelection(agentSelectionRef.current, selection)) setError(reasonMessage(reason)); }
+    finally { if (sameAgentSelection(agentSelectionRef.current, selection)) { sendingRef.current = false; setBusy(false); } }
   }
 
   async function send(content: string) {
     if (!project || sendingRef.current) return;
-    if (agentRun?.status === 'PAUSED' && agentRun.error_code === 'AGENT_USER_INPUT_REQUIRED') { await answerAgentQuestion(content, agentRun); return; }
-    if (activeAgentRef.current) {
+    if (awaitingAgentAnswer && agentRun) { await answerAgentQuestion(content, agentRun); return; }
+    if (agentForConversation(activeAgentRef.current, conversationId)) {
       sendingRef.current = true;
       try { setError(''); await queueFollowUp(content); }
       finally { sendingRef.current = false; }
@@ -1961,35 +2004,48 @@ export function ProjectWorkspace({ onNow, onBrowse, onFields, onSettings, newCon
     const readyAttachments = [...readyTextAttachments, ...readyImageAttachments];
     const userText = content.trim() || (readyAttachments.length > 0 ? '请阅读并分析这些附件。' : '');
     if (!userText) return;
+    let selection = agentSelectionRef.current;
+    let createdConversationId = '';
+    const adoptCreatedSelection = () => {
+      const current = agentSelectionRef.current;
+      // Only this send's single blank -> created transition may inherit its
+      // pending state, including failure cleanup before admission returns.
+      if (!conversation && createdConversationId && current.projectId === selection.projectId && current.conversationId === createdConversationId && current.generation === selection.generation + 1) selection = current;
+    };
+    const workSurface = selectedActiveArtifactContext();
     sendingRef.current = true;
     setBusy(true); setError('');
     try {
       // Resolve the actual credential before creating a conversation or message.
       // A legacy credential-present flag is not evidence that it can be read.
       await prepareProviderSend(provider.id, provider.default_model);
-      let activeConversation = conversation ?? await createConversationFor(project, { provider, preserveComposer: true });
+      if (!sameAgentSelection(agentSelectionRef.current, selection)) return;
+      let activeConversation = conversation ?? await createConversationFor(project, { provider, preserveComposer: true, selection });
       if (!activeConversation) return;
       const targetConversationId = activeConversation.id;
+      if (!conversation) { createdConversationId = targetConversationId; adoptCreatedSelection(); }
       // Projection can lag behind Core after restart or a status transition.
       // Check admission before creating a visible, durable user message.
       const pendingRun = (await window.fielora.agent.list({ conversation_id: targetConversationId }))
         .find((run) => ['QUEUED', 'RUNNING', 'WAITING_APPROVAL', 'PAUSED'].includes(run.status) && !run.task.startsWith('[SUBAGENT '));
+      adoptCreatedSelection();
       if (pendingRun) {
-        if (selectedConversationRef.current !== targetConversationId) return;
+        if (!sameAgentSelection(agentSelectionRef.current, selection) || selectedConversationRef.current !== targetConversationId) return;
         activeAgentRef.current = { runId: pendingRun.id, conversationId: targetConversationId, output: '', step: 0 };
-        await loadAgentRun(pendingRun);
-        if (selectedConversationRef.current !== targetConversationId) return;
+        await loadAgentRun(pendingRun, false, selection);
+        if (!sameAgentSelection(agentSelectionRef.current, selection) || selectedConversationRef.current !== targetConversationId) return;
         if (pendingRun.error_code === 'AGENT_USER_INPUT_REQUIRED' && pendingRun.status === 'PAUSED') { sendingRef.current = false; await answerAgentQuestion(content, pendingRun); return; }
         await queueFollowUp(content);
         return;
       }
+      if (!sameAgentSelection(agentSelectionRef.current, selection)) return;
       if (activeConversation.provider_config_id !== provider.id || activeConversation.model_id !== provider.default_model) {
         const synced = await window.fielora.conversation.update({
           conversation_id: targetConversationId, expected_revision: activeConversation.revision, title: activeConversation.title,
           provider_config_id: provider.id, model_id: provider.default_model,
         });
         activeConversation = synced;
-        setConversations((items) => items.map((item) => item.id === synced.id ? synced : item));
+        if (sameAgentSelection(agentSelectionRef.current, selection)) setConversations((items) => items.map((item) => item.id === synced.id ? synced : item));
       }
       const runImages = readyImageAttachments.length ? readyImageAttachments : await historicalInputImages(userText, targetConversationId);
       const visibleMessage = readyTextAttachments.length > 0 ? `${userText}\n\n附件：${readyTextAttachments.map((item) => item.name).join('、')}` : userText;
@@ -2011,7 +2067,7 @@ export function ProjectWorkspace({ onNow, onBrowse, onFields, onSettings, newCon
               provider_config_id: latest.provider_config_id,
               model_id: latest.model_id,
             });
-            await refreshConversations(titled.field_id, titled.id);
+            await refreshConversations(titled.field_id, titled.id, undefined, selection);
           }
         } catch {
           // Title generation is presentation metadata and must never stop an accepted user task.
@@ -2027,31 +2083,40 @@ export function ProjectWorkspace({ onNow, onBrowse, onFields, onSettings, newCon
         provider_config_id: provider.id, model_id: provider.default_model,
         task, permission, max_steps: null,
         attachments: agentImageInputs(runImages),
-        active_work_surface: selectedActiveArtifactContext(),
+        active_work_surface: workSurface,
       });
+      clearComposerDraft(composerDraftKey(project.field_id, targetConversationId), composerDraftSnapshot);
+      if (!sameAgentSelection(agentSelectionRef.current, selection) || selectedConversationRef.current !== targetConversationId) return;
       foregroundAgentRunsRef.current.add(started.id);
       activeAgentRef.current = { runId: started.id, conversationId: targetConversationId, output: '', step: 0 };
       agentRunIdRef.current = started.id; agentEventsRef.current = []; agentToolsRef.current = []; agentFileRevisionsRef.current = [];
       setAgentRun(started); setAgentEvents([]); setAgentTools([]); setAgentFileRevisions([]); setMcpRuntime(null);
-      setStreamingOutput(''); setStreamingStep(0); clearComposerDraft(composerDraftKey(project.field_id, targetConversationId));
+      setStreamingOutput(''); setStreamingStep(0);
       // A reconciled acknowledgement may follow already-persisted tools or a
       // question. Hydrate that history instead of showing an empty run.
-      await loadAgentRun(await window.fielora.agent.get({ run_id: started.id }), true);
+      await loadAgentRun(await window.fielora.agent.get({ run_id: started.id }), true, selection);
       await refreshMessages(targetConversationId);
-      scrollToLatestAnswer();
-    } catch (reason) { setError(reasonMessage(reason)); }
-    finally { sendingRef.current = false; setBusy(false); }
+      if (sameAgentSelection(agentSelectionRef.current, selection)) scrollToLatestAnswer();
+    } catch (reason) { adoptCreatedSelection(); if (sameAgentSelection(agentSelectionRef.current, selection)) setError(reasonMessage(reason)); }
+    finally { adoptCreatedSelection(); if (sameAgentSelection(agentSelectionRef.current, selection)) { sendingRef.current = false; setBusy(false); } }
   }
 
   useEffect(() => {
     const next = queuedFollowUps[0];
-    if (!next || !agentRunIsTerminal || activeAgentRef.current || queuedFollowUpStartingRef.current) return;
-    queuedFollowUpStartingRef.current = true;
+    if (!next || !agentRunIsTerminal || agentForConversation(activeAgentRef.current, conversationId) || queuedFollowUpStartingRef.current.has(next.id)) return;
+    const selection = agentSelectionRef.current;
+    queuedFollowUpStartingRef.current.add(next.id);
     setBusy(true);
     void startQueuedFollowUp(next)
-      .catch((reason) => setError(reasonMessage(reason)))
-      .finally(() => { queuedFollowUpStartingRef.current = false; setBusy(false); });
-  }, [agentRun?.id, agentRun?.status, queuedFollowUps]);
+      .catch((reason) => { if (sameAgentSelection(agentSelectionRef.current, selection)) setError(reasonMessage(reason)); })
+      .finally(() => {
+        queuedFollowUpStartingRef.current.delete(next.id);
+        if (sameAgentSelection(agentSelectionRef.current, selection)) setBusy(false);
+        // A return to the source page may have skipped this still-in-flight
+        // item. Re-read only that page's durable queue after releasing it.
+        else if (agentSelectionRef.current.projectId === selection.projectId && agentSelectionRef.current.conversationId === selection.conversationId) setQueuedFollowUps(readQueuedFollowUps(selection.conversationId));
+      });
+  }, [agentRun?.id, agentRun?.status, conversationId, queuedFollowUps]);
 
   function selectedActiveArtifactContext() {
     const tab = dockTabsRef.current.find((candidate) => candidate.id === activeDockTabId);
@@ -2531,6 +2596,17 @@ export function ProjectWorkspace({ onNow, onBrowse, onFields, onSettings, newCon
     }
   }
 
+  async function openResearchSource(value: string) {
+    const url = researchUrl(value);
+    if (!url) return;
+    try {
+      openDockTool('BROWSER');
+      await window.fielora.browser.createPage();
+      await window.fielora.browser.navigate({ url });
+      setError('');
+    } catch { setError('该来源暂时无法打开。'); }
+  }
+
   function openAgentReview(relativePath = '') {
     setHistoricalReview(null);
     setAgentReviewPath(relativePath);
@@ -2847,7 +2923,13 @@ export function ProjectWorkspace({ onNow, onBrowse, onFields, onSettings, newCon
           <header className="conversation-header conversation-context-header"><div className="conversation-heading"><AppIcon name="folder"/><div className="conversation-title-line"><h2 title={conversation?.title ?? '新对话'}>{conversation?.title ?? '新对话'}</h2>{conversation && <ConversationActionsMenu onRename={() => setConversationDialog({ kind: 'RENAME', value: conversation.title })} onDelete={() => setConversationDialog({ kind: 'DELETE' })}/>}</div></div></header>
           {environmentPinned && <aside className="environment-popover environment-panel" aria-label="环境信息" data-surface="floating" data-testid="environment-panel">{environmentContent}</aside>}
           <div className="message-list" ref={messageListRef} onClickCapture={(event) => {
-            if (!(event.target instanceof Element) || !event.target.closest('.operation-summary, .operation-list button, .agent-terminal-runtime, summary')) return;
+            if (!(event.target instanceof Element)) return;
+            const source = event.target.closest<HTMLAnchorElement>('.research-source a[href]');
+            if (source) {
+              event.preventDefault();
+              void openResearchSource(source.href);
+            }
+            if (!source && !event.target.closest('.operation-summary, .operation-list button, .agent-terminal-runtime, .research-more, .research-detail-toggle, summary')) return;
             // An explicit disclosure is reading, not a request to follow new output.
             atLatestAnswerRef.current = false;
             setAtLatestAnswer(false);
@@ -2913,12 +2995,12 @@ export function ProjectWorkspace({ onNow, onBrowse, onFields, onSettings, newCon
             <div className="composer-footer">
               <div className="composer-left-actions">
                 <TooltipButton type="button" className="composer-icon-button" tooltip="添加附件" placement="top" variant="default" onClick={() => void pickAttachments()} aria-label="添加附件" data-testid="composer-add-attachment"><AppIcon name="plus"/></TooltipButton>
-                <SelectMenu className="composer-menu-picker permission-picker" value={permission} ariaLabel="权限" testId="composer-permission" placement="top" hideChevron leading={<PermissionIcon permission={permission}/>} options={[{ value: 'READ_ONLY', label: '请求批准', description: '读取自动进行；修改文件、运行命令和联网前询问', icon: <PermissionIcon permission="READ_ONLY"/> }, { value: 'REVIEW_CHANGES', label: '帮我批准', description: '自动修改项目；支持时隔离执行普通命令，安装和风险操作仍需批准', icon: <PermissionIcon permission="REVIEW_CHANGES"/> }, { value: 'FULL_CONTROL', label: '完全访问权限', triggerLabel: '完全访问', description: '符合条件的项目依赖可自动安装，其他安装仍需批准；普通命令不使用沙箱', icon: <PermissionIcon permission="FULL_CONTROL"/>, tone: 'warning' }]} onChange={updatePermission} />
+                <SelectMenu className="composer-menu-picker permission-picker" value={permission} ariaLabel="权限" testId="composer-permission" placement="top" hideChevron leading={<PermissionIcon permission={permission}/>} options={[{ value: 'READ_ONLY', label: '请求批准', description: '读取自动进行；修改文件、运行命令和联网前询问', icon: <PermissionIcon permission="READ_ONLY"/> }, { value: 'REVIEW_CHANGES', label: '帮我批准', description: '自动修改项目；支持时隔离执行普通命令，安装和风险操作仍需批准', icon: <PermissionIcon permission="REVIEW_CHANGES"/> }, { value: 'FULL_CONTROL', label: '完全访问权限', triggerLabel: '完全访问', description: '自动执行任务所需操作；清空两次确认，非代码数据外发确认；电脑观察按任务和应用授权。普通命令无沙箱', icon: <PermissionIcon permission="FULL_CONTROL"/>, tone: 'warning' }]} onChange={updatePermission} />
               </div>
               <div className="composer-right-actions">
                 {activeProviders.length > 1 ? <SelectMenu className="composer-menu-picker configured-model-picker" value={effectiveConversationProvider?.id ?? ''} ariaLabel="模型" testId="conversation-model" placement="top" options={[{ value: '', label: '选择模型' }, ...activeProviders.map((provider) => ({ value: provider.id, label: provider.default_model, description: `${provider.display_name}${provider.credential_present ? '' : ' · 需要凭据'}`, disabled: !provider.credential_present }))]} onChange={(value) => void updateConversationSelection(value)} /> : effectiveConversationProvider && <span className="composer-model-label" title={effectiveConversationProvider.display_name}>{effectiveConversationProvider.default_model}</span>}
                 <TooltipButton type="button" className={`composer-icon-button voice-button ${listening ? 'active' : ''}`} tooltip={listening ? '停止语音输入' : '语音输入'} placement="top" variant="default" onClick={toggleVoiceInput} aria-label={listening ? '停止语音输入' : '开始语音输入'} data-testid="composer-voice"><AppIcon name="microphone"/></TooltipButton>
-                {activeAgentRef.current && !awaitingAgentAnswer && prompt.trim() ? <>
+                {foregroundAgent && !awaitingAgentAnswer && prompt.trim() ? <>
                   {agentExecuting && <TooltipButton type="button" className="composer-icon-button composer-running-stop" tooltip="停止当前任务" placement="top" variant="default" aria-label="停止 Agent" onClick={() => void cancelAgent()} data-testid="stop-agent-secondary"><AppIcon name="stop"/></TooltipButton>}
                   <TooltipButton className="composer-submit" type="submit" tooltip="当前任务完成后继续处理" placement="top" variant="default" disabled={busy} aria-label="追加到当前任务" data-testid="send-steering"><AppIcon name="send" weight="bold"/></TooltipButton>
                 </> : agentExecuting

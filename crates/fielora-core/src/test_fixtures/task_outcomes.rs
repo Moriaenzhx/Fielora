@@ -11,6 +11,9 @@ pub fn turn(
     facts: &[AgentToolCallView],
     step: u32,
 ) -> Result<AgentModelTurn, ModelError> {
+    if run.task.starts_with("OUTCOME_HANDOFF_") {
+        return handoff_turn(run, request, facts);
+    }
     // This fixture runs through the real Coordinator request construction.
     if request.tools.iter().any(|t| t.name.starts_with("idr.")) {
         return Err(ModelError::ProviderProtocolError);
@@ -29,7 +32,7 @@ pub fn turn(
     let finish = |outcome: &str, intent: &str, summary: &str, ids: Vec<String>| {
         (
             "finish_task",
-            json!({"outcome":outcome,"intent":intent,"request_quote":run.task,"summary":summary,"evidence_tool_call_ids":ids}),
+            json!({"outcome":outcome,"remaining_work":[],"required_evidence":[],"intent":intent,"request_quote":run.task,"summary":summary,"evidence_tool_call_ids":ids}),
         )
     };
     let mut text = "协议回归进行中。".to_owned();
@@ -462,4 +465,189 @@ pub fn turn(
             .collect(),
         usage: None,
     })
+}
+
+// Raw text endings deliberately bypass the legacy fixture outcome wrapper.
+fn handoff_turn(
+    run: &AgentRunView,
+    request: &AgentModelRequest,
+    facts: &[AgentToolCallView],
+) -> Result<AgentModelTurn, ModelError> {
+    let reply = |text: String, tool_calls| {
+        Ok(AgentModelTurn {
+            continuation: None,
+            text,
+            tool_calls,
+            usage: None,
+        })
+    };
+    let call = |name: &str, arguments: Value| AgentModelToolCall {
+        id: format!("handoff-{}", facts.len()),
+        name: name.into(),
+        arguments,
+    };
+    let report =
+        "The requested file was written and its assertion was checked. DRAFT_BODY_SENTINEL."
+            .to_owned();
+    let written = facts
+        .iter()
+        .any(|t| t.name == "create_file" && t.status == AgentToolStatus::Completed);
+    let checked = facts.iter().any(|t| {
+        t.name == "run_command" && t.receipt.as_ref().is_some_and(|r| r["success"] == true)
+    });
+    let pressure = run.task.contains("_PRESSURE_");
+    let handoff = request.tools.iter().any(|t| t.name == "continue_task");
+    if run.task.ends_with("_BLOCKED")
+        && facts
+            .iter()
+            .any(|t| t.name == "finish_task" && t.status == AgentToolStatus::Completed)
+    {
+        // Cold restore must return to ordinary execution, even though the old
+        // terminal report followed a PENDING handoff checkpoint.
+        if handoff || !request.tools.iter().any(|t| t.name == "run_command") {
+            return Err(ModelError::ProviderProtocolError);
+        }
+        let rejected = facts
+            .iter()
+            .any(|t| t.error_code.as_deref() == Some("AGENT_RESUME_OBSERVATION_REQUIRED"));
+        let checks = facts
+            .iter()
+            .filter(|t| t.name == "run_command")
+            .collect::<Vec<_>>();
+        if rejected && checks.len() == 1 {
+            return reply(
+                String::new(),
+                vec![call(
+                    "run_command",
+                    json!({"program":"node","argv":["verify-result.cjs"]}),
+                )],
+            );
+        }
+        return reply(
+            String::new(),
+            vec![call(
+                "finish_task",
+                json!({"outcome":"completed","intent":"workspace_change","request_quote":run.task,
+            "summary":"Cold blocked recovery: inspected current execution and reran the safe assertion; prior write preserved.","remaining_work":[],"required_evidence":[],
+            "evidence_tool_call_ids":checks.iter().map(|t| &t.id).collect::<Vec<_>>()}),
+            )],
+        );
+    }
+    if pressure && !facts.iter().any(|t| t.name == "read_file") {
+        return reply(
+            String::new(),
+            vec![call("read_file", json!({"path":"context.txt"}))],
+        );
+    }
+    if pressure && handoff {
+        let text = request
+            .messages
+            .iter()
+            .filter_map(|m| match m {
+                AgentModelMessage::User(s) => Some(s.as_str()),
+                _ => None,
+            })
+            .collect::<String>();
+        if request.messages.len() != 1
+            || text.len() > 40000
+            || text.contains("OLD_ASSISTANT_REPORT")
+            || text.contains("SOURCE_BODY_SENTINEL")
+            || request
+                .system
+                .contains("Use native tools to inspect before editing")
+            || !text.contains("PRIOR_USER_CONSTRAINT")
+            || !text.contains(&run.task)
+            || !text.contains("DRAFT_BODY_SENTINEL")
+            || !text.contains("requirement_coverage")
+            || facts
+                .iter()
+                .filter(|t| t.name == "create_file")
+                .any(|t| !text.contains(&t.id.0))
+            || (facts
+                .last()
+                .is_some_and(|t| t.name == "finish_task" && t.status == AgentToolStatus::Failed)
+                && !text.contains("AGENT_VERIFICATION_REQUIRED"))
+            || (checked && text.contains("AGENT_VERIFICATION_REQUIRED"))
+        {
+            return Err(ModelError::ProviderProtocolError);
+        }
+    }
+    if run.task.ends_with("_IGNORE") {
+        return reply("I will inspect the project next.".into(), vec![]);
+    }
+    if !written {
+        return reply(
+            String::new(),
+            vec![call(
+                "create_file",
+                json!({"path":"result.txt","content":"correct"}),
+            )],
+        );
+    }
+    if handoff {
+        if run.task.ends_with("_MIXED") {
+            return reply(
+                String::new(),
+                vec![
+                    call("finish_task", json!({"use_draft_summary":true})),
+                    AgentModelToolCall {
+                        id: "unadmitted-write".into(),
+                        name: "create_file".into(),
+                        arguments: json!({"path":"must-not-exist.txt","content":"must not execute"}),
+                    },
+                ],
+            );
+        }
+        let rejected = facts
+            .iter()
+            .any(|t| t.name == "finish_task" && t.status == AgentToolStatus::Failed);
+        if run.task.ends_with("_CONTINUE") && rejected && !checked {
+            return reply(json!({"tool":"continue_task","arguments":{"reason":"The actual assertion has not run; continue with that check."}}).to_string(),vec![]);
+        }
+        let tool = request
+            .tools
+            .iter()
+            .find(|t| t.name == "finish_task")
+            .ok_or(ModelError::ProviderProtocolError)?;
+        let mut args = json!({"outcome":"completed","remaining_work":[],"required_evidence":[],"intent":"workspace_change","request_quote":run.task,
+            "evidence_tool_call_ids":facts.iter().filter(|t| t.name!="finish_task" && t.name!="read_file" && t.status==AgentToolStatus::Completed).map(|t|&t.id).collect::<Vec<_>>()});
+        if run.task.ends_with("_BLOCKED") {
+            args["outcome"] = json!("blocked");
+            args["remaining_work"] = json!([
+                "Fixture requires a restart before checking the current execution environment."
+            ]);
+        }
+        if tool.input_schema["properties"]
+            .get("use_draft_summary")
+            .is_some()
+        {
+            args["use_draft_summary"] = json!(true);
+        } else {
+            args["summary"] = json!(
+                "Cold recovery: file and current assertion checked. No lost draft was reconstructed."
+            );
+        }
+        if run.task.ends_with("_NATIVE") {
+            return reply(String::new(), vec![call("finish_task", args)]);
+        }
+        return reply(
+            json!({"tool":"finish_task","arguments":args}).to_string(),
+            vec![],
+        );
+    }
+    if !checked
+        && (!run.task.ends_with("_CONTINUE") || facts.iter().any(|t| t.name == "finish_task"))
+    {
+        if pressure && !request.messages.iter().any(|m| matches!(m, AgentModelMessage::ToolResult {content, ..} if content.contains("SOURCE_BODY_SENTINEL"))) {
+            return Err(ModelError::ProviderProtocolError);
+        }
+        return reply(
+            String::new(),
+            vec![call(
+                "run_command",
+                json!({"program":"node","argv":["verify-result.cjs"]}),
+            )],
+        );
+    }
+    reply(report, vec![])
 }

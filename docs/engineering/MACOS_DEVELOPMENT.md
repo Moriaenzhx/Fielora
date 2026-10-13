@@ -98,4 +98,11 @@ Chromium CDP 在 macOS 绕过 Cocoa 快捷键转换，编辑键测试需携带 `
 
 - Browse Gate：Mac CDP 编辑命令与动画时序问题已校正，真实剪贴板往返和页面输入通过。关闭受控 `/blank` 页面后，产品 Page 列表已删除该页，但 CDP 仍列出该 WebContents，等待 3 秒仍存在。原 exact-target-count 断言保留失败；调整 close/remove 顺序未解决，未保留该无效产品修改。根因尚待进一步原生 Electron 复现，不能宣称完整浏览器生命周期通过。
 - Desktop Foundation Gate：旧断言中 Logo 中心不透明、侧栏消失靠 opacity、同路由清除新聊天子页等与当前产品定义不符，已校正。后续在 Scheduled 页面访问已不存在的 `chrome-tools` 控件失败；未为通过测试而恢复产品已隐藏的控件，后续应按当前导航重写该历史流程。
+
+### 2026-10-13 开发源码同步复查
+
+- 两次 PreMerge 均通过 context/contracts、341 项 TypeScript、627 项 Rust（8 项 ignored）、15 项 Core 集成、typecheck/lint/fmt/clippy 和 Phase 02 桌面流程；另有 8 项离线评估测试通过，无真实模型调用。
+- 第一次仍在关闭 `/blank` 后发现额外 WebContents；未更改断言或产品关闭逻辑。独立 Browse 复跑与第二次 PreMerge 的 Browse 阶段均通过，但这不证明偶发关闭问题已解决。
+- 第二次 PreMerge 停在上述已知 Desktop Foundation 流程：`tests/e2e/desktop-foundation-e2e.mjs:131` 对不存在的 `chrome-tools` 元素调用 `click()`。完整 Gate 保持未通过；本次未合并 main。
+- 当前 macOS ARM64 包的独立专项通过，覆盖快捷键、合成凭据本地存储与重启复用、Agent 文件/命令流程、终端、Finder 目标和持久恢复；不等同真实模型电脑控制验收。证据保留在本机 ignored `artifacts/github-sync-20261013/`，公开安装包仍保持草稿。
 - 因此此 changeset 是可继续开发的 Mac 基线，尚不满足合入 main 所要求的完整 PreMerge；不推送或合并 main，不称为发布完成。测试失败日志留在 `/tmp/fielora-mac-browse.log` 与 `/tmp/fielora-mac-foundation.log`，新专项证据在 `/tmp/fielora-macos-20261002/`。

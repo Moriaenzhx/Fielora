@@ -81,6 +81,11 @@ const BUILTIN_SKILLS: &[(&str, &str, &str)] = &[
         "State the acceptance condition, inspect before editing, prefer replace_text for narrow edits, preserve unrelated work, run the narrowest relevant check, inspect git_read diff, and only then summarize.",
     ),
     (
+        "interactive_prototype",
+        "Design and refine a polished interactive HTML prototype from the user's flow and visual references, with a saved project file and isolated preview.",
+        include_str!("builtin_skills/interactive_prototype.md"),
+    ),
+    (
         "diagnose_failing_tests",
         "Reproduce, localize, fix, and replay a failing test.",
         "Run the exact failing command, retain its receipt, inspect the smallest relevant code, make one focused change, rerun the exact command, then run the related suite. Never relabel a failure as a pass.",
@@ -337,6 +342,7 @@ impl AgentError {
 
     pub fn model_recovery_message(&self) -> String {
         match self {
+            Self::CommandTimeout => "AGENT_COMMAND_TIMEOUT: this finite command exceeded its deadline; its owned process group was stopped. This does not establish a browser/network sandbox restriction. For a long-lived preview discover browser_server with capability_status, then start/status the managed server and open its observed URL with browser. Do not retry using nohup or background children in run_command.".into(),
             Self::WorkGuidance { code, detail } => format!("{code}: {detail}"),
             Self::PatchConflict {
                 path,
@@ -347,11 +353,11 @@ impl AgentError {
             } => {
                 let code = if reason == "SHA_MISMATCH" { "AGENT_FILE_CHANGED" } else { "AGENT_PATCH_CONFLICT" };
                 format!(
-                    "{code}: path={path}; operation={operation}; reason={reason}; match_count={match_count}; current_sha256={current_sha256}. Re-read only this file if its hash changed. If exact text matched zero times, use the line numbers from read_file with line_edits. If it matched multiple intended occurrences, use one replacement with replace_all=true. Do not run verification or git diff until the write succeeds."
+                    "{code}: path={path}; operation={operation}; reason={reason}; match_count={match_count}; current_sha256={current_sha256}. No write occurred. Compare the latest guarded edit/read receipts first: the requested content may already be present after a successful repair, in which case run the targeted current check. Otherwise use observed line numbers for line_edits, or replace_all=true for multiple intended matches. Re-read only the missing range or changed file."
                 )
             }
             Self::FileChanged => "AGENT_FILE_CHANGED: the file hash changed or the exact edit was ambiguous. Re-read the affected file and retry the write before verification.".into(),
-            Self::TextMatchFailed => "AGENT_TEXT_MATCH_FAILED: the guarded file hash is current, but the proposed exact text was missing or ambiguous. Use the current read_file line numbers with apply_patches line_edits, or provide a uniquely matching replacement. Do not reread solely to recalculate the same hash.".into(),
+            Self::TextMatchFailed => "AGENT_TEXT_MATCH_FAILED: the guarded file hash is current, but the proposed exact text was missing or ambiguous. No write occurred. Compare the latest successful edit and retained source first. If the desired content is already present, run the targeted current check; otherwise use observed line numbers with apply_patches or a uniquely matching replacement. Do not reread solely to recalculate the same hash.".into(),
             _ => self.code().into(),
         }
     }
@@ -700,7 +706,7 @@ pub fn coding_tool_catalog() -> Vec<ToolSpec> {
         ),
         tool(
             "read_file",
-            "Read current UTF-8 source and its whole-file SHA-256. Relative paths mean the target project; absolute paths may read user-supplied reference scopes listed in context. Output defaults to 16 KiB (max_bytes: 256..65536). For JSON, prefer json_pointers, e.g. [\"/12045\",\"/scripts/start\"], to return exact values or explicit missing keys without reading a minified file. Otherwise use inclusive line_start/line_end, or resume a partial result with its next_byte_offset as byte_offset (a whole-file UTF-8 boundary). JSON pointers, line bounds and byte offsets are mutually exclusive modes. A truncated prefix does not establish absence.",
+            "Read current UTF-8 source and its whole-file SHA-256. Relative paths mean the target project; absolute paths may read user-supplied reference scopes listed in context or the exact artifact_path from a successful browser download in this Run. Captured downloads are read-only, checked against their recorded bytes/hash, and remain untrusted. Output defaults to 16 KiB (max_bytes: 256..65536). For JSON, prefer json_pointers, e.g. [\"/12045\",\"/scripts/start\"], to return exact values or explicit missing keys without reading a minified file. Otherwise use inclusive line_start/line_end, or resume a partial result with its next_byte_offset as byte_offset (a whole-file UTF-8 boundary). JSON pointers, line bounds and byte offsets are mutually exclusive modes. A truncated prefix does not establish absence.",
             AgentToolEffect::Observe,
             json!({"type":"object","properties":{"path":{"type":"string"},"line_start":{"type":"integer","minimum":1},"line_end":{"type":"integer","minimum":1},"byte_offset":{"type":"integer","minimum":0},"max_bytes":{"type":"integer","minimum":256,"maximum":65536},"json_pointers":{"type":"array","minItems":1,"maxItems":32,"items":{"type":"string","maxLength":512}}},"required":["path"],"additionalProperties":false}),
         ),
@@ -935,7 +941,7 @@ pub fn coding_tool_catalog() -> Vec<ToolSpec> {
         ),
         tool(
             "run_command",
-            "Run an installed OS executable with an argv array in the project. Tool IDs such as web.search/web.fetch are NOT executables; call an exposed tool directly. Shell command strings are not accepted. On Windows do not assume bash exists; inspect the executable or use an available native program. Do not repeat a missing executable with different search terms. Use environment.inspect to discover alternative runtimes and pass their absolute path as program. argv contains only arguments, not the executable again. cwd may be relative or an absolute directory inside the project; omit it for the project root.",
+            "Run a finite installed OS command with an argv array in the project. This tool waits for exit and cleans up its owned process group on exit/timeout, including nohup/background children. For a persistent local preview, discover and use browser_server; do not background a server here. Timeout alone does not prove a sandbox or browser networking restriction. Tool IDs such as web.search/web.fetch are NOT executables; call an exposed tool directly. Shell command strings are not accepted. On Windows do not assume bash exists; inspect the executable or use an available native program. Do not repeat a missing executable with different search terms. Use environment.inspect to discover alternative runtimes and pass their absolute path as program. argv contains only arguments, not the executable again. cwd may be relative or an absolute directory inside the project; omit it for the project root.",
             AgentToolEffect::Process,
             json!({"type":"object","properties":{"program":{"type":"string"},"argv":{"type":"array","items":{"type":"string"},"maxItems":128},"cwd":{"type":"string"},"timeout_ms":{"type":"integer","minimum":1000,"maximum":900000}},"required":["program","argv"],"additionalProperties":false}),
         ),
@@ -1103,11 +1109,12 @@ impl PolicyEngine {
         use AgentPermission::*;
         use AgentPolicyDecision::*;
         use AgentToolEffect::*;
-        // Install authorization is based on a durable preparation resolved by Core,
-        // never on a model-supplied risk flag. FullControl does not bypass this.
-        if spec.definition.name == "fonts.install"
-            || spec.definition.name == "tools.install"
-            || (spec.definition.name == "run_command" && installation_command(arguments))
+        // Prepared installation facts remain mandatory in Core. FullControl
+        // grants ordinary host installation; shared exception policy still applies.
+        if permission != FullControl
+            && (spec.definition.name == "fonts.install"
+                || spec.definition.name == "tools.install"
+                || (spec.definition.name == "run_command" && installation_command(arguments)))
         {
             return Ask;
         }
@@ -2138,6 +2145,17 @@ impl<E: ToolExecutor> ToolExecutor for RoutedToolExecutor<E> {
     }
 }
 
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ReadFileArgs {
+    path: String,
+    line_start: Option<usize>,
+    line_end: Option<usize>,
+    byte_offset: Option<usize>,
+    max_bytes: Option<usize>,
+    json_pointers: Option<Vec<String>>,
+}
+
 /// Concrete project-scoped executor for the current coding tool catalog.
 ///
 /// The historical `ToolRuntime` name is retained for compatibility. This is a
@@ -2145,6 +2163,7 @@ impl<E: ToolExecutor> ToolExecutor for RoutedToolExecutor<E> {
 /// remain in Harness.Execution.
 pub struct ToolRuntime {
     root: PathBuf,
+    artifact_root: PathBuf,
     reference_paths: Vec<PathBuf>,
     checkpoint_root: PathBuf,
     skill_catalog: SkillCatalog,
@@ -2169,12 +2188,18 @@ impl ToolRuntime {
         fs::create_dir_all(&checkpoint_root).map_err(|_| AgentError::IoFailed)?;
         Ok(Self {
             root,
+            artifact_root: artifact_root.to_path_buf(),
             reference_paths: Vec::new(),
             checkpoint_root,
             skill_catalog,
             content_blob_store: None,
             project_install_sandbox: false,
         })
+    }
+
+    /// Host-owned artifact root; paths below it are not automatically readable.
+    pub fn artifact_root(&self) -> &Path {
+        &self.artifact_root
     }
 
     pub fn with_content_blob_root(mut self, library_root: PathBuf) -> Self {
@@ -2898,17 +2923,7 @@ impl ToolRuntime {
     }
 
     fn read_file(&self, arguments: &Value) -> Result<ToolExecution, AgentError> {
-        #[derive(Deserialize)]
-        #[serde(deny_unknown_fields)]
-        struct Args {
-            path: String,
-            line_start: Option<usize>,
-            line_end: Option<usize>,
-            byte_offset: Option<usize>,
-            max_bytes: Option<usize>,
-            json_pointers: Option<Vec<String>>,
-        }
-        let args: Args = parse_args(arguments)?;
+        let args: ReadFileArgs = parse_args(arguments)?;
         if args.path.trim().to_ascii_lowercase().starts_with("http://")
             || args
                 .path
@@ -2925,10 +2940,21 @@ impl ToolRuntime {
         deny_sensitive(&relative)?;
         let target = resolve_existing(&self.root, &relative)?;
         let bytes = fs::read(&target).map_err(|_| AgentError::FileNotFound)?;
+        Self::read_file_bytes(arguments, &bytes, &relative_text(&relative))
+    }
+
+    /// Render already captured bytes after the Harness independently admits their
+    /// provenance. This is not a tool and grants no filesystem access by itself.
+    pub fn read_file_bytes(
+        arguments: &Value,
+        bytes: &[u8],
+        display_path: &str,
+    ) -> Result<ToolExecution, AgentError> {
+        let args: ReadFileArgs = parse_args(arguments)?;
         if bytes.len() > MAX_FILE_BYTES {
             return Err(AgentError::FileTooLarge);
         }
-        let text = std::str::from_utf8(&bytes).map_err(|_| AgentError::BinaryFileUnsupported)?;
+        let text = std::str::from_utf8(bytes).map_err(|_| AgentError::BinaryFileUnsupported)?;
         let limit = args.max_bytes.unwrap_or(16 * 1024);
         if !(256..=64 * 1024).contains(&limit) {
             return Err(AgentError::ToolArgumentsInvalid);
@@ -2967,7 +2993,7 @@ impl ToolRuntime {
                 selected.push('\n');
             }
             return Ok(ToolExecution {
-                receipt: json!({"kind":"JSON_READ","path":relative_text(&relative),"sha256":sha256(&bytes),
+                receipt: json!({"kind":"JSON_READ","path":display_path,"sha256":sha256(bytes),
                     "bytes":bytes.len(),"read_mode":"JSON_POINTERS","json_pointers":pointers,"missing_pointers":missing,"truncated":truncated,"output_sha256":sha256(selected.as_bytes())}),
                 observation: bounded_observation(format!(
                     "JSON values from the current file (not template fallback labels). Missing means that exact pointer is absent.{}\n{selected}",
@@ -3042,7 +3068,7 @@ impl ToolRuntime {
             selected.push_str(&format!("\n[Partial file range; continue with byte_offset={next}, or use json_pointers for JSON keys. Do not infer missing content from this prefix.]"));
         }
         Ok(ToolExecution {
-            receipt: json!({"kind":"FILE_READ","path":relative_text(&relative),"sha256":sha256(&bytes),"bytes":bytes.len(),
+            receipt: json!({"kind":"FILE_READ","path":display_path,"sha256":sha256(bytes),"bytes":bytes.len(),
                 "read_mode":if args.byte_offset.is_some() {"BYTE_RANGE"} else {"LINES"},"line_start":start,"line_end":end,
                 "observed_line_end":observed_end,"byte_start":byte_start.unwrap_or(offset),"byte_end":byte_end,"next_byte_offset":next,"truncated":next.is_some()}),
             observation: bounded_observation(selected),
@@ -3566,7 +3592,7 @@ impl ToolRuntime {
         capability_catalog::validate(arguments)?;
         let capabilities = json!({
             "coding":{"status":"AVAILABLE","tools":["files","exact patch","git read","controlled command","verification"]},
-            "command_execution":{"sandbox_available":fielora_platform::command_sandbox::available(),"sandbox_scope":"run_command only; project/private temporary writes; no read confidentiality","automatic_review_commands":"OS sandbox with network denied; unavailable enforcement requires approval","full_control":"ordinary commands use current-user host access; recognized project dependency installs use OS write sandbox with network allowed; global/system/unknown installation still needs approval","python_dependencies":"Create a project venv, then invoke its absolute Python path with -m pip install -r and a project requirements file; never assume system Python is a project environment"},
+            "command_execution":{"sandbox_available":fielora_platform::command_sandbox::available(),"sandbox_scope":"run_command only; project/private temporary writes; no read confidentiality","automatic_review_commands":"OS sandbox with network denied; unavailable enforcement requires approval","full_control":"ordinary commands use current-user host access; recognized project dependency installs use OS write sandbox with network allowed; ordinary installations are automatic under Full control; recognized clear/upload exceptions remain separately governed","python_dependencies":"Create a project venv, then invoke its absolute Python path with -m pip install -r and a project requirements file; never assume system Python is a project environment"},
             "rich_file_read":{"status":"AVAILABLE","tool":"file.extract","formats":["PDF","DOCX","PPTX","XLSX"],"authority":"UNTRUSTED_PROJECT_CONTENT","limitations":["read/extract only","no OCR","no layout rendering","no formula evaluation"]},
             "artifact":{"status":"AVAILABLE","tools":["artifact.create","artifact.read","artifact.update","artifact.list","artifact.history","artifact.set_archive_state","artifact.export"],"types":["DOCUMENT","PRESENTATION","DIAGRAM","SPREADSHEET"],"persistence":"DURABLE_REVISION","catalog_and_history":"BOUNDED_METADATA_ONLY","archive":"REVERSIBLE_VISIBILITY_STATE"},
             "artifact_export":{"status":"AVAILABLE","tool":"artifact.export","formats":["DOCX","PPTX","SVG","XLSX"],"effect":"WORKSPACE_WRITE","persistence":["REQUEST_SCOPED","DURABLE_REVISION"],"presentation_png_assets":"DURABLE_EXACT_SNAPSHOT_CONTAIN","verification":"STRUCTURAL_AND_SEMANTIC_ROUNDTRIP_ONLY"},
@@ -3574,8 +3600,8 @@ impl ToolRuntime {
             "csv":{"status":"AVAILABLE","path":"bounded UTF-8 file tools; formula-aware XLSX is not implied"},
             "web_research":{"status":"UNSUPPORTED_CAPABILITY","tools":[],"reason":"No Web provider is registered in the built-in executor; routed execution reports the actual admitted catalog.","effect":"NETWORK","authority":"UNTRUSTED_WEB_CONTENT","limitations":["no download-to-workspace tool","no browser fallback","no deep research runtime"]},
             "skill_acquisition":{"status":"AVAILABLE","tools":["skills.search","skills.prepare","skills.install"],"scope":"Public GitHub repository discovery and complete public HTTPS ZIP Skill bundles","network_reachability_verified":false,"guidance":"Search or reuse an observed source, prepare the whole bundle, then install using the actual preparation tool_call_id and run verify_skill. A browser failure does not prove these network tools are unavailable. No automatic script execution."},
-            "fonts":{"status":"AVAILABLE","tools":["fonts.list","fonts.prepare","fonts.install"],"scope":"Current-user system fonts; TTF/OTF/TTC up to 32 MiB; project-relative file or public HTTPS font; installation confirmation required"},
-            "tool_acquisition":{"status":"AVAILABLE","tools":["environment.inspect","tools.prepare","tools.install"],"providers":["node","ripgrep","https_zip"],"scope":"Windows x64 portable ZIPs into project .fielora/tools; discover compatible existing executables first","automatic_install":"Official provider, actual download <=20 MiB, isolated, no PATH/system changes or install scripts; existing network/read-only approval applies","other_installations":"Other tools.install acquisitions still require approval; run_command project dependency rules are in command_execution","limitations":["128 MiB compressed / 512 MiB expanded","no automatic scripts, MSI, global installation or private sources"]},
+            "fonts":{"status":"AVAILABLE","tools":["fonts.list","fonts.prepare","fonts.install"],"scope":"Current-user system fonts; TTF/OTF/TTC up to 32 MiB; project-relative file or public HTTPS font; prepared installation follows the active permission preset"},
+            "tool_acquisition":{"status":"AVAILABLE","tools":["environment.inspect","tools.prepare","tools.install"],"providers":["node","ripgrep","https_zip"],"scope":"Windows x64 portable ZIPs into project .fielora/tools; discover compatible existing executables first","automatic_install":"Official provider, actual download <=20 MiB, isolated, no PATH/system changes or install scripts; existing network/read-only approval applies","other_installations":"Prepared packages are automatic in Full control; other presets retain their installation approval rules","limitations":["128 MiB compressed / 512 MiB expanded","no automatic scripts, MSI, global installation or private sources"]},
             "web_download":{"status":"PARTIAL","tools":["skills.prepare","tools.prepare"],"scope":"Complete public HTTPS ZIP into quarantine; separate install authorizes project publication","limitations":["32 MiB Skill archives / 128 MiB portable tool archives","no private credentials","not a general file downloader"]},
             "archive":{"status":"PARTIAL","tools":["skills.prepare","skills.install"],"scope":"Validated ZIP Skill directories only; path/link/collision and extraction limits enforced","limitations":["no TAR/RAR","no arbitrary extraction destination","no automatic scripts"]},
             "docx_pdf":{"status":"PARTIAL","reason":"bounded one-shot DOCX export and DOCX/PDF extraction are available; PDF export, editing, preview, and visual verification remain unsupported"},
@@ -3613,6 +3639,7 @@ impl ToolRuntime {
             #[serde(default)]
             replace_all: bool,
         }
+        require_edit_guard(arguments, "expected_sha256")?;
         let args: Args = parse_args(arguments)?;
         let mut replacements = args.replacements;
         match (args.old_text, args.new_text) {
@@ -3675,6 +3702,9 @@ impl ToolRuntime {
         if after.len() > MAX_FILE_BYTES {
             return Err(AgentError::FileTooLarge);
         }
+        if after.as_bytes() == before {
+            return Err(edit_already_current());
+        }
         let backup_sha256 = self.checkpoint(&before)?;
         atomic_write(&target, after.as_bytes(), false)?;
         let after_sha256 = sha256(after.as_bytes());
@@ -3733,12 +3763,18 @@ impl ToolRuntime {
             detail: "apply_patches expects {patches:[{path,expected_sha256,line_edits:[{start_line,end_line,new_text}]}]}; line_edits is an ARRAY inside EACH patch, not at the root. Alternative: replacements:[{old_text,new_text,replace_all?}] inside each patch, never both modes. Line numbers are inclusive, start at 1. Supply the actual current SHA-256 from read_file. No write occurred; correct the argument shape once, not the repository or plan.".into(),
         }
         };
+        if let Some(patches) = arguments["patches"].as_array() {
+            for patch in patches {
+                require_edit_guard(patch, "patches[].expected_sha256")?;
+            }
+        }
         let args: Args = parse_args(arguments).map_err(|_| invalid())?;
         if args.patches.is_empty() || args.patches.len() > 16 {
             return Err(invalid());
         }
         let mut seen = HashSet::new();
         let mut prepared = Vec::new();
+        let mut unchanged_paths = Vec::new();
         for patch in args.patches {
             let uses_replacements = !patch.replacements.is_empty();
             let uses_line_edits = !patch.line_edits.is_empty();
@@ -3781,15 +3817,7 @@ impl ToolRuntime {
             let mut matches = 0;
             let mut line_edit_count = 0;
             if uses_replacements {
-                let replacements = patch
-                    .replacements
-                    .into_iter()
-                    .filter(|replacement| replacement.old_text != replacement.new_text)
-                    .collect::<Vec<_>>();
-                if replacements.is_empty() {
-                    continue;
-                }
-                for (index, replacement) in replacements.into_iter().enumerate() {
+                for (index, replacement) in patch.replacements.into_iter().enumerate() {
                     let mut old_text = replacement.old_text;
                     let mut new_text = replacement.new_text;
                     let mut count = after.matches(&old_text).count();
@@ -3869,7 +3897,8 @@ impl ToolRuntime {
                 return Err(AgentError::FileTooLarge);
             }
             if after.as_bytes() == before {
-                return Err(invalid());
+                unchanged_paths.push(relative_text(&relative));
+                continue;
             }
             prepared.push(PreparedPatch {
                 relative,
@@ -3882,7 +3911,7 @@ impl ToolRuntime {
             });
         }
         if prepared.is_empty() {
-            return Err(invalid());
+            return Err(edit_already_current());
         }
         let mut receipts = Vec::new();
         let mut written = Vec::new();
@@ -3907,8 +3936,12 @@ impl ToolRuntime {
             }));
         }
         Ok(ToolExecution {
-            receipt: json!({"kind":"PATCH_SET_APPLIED","files":receipts.len(),"patches":receipts}),
-            observation: format!("Applied exact guarded edits to {} file(s).", receipts.len()),
+            receipt: json!({"kind":"PATCH_SET_APPLIED","files":receipts.len(),"patches":receipts,"unchanged_paths":unchanged_paths}),
+            observation: format!(
+                "Applied exact guarded edits to {} file(s); {} already-current file(s) were not rewritten.",
+                receipts.len(),
+                unchanged_paths.len()
+            ),
         })
     }
 
@@ -3984,6 +4017,9 @@ impl ToolRuntime {
             content: String,
             expected_sha256: Option<String>,
         }
+        if !create {
+            require_edit_guard(arguments, "expected_sha256")?;
+        }
         let args: WriteArgs = parse_args(arguments)?;
         let relative = normalize_relative(&args.path)?;
         deny_sensitive(&relative)?;
@@ -4007,6 +4043,9 @@ impl ToolRuntime {
                 .ok_or(AgentError::ToolArgumentsInvalid)?;
             if !valid_sha256(expected) || sha256(before) != expected {
                 return Err(AgentError::FileChanged);
+            }
+            if before == args.content.as_bytes() {
+                return Err(edit_already_current());
             }
         }
         if let Some(parent) = target.parent() {
@@ -4402,6 +4441,28 @@ fn reconcile_patch(before: &[u8], patch: &Value) -> Result<String, AgentError> {
         after.replace_range(start..end, &new_text);
     }
     Ok(after)
+}
+
+fn edit_already_current() -> AgentError {
+    AgentError::WorkGuidance {
+        code: "AGENT_EDIT_ALREADY_CURRENT",
+        detail: "The guarded edit produces exactly the existing content. No bytes changed and no backup was created. This is not a schema error or a verification result. Do not repeat this edit or reread the same source merely to retry it. If this is the intended repair, run the targeted check on the current inputs; the earlier failure is not evidence that this version still fails.".into(),
+    }
+}
+
+fn require_edit_guard(arguments: &Value, field: &'static str) -> Result<(), AgentError> {
+    let value = arguments.get("expected_sha256");
+    let reason = match value {
+        None | Some(Value::Null) => "missing",
+        Some(Value::String(hash)) if valid_sha256(hash) => return Ok(()),
+        _ => "invalid: expected a 64-character hexadecimal SHA-256 string",
+    };
+    Err(AgentError::WorkGuidance {
+        code: "AGENT_TOOL_ARGUMENTS_INVALID",
+        detail: format!(
+            "{field} is {reason}. Supply the current SHA-256 from an existing read/edit receipt; read only if that evidence is missing or outdated. No write occurred. This does not require reading the entire file."
+        ),
+    })
 }
 
 fn parse_args<T: for<'de> Deserialize<'de>>(value: &Value) -> Result<T, AgentError> {
@@ -6573,6 +6634,108 @@ mod tests {
         fs::remove_dir_all(root).unwrap();
         fs::remove_dir_all(artifacts).unwrap();
         fs::remove_dir_all(bare).unwrap();
+    }
+
+    #[test]
+    fn repair_noop_is_not_an_argument_error_or_a_write() {
+        let (root, artifacts) = fixture();
+        let runtime = ToolRuntime::new(&root, &artifacts).unwrap();
+        let cancel = CommandCancellation::default();
+        let current = "        if os.path.exists(src) and os.path.isdir(src):\n";
+        fs::write(root.join("repair.py"), current).unwrap();
+        let hash = sha256(current.as_bytes());
+        for (name, args) in [
+            (
+                "apply_patches",
+                json!({"patches":[{"path":"repair.py","expected_sha256":hash,"line_edits":[{"start_line":1,"end_line":1,"new_text":current.trim_end()}]}]}),
+            ),
+            (
+                "replace_text",
+                json!({"path":"repair.py","expected_sha256":hash,"old_text":current,"new_text":current}),
+            ),
+            (
+                "write_file",
+                json!({"path":"repair.py","expected_sha256":hash,"content":current}),
+            ),
+        ] {
+            let error = runtime.execute(name, &args, true, &cancel).unwrap_err();
+            assert_eq!(error.code(), "AGENT_EDIT_ALREADY_CURRENT", "{name}");
+            assert!(error.model_recovery_message().contains("No bytes changed"));
+            assert_eq!(fs::read_to_string(root.join("repair.py")).unwrap(), current);
+            assert!(!runtime.checkpoint_root.join(&hash).exists());
+        }
+        let error = runtime
+            .execute(
+                "write_file",
+                &json!({"path":"repair.py","expected_sha256":"f".repeat(64),"content":current}),
+                true,
+                &cancel,
+            )
+            .unwrap_err();
+        assert_eq!(
+            error.code(),
+            "AGENT_FILE_CHANGED",
+            "No-op must not bypass guards"
+        );
+        fs::remove_dir_all(root).unwrap();
+        fs::remove_dir_all(artifacts).unwrap();
+    }
+
+    #[test]
+    fn repair_mixed_patch_validates_all_before_writing_and_skips_noops() {
+        let (root, artifacts) = fixture();
+        let runtime = ToolRuntime::new(&root, &artifacts).unwrap();
+        let cancel = CommandCancellation::default();
+        fs::write(root.join("a.py"), "ready\n").unwrap();
+        fs::write(root.join("b.py"), "old\n").unwrap();
+        let a = sha256(b"ready\n");
+        let b = sha256(b"old\n");
+        let mut args = json!({"patches":[
+            {"path":"b.py","expected_sha256":b,"line_edits":[{"start_line":1,"end_line":1,"new_text":"new"}]},
+            {"path":"a.py","expected_sha256":"f".repeat(64),"line_edits":[{"start_line":1,"end_line":1,"new_text":"ready"}]}
+        ]});
+        assert_eq!(
+            runtime
+                .execute("apply_patches", &args, true, &cancel)
+                .unwrap_err()
+                .code(),
+            "AGENT_FILE_CHANGED"
+        );
+        assert_eq!(fs::read(root.join("b.py")).unwrap(), b"old\n");
+        args["patches"][1]["expected_sha256"] = json!(a);
+        let result = runtime
+            .execute("apply_patches", &args, true, &cancel)
+            .unwrap();
+        assert_eq!(result.receipt["files"], 1);
+        assert_eq!(result.receipt["unchanged_paths"], json!(["a.py"]));
+        assert_eq!(fs::read(root.join("b.py")).unwrap(), b"new\n");
+        assert!(!runtime.checkpoint_root.join(a).exists());
+        fs::remove_dir_all(root).unwrap();
+        fs::remove_dir_all(artifacts).unwrap();
+    }
+
+    #[test]
+    fn repair_missing_hash_names_the_field_without_inventing_a_read_requirement() {
+        let (root, artifacts) = fixture();
+        let runtime = ToolRuntime::new(&root, &artifacts).unwrap();
+        fs::write(root.join("repair.py"), "old").unwrap();
+        for name in ["write_file", "replace_text"] {
+            let args = if name == "write_file" {
+                json!({"path":"repair.py","content":"new"})
+            } else {
+                json!({"path":"repair.py","old_text":"old","new_text":"new"})
+            };
+            let error = runtime
+                .execute(name, &args, true, &CommandCancellation::default())
+                .unwrap_err();
+            assert_eq!(error.code(), "AGENT_TOOL_ARGUMENTS_INVALID");
+            assert!(error.model_recovery_message().contains("expected_sha256"));
+            assert!(error.model_recovery_message().contains("missing"));
+            assert!(!error.model_recovery_message().contains("fully read"));
+        }
+        assert_eq!(fs::read(root.join("repair.py")).unwrap(), b"old");
+        fs::remove_dir_all(root).unwrap();
+        fs::remove_dir_all(artifacts).unwrap();
     }
 
     #[test]

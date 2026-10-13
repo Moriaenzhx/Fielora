@@ -17,8 +17,8 @@ function request(child, id, method, params = {}, protocol = '1.0') {
   child.stdin.write(`${JSON.stringify({ jsonrpc: '2.0', id, method, params, _meta: { protocol, trace_id: randomUUID(), deadline_ms: 10000 } })}\n`);
 }
 
-function harness(dataDir) {
-  const child = spawn(core, ['--development'], { detached: process.platform !== 'win32', env: { ...process.env, FIELORA_DATA_DIR: dataDir, FIELORA_E2E: '1' }, stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true });
+function harness(dataDir, extraEnv = {}) {
+  const child = spawn(core, ['--development'], { detached: process.platform !== 'win32', env: { ...process.env, ...extraEnv, FIELORA_DATA_DIR: dataDir, FIELORA_E2E: '1' }, stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true });
   const lines = readline.createInterface({ input: child.stdout });
   const queue = [];
   const waiters = [];
@@ -130,11 +130,12 @@ test('General Agent preserves work across budget pause and restart, recovers gua
   assert.equal(automatic.max_steps, 4096);
   const automaticResult = await settled(automatic.id);
   assert.equal(automaticResult.status, 'COMPLETED', JSON.stringify(automaticResult));
-  assert.equal(automaticResult.current_step, 27);
+  assert.equal(automaticResult.current_step, 28, 'One exact discovery before the guarded patch');
   const automaticEvents = await call('query.agent.events', { run_id: automatic.id, limit: 500 });
   assert.ok(!automaticEvents.some((event) => ['RUN_PAUSED', 'RUN_RESUMED'].includes(event.kind)));
   assert.equal(automaticEvents.find((event) => event.kind === 'RUN_COMPLETED').payload.verification_passed, true);
   const automaticTools = await call('query.agent.tool_calls', { run_id: automatic.id });
+  assert.equal(automaticTools.filter(tool => tool.name === 'capability_status' && tool.arguments.tool_name === 'apply_patches').length, 1);
   assert.ok(automaticTools.some((tool) => tool.error_code === 'AGENT_TEXT_MATCH_FAILED'));
   assert.match(await readFile(path.join(projectRoot, 'login.js'), 'utf8'), /ready = true/);
 
@@ -552,7 +553,8 @@ test('Complete Agent reconciles a Core restart to PAUSED without replaying work'
   first.send('recovery-conversation','command.conversation.create',{field_id:project.field_id,title:'Crash recovery',provider_config_id:provider.id,model_id:'__fielora_agent_fixture_slow__'});const conversation=(await response(first,'recovery-conversation')).result;
   first.send('recovery-start','command.agent.start',{field_id:project.field_id,conversation_id:conversation.id,provider_config_id:provider.id,model_id:'__fielora_agent_fixture_slow__',task:'Remain active across the crash',permission:'READ_ONLY',max_steps:4});const run=(await response(first,'recovery-start')).result;
   for(let attempt=0;attempt<30;attempt+=1){first.send(`recovery-running-${attempt}`,'query.agent.get',{run_id:run.id});if((await response(first,`recovery-running-${attempt}`)).result.status==='RUNNING')break;await new Promise((resolve)=>setTimeout(resolve,20));}
-  first.send('recovery-first-shutdown','system.shutdown');await response(first,'recovery-first-shutdown');await first.exit();
+  // Exercise a crash, not graceful shutdown (which can durably pause before restart).
+  killTestProcess(first.child.pid);await first.exit();
   const second=harness(dataDir);active=second;await hello(second);second.send('recovery-get','query.agent.get',{run_id:run.id});const recovered=(await response(second,'recovery-get')).result;assert.equal(recovered.status,'PAUSED');assert.equal(recovered.error_code,'CORE_RESTARTED');
   second.send('recovery-events','query.agent.events',{run_id:run.id,after_sequence:null,limit:500});assert.ok((await response(second,'recovery-events')).result.some((event)=>event.kind==='RECOVERY_RECONCILED'));
   second.send('recovery-resume','command.agent.resume',{run_id:run.id});assert.equal((await response(second,'recovery-resume')).result.status,'RUNNING');second.send('recovery-cancel','command.agent.cancel',{run_id:run.id});await response(second,'recovery-cancel');
@@ -593,4 +595,31 @@ test('Interrupted verification becomes UNKNOWN and is rerun fresh before complet
   const task='FIELORA_AGENT_FIXTURE_CREATE FIELORA_AGENT_FIXTURE_INTERRUPTED_VERIFICATION';first.send('verify-start','command.agent.start',{field_id:project.field_id,conversation_id:conversation.id,provider_config_id:provider.id,model_id:'__fielora_agent_fixture__',task,permission:'FULL_CONTROL',max_steps:8});const run=(await response(first,'verify-start')).result;let interrupted=null;for(let attempt=0;attempt<200;attempt+=1){first.send(`verify-tools-${attempt}`,'query.agent.tool_calls',{run_id:run.id});interrupted=(await response(first,`verify-tools-${attempt}`)).result.find((tool)=>tool.name==='run_command'&&tool.status==='RUNNING');if(interrupted)break;await new Promise((resolve)=>setTimeout(resolve,20));}assert.ok(interrupted);killTestProcess(first.child.pid);await first.exit();
   const second=harness(dataDir);active=second;await hello(second);second.send('verify-recovered','query.agent.get',{run_id:run.id});assert.equal((await response(second,'verify-recovered')).result.status,'PAUSED');second.send('verify-unknown-tools','query.agent.tool_calls',{run_id:run.id});assert.equal((await response(second,'verify-unknown-tools')).result.find((tool)=>tool.id===interrupted.id).status,'UNKNOWN');second.send('verify-resume','command.agent.resume',{run_id:run.id});assert.equal((await response(second,'verify-resume')).result.status,'RUNNING');
   let finalRun=null;for(let attempt=0;attempt<300;attempt+=1){second.send(`verify-final-${attempt}`,'query.agent.get',{run_id:run.id});finalRun=(await response(second,`verify-final-${attempt}`)).result;if(['COMPLETED','FAILED','CANCELLED'].includes(finalRun.status))break;await new Promise((resolve)=>setTimeout(resolve,20));}assert.equal(finalRun.status,'COMPLETED');second.send('verify-final-tools','query.agent.tool_calls',{run_id:run.id});const tools=(await response(second,'verify-final-tools')).result;assert.equal(tools.filter((tool)=>tool.name==='create_file').length,1);const checks=tools.filter((tool)=>tool.name==='run_command');assert.equal(checks.length,2);assert.equal(checks[0].status,'FAILED');assert.equal(checks[0].error_code,'VERIFICATION_INTERRUPTED');assert.equal(checks[1].status,'COMPLETED');assert.equal(checks[1].receipt.verification_eligible,true);assert.match(checks[1].receipt.workspace_revision,/^[0-9a-f]{64}$/);second.send('verify-recovery-events','query.agent.events',{run_id:run.id,after_sequence:null,limit:500});const events=(await response(second,'verify-recovery-events')).result;for(const kind of ['TOOL_UNKNOWN','RECOVERY_STARTED','RECOVERY_RECONCILED','VERIFICATION_RECORDED','RUN_COMPLETED'])assert.ok(events.some((event)=>event.kind===kind),kind);second.send('verify-shutdown','system.shutdown');await response(second,'verify-shutdown');await second.exit();
+});
+
+
+test('search probe keeps FIPC responsive, rejects overlap and never exposes saved credentials', {timeout:15000}, async t => {
+  const dataDir = await mkdtemp(path.join(tmpdir(), 'fielora-search-ipc-'));
+  const h = harness(dataDir, {FIELORA_WEB_SEARCH_FIXTURE:'1'});
+  t.after(async()=>{ if(h.child.exitCode===null){killTestProcess(h.child.pid); await h.exit();} await rm(dataDir,{recursive:true,force:true}); });
+  await hello(h);
+  h.send('save','command.web_search.store_credential',{secret:'synthetic-exa-valid'});
+  const saved = await h.next();
+  assert.equal(saved.result.credential_present,true);
+  assert.ok(!JSON.stringify(saved).includes('synthetic-exa-valid'));
+  h.send('test1','command.web_search.test');
+  await new Promise(resolve=>setTimeout(resolve,30));
+  h.send('test2','command.web_search.test');
+  h.send('health','system.health');
+  const responses=[];
+  while(responses.length<3) {const r=await h.next(); if(['test1','test2','health'].includes(r.id))responses.push(r);}
+  assert.ok(responses.findIndex(r=>r.id==='health') < responses.findIndex(r=>r.id==='test1'),'health must return while network probe is waiting');
+  assert.equal(responses.find(r=>r.id==='test1').result.success,true);
+  assert.equal(responses.find(r=>r.id==='test2').result.error_code,'WEB_SEARCH_TEST_BUSY');
+  h.send('bad','command.web_search.store_credential',{secret:'never-echo-this',endpoint:'https://evil.example'});
+  const rejected=await h.next(); assert.ok(rejected.error); assert.ok(!JSON.stringify(rejected).includes('never-echo-this'));
+  h.send('arbitrary','command.web_search.test',{query:'not the fixed probe'});
+  assert.ok((await h.next()).error);
+  h.send('delete','command.web_search.delete_credential'); assert.equal((await h.next()).result.credential_present,false);
+  h.send('shutdown','system.shutdown'); await h.next(); await h.exit();
 });

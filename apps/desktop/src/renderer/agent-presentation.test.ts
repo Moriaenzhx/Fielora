@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import type { AgentEventView, AgentRunView, AgentToolCallView } from '@fielora/contracts';
-import { agentActiveDurationMs, agentModelIsActive, agentPausePresentation, agentCompletionTimeLabel, agentOpeningNarrative, agentRequestKind, agentTerminalBody, agentTerminalTitle, approvalActionLabel, buildAgentPresentation, buildAgentResultViewModel, stripTerminalHeading } from './agent-presentation.ts';
+import { agentActiveDurationMs, agentModelIsActive, agentPausePresentation, agentPendingChecks, agentCompletionTimeLabel, agentOpeningNarrative, agentRequestKind, agentTerminalBody, agentTerminalTitle, approvalActionLabel, buildAgentPresentation, buildAgentResultViewModel, stripTerminalHeading } from './agent-presentation.ts';
 
 function run(status: AgentRunView['status'], errorCode: string | null = null): AgentRunView {
   return {
@@ -56,7 +56,8 @@ test('completed work summarizes files and verification without exposing runtime 
 test('failure explains impact in plain language while technical codes stay out of the narrative', () => {
   const presentation = buildAgentPresentation(run('FAILED', 'PROVIDER_PROTOCOL_ERROR'), [], []);
   assert.equal(presentation.headline, '这次没有完成');
-  assert.match(presentation.narrative, /项目文件没有发生变化/);
+  assert.match(presentation.narrative, /已执行的操作保留/);
+  assert.doesNotMatch(presentation.narrative, /项目文件没有发生变化/);
   assert.doesNotMatch(presentation.narrative, /PROVIDER_PROTOCOL_ERROR/);
 });
 
@@ -80,6 +81,31 @@ test('response failures give a cause without inventing changes or retry success'
     assert.match(agentPausePresentation(run('PAUSED', code)).reason, cause);
     assert.match(buildAgentPresentation(run('FAILED', code), [], []).narrative, cause);
   }
+});
+
+test('model HTTP pause uses current same-run facts and keeps legacy uncertainty', () => {
+  const paused = run('PAUSED', 'PROVIDER_RATE_LIMITED');
+  const failure = (payload: Record<string, unknown>, overrides = {}) => ({
+    id: 'failure', run_id: paused.id, sequence: 7, kind: 'MODEL_FAILED', created_at: 5_000,
+    payload: { step: paused.current_step, error_code: paused.error_code, http_status: 429, response_diagnostics: { retry_after_seconds: 90 }, ...payload }, ...overrides,
+  }) as AgentEventView;
+  const reason = agentPausePresentation(paused, [failure({})]).reason;
+  assert.match(reason, /返回限流响应/);
+  assert.match(reason, /90 秒/);
+  assert.match(reason, /不能据此判断额度/);
+  for (const events of [[], [failure({ step: 1 })], [failure({}, { run_id: 'other' })]]) {
+    const old = agentPausePresentation(paused, events).reason;
+    assert.match(old, /旧版.*合并记录/);
+    assert.doesNotMatch(old, /90 秒/);
+  }
+  for (const retry_after_seconds of ['private-secret', -1, 1.5, Number.MAX_VALUE]) {
+    const invalid = agentPausePresentation(paused, [failure({ response_diagnostics: { retry_after_seconds } })]).reason;
+    assert.match(invalid, /未提供可用的重试间隔/);
+    assert.doesNotMatch(invalid, /private-secret/);
+  }
+  const timeout = agentPausePresentation(run('PAUSED', 'PROVIDER_REQUEST_TIMEOUT')).reason;
+  assert.match(timeout, /请求超时/);
+  assert.doesNotMatch(timeout, /限流/);
 });
 
 test('step-limit failure stays concise and counts every file in a batch patch', () => {
@@ -186,7 +212,7 @@ test('structured terminal result owns title, evidence and hierarchy independentl
   const result = buildAgentResultViewModel('COMPLETED', '## 超大标题\n\n**已创建目标文件。**\n\n- 模型自定义报表', completed);
   assert.equal(result.title, '已经创建文件');
   assert.equal(result.detail, '已创建目标文件。');
-  assert.deepEqual(result.evidence, ['1 个文件新增', '验证通过']);
+  assert.deepEqual(result.evidence, ['1 个文件新增', '已记录检查通过 · 覆盖范围未确认']);
   assert.doesNotMatch(result.detail, /##|\*\*|模型自定义报表/);
 });
 
@@ -264,12 +290,15 @@ test('budget pauses expose the explicit allowance and do not promise completion'
   assert.equal(agentPausePresentation(paused).action, '继续工作（增加 24 步）');
   assert.equal(agentPausePresentation({ ...paused, current_step: 4096, max_steps: 4096 }).canResume, false);
   assert.equal(agentPausePresentation(run('PAUSED')).action, '继续工作');
-  assert.match(agentPausePresentation(run('PAUSED', 'AGENT_VERIFICATION_REQUIRED')).reason, /尚未通过/);
+  assert.match(agentPausePresentation(run('PAUSED', 'AGENT_VERIFICATION_REQUIRED')).reason, /未解决项/);
   assert.match(agentPausePresentation(run('PAUSED', 'AGENT_OUTCOME_EVIDENCE_INVALID')).reason, /完成依据未通过校验/);
+  assert.match(agentPausePresentation(run('PAUSED', 'AGENT_OUTCOME_QUOTE_REQUIRED')).reason, /请求引用与当前任务不匹配/);
+  assert.match(agentPausePresentation(run('PAUSED', 'AGENT_OUTCOME_ARGUMENTS_INVALID')).reason, /具体字段原因/);
   assert.match(agentPausePresentation(run('PAUSED', 'AGENT_TIME_BUDGET_EXHAUSTED')).reason, /60 分钟/);
   assert.match(agentPausePresentation(run('PAUSED', 'AGENT_REPEATED_ACTIONS')).reason, /重复相同操作/);
   assert.match(agentPausePresentation(run('PAUSED', 'AGENT_BROWSER_LOGIN_REQUIRED')).reason, /右侧浏览器完成登录/);
   assert.match(agentPausePresentation(run('PAUSED', 'AGENT_BROWSER_OUTCOME_REVIEW_REQUIRED')).reason, /没有重放操作/);
+  assert.match(agentPausePresentation(run('PAUSED', 'AGENT_COMPUTER_OUTCOME_REVIEW_REQUIRED')).reason, /部分输入可能已经发生.*没有重放操作.*核对应用中的实际状态/);
 });
 
 test('paused time does not accrue as execution time, including after continuation', () => {
@@ -303,6 +332,46 @@ test('reported overnight Run totals 10m42s rather than a day of execution', () =
 });
 
 
+test('current assessment overrides historical passes and preserves unknown coverage', () => {
+  const paused = run('PAUSED', 'AGENT_VERIFICATION_REQUIRED');
+  const events: AgentEventView[] = [{ id:'assessment', run_id:paused.id, sequence:20, schema_version:1, kind:'CHECKPOINT_CREATED', created_at:6000,
+    payload:{kind:'GENERAL_WORK_STATE_V1',current_work:{requirement_coverage:'UNKNOWN',unresolved_checks:[],verification:{passed:false,blockers:[{reason:'STALE_FAILED',details:{program:'python3',argv:['-m','unittest','specific_test']}}]}}} }];
+  const tools = [tool({ name:'run_command',effect:'PROCESS',receipt:{verification_eligible:true,success:true} })];
+  assert.equal(buildAgentPresentation(paused,events,tools).passedVerifications,0,'An old green receipt cannot override a current blocker');
+  assert.deepEqual(agentPendingChecks(paused,events),['先前失败的检查需要重验：-m unittest specific_test']);
+  assert.deepEqual(agentPendingChecks({...paused,error_code:'AGENT_TIME_BUDGET_EXHAUSTED'},events),agentPendingChecks(paused,events),'Budget pauses retain the actual unresolved check');
+  const scratchEvents: AgentEventView[] = [{...events[0]!,payload:{kind:'GENERAL_WORK_STATE_V1',current_work:{verification:{passed:false,blockers:[{reason:'FAILED',details:{argv:['-m','unittest','specific_test'],display_directory:'_scratch'}}]}}}}];
+  assert.deepEqual(agentPendingChecks(paused,scratchEvents),['检查未通过（_scratch）：-m unittest specific_test'],'Same command in an isolated copy has a visible target');
+  events.push({id:'terminal',run_id:paused.id,sequence:21,schema_version:1,kind:'RUN_COMPLETED',created_at:7000,payload:{goal_satisfied:null,requirement_coverage:'UNKNOWN',acceptance:{requirement_coverage:'UNKNOWN',verification:{passed:true,checks:[{state:'PASSED'},{state:'RETIRED_TARGET'}]}}}});
+  const presentation=buildAgentPresentation(run('COMPLETED'),events,tools);
+  assert.equal(presentation.passedVerifications,1);
+  const result = buildAgentResultViewModel('COMPLETED','所有需求全部验证通过，未完成项无。',presentation,tools);
+  assert.equal(result.verificationEvidence?.label, '已记录检查通过 · 需求覆盖未确认');
+  assert.match(result.verificationEvidence?.detail ?? '', /完成结论由模型提供/);
+  assert.deepEqual(result.evidence, [], 'No duplicate verification badge below the report');
+});
+
+test('result evidence uses the current Run assessment and keeps target states after reload', () => {
+  const current = run('COMPLETED');
+  const event: AgentEventView = {id:'verified',run_id:current.id,sequence:12,schema_version:1,kind:'RUN_COMPLETED',created_at:7000,
+    payload:{acceptance:{requirement_coverage:'UNKNOWN',verification:{passed:false,checks:[
+      {tool_call_id:'a',program:'python3',argv:['-m','unittest','test_detector'],display_directory:'.',state:'STALE_FAILED'},
+      {tool_call_id:'b',program:'python3',argv:['-m','unittest','test_detector'],display_directory:'scratch',state:'PASSED'},
+      {tool_call_id:'c',program:3,argv:[],state:'PASSED'},
+    ]}}}};
+  const otherRun = {...event, id:'foreign', run_id:'another-run', sequence:99, payload:{acceptance:{verification:{passed:true}}}};
+  const presentation = buildAgentPresentation(current, JSON.parse(JSON.stringify([otherRun,event])), []);
+  assert.equal(presentation.passedVerifications,0);
+  assert.equal(presentation.verificationEvidence?.label,'检查尚未通过 · 查看执行结果');
+  assert.deepEqual(presentation.verificationEvidence?.checks,[
+    {id:'a',command:'python3 -m unittest test_detector',state:'失败后待重验'},
+    {id:'b',command:'python3 -m unittest test_detector（scratch）',state:'通过'},
+  ]);
+  const noChecks = {...event, payload:{acceptance:{verification:{passed:false,checks:[],blockers:[]}}}};
+  assert.equal(buildAgentPresentation(current,[noChecks],[]).verificationEvidence,undefined,
+    'An answer without a required or recorded check must not acquire a failed-check notice');
+});
+
 test('thinking tracks actual model intervals and never fills tool or failure gaps', () => {
   const event = (sequence: number, kind: AgentEventView['kind']): AgentEventView => ({ id: `event-${sequence}`, run_id:'run-1', sequence, schema_version:1, kind, payload:{}, created_at:sequence*1000 });
   const start=event(1,'MODEL_STARTED'), end=event(2,'MODEL_COMPLETED');
@@ -315,4 +384,19 @@ test('thinking tracks actual model intervals and never fills tool or failure gap
   }
   for (const status of ['PROPOSED','RUNNING','WAITING_APPROVAL'] as const) assert.equal(agentModelIsActive([start],[tool({status})]),false);
   assert.equal(agentModelIsActive([start,end,event(3,'TOOL_FAILED'),event(4,'MODEL_STARTED')], [tool({status:'FAILED'})]),true,'fresh model invocation after a tool failure can think again');
+});
+
+
+test('pause lists only the latest unresolved checks without reviving old hypotheses', () => {
+  const paused = run('PAUSED', 'AGENT_ACCEPTANCE_SCOPE_REQUIRED');
+  const checkpoint = (sequence: number, unresolved: unknown[]): AgentEventView => ({
+    id: `e-${sequence}`, run_id: paused.id, sequence, schema_version: 1, kind: 'CHECKPOINT_CREATED', created_at: 1,
+    payload: { kind: 'GENERAL_WORK_STATE_V1', current_work: { unresolved_checks: unresolved } },
+  });
+  const stale = checkpoint(10, [{expected: '重启后仍保留冲突', check: {status: 'stale'}}]);
+  assert.deepEqual(agentPendingChecks(paused, [stale]), ['重启后仍保留冲突（输入已变化）']);
+  assert.deepEqual(agentPendingChecks(paused, [checkpoint(11, []), stale]), []);
+  assert.deepEqual(agentPendingChecks({...paused, status: 'COMPLETED'}, [stale]), []);
+  assert.deepEqual(agentPendingChecks(paused, [{...stale, run_id: 'another-run'}]), []);
+  assert.match(agentPausePresentation(paused).reason, /仍有已记录的检查未解决/);
 });

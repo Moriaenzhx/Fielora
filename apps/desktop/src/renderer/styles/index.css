@@ -13,6 +13,7 @@
 @import url("./scheduled-tasks.css") layer(features);
 @import url("./model-usage.css") layer(features);
 @import url("./model-services.css") layer(features);
+@import url("./interactive-prototype.css") layer(features);
 @import url("./layout.css") layer(layout);
 @import url("./typography.css") layer(typography);
 @import url("./controls.css") layer(components);

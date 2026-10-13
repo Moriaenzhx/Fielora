@@ -29,7 +29,7 @@ pub fn catalog() -> Vec<ToolSpec> {
         ),
         tool(
             "fonts.install",
-            "Install a prepared font into the CURRENT USER system font directory, making it available to Fielora and other apps. Requires approval, including Full control. Pass a successful fonts.prepare tool_call_id from THIS Run; no destination override, executable scripts or replacement of existing files. Receipt verifies installed bytes and native registration only; other running apps may need to refresh/restart. Call fonts.list to inspect families. Never claim unrelated project validation.",
+            "Install a prepared font into the CURRENT USER system font directory, making it available to Fielora and other apps. Full control permits this ordinary installation; other presets require approval. Pass a successful fonts.prepare tool_call_id from THIS Run; no destination override, executable scripts or replacement of existing files. Receipt verifies installed bytes and native registration only; other running apps may need to refresh/restart. Call fonts.list to inspect families. Never claim unrelated project validation.",
             AgentToolEffect::Process,
             json!({"type":"object","properties":{"prepared_tool_call_id":{"type":"string","minLength":1,"maxLength":128}},"required":["prepared_tool_call_id"],"additionalProperties":false}),
         ),
@@ -179,7 +179,7 @@ mod tests {
         fs::remove_dir_all(root).unwrap();
     }
     #[test]
-    fn font_install_requires_confirmation_even_with_full_control() {
+    fn font_install_follows_preset_and_keeps_prepared_resource_boundary() {
         let spec = catalog()
             .into_iter()
             .find(|s| s.definition.name == "fonts.install")
@@ -191,7 +191,11 @@ mod tests {
         ] {
             assert_eq!(
                 PolicyEngine.decide(permission, &spec, &json!({"prepared_tool_call_id":"x"})),
-                fielora_contracts::AgentPolicyDecision::Ask
+                if permission == AgentPermission::FullControl {
+                    fielora_contracts::AgentPolicyDecision::Allow
+                } else {
+                    fielora_contracts::AgentPolicyDecision::Ask
+                }
             );
         }
     }

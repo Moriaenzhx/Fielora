@@ -126,6 +126,59 @@ test('browser tools reject privileged schemes and credential-bearing URLs', () =
   assert.equal(browserHttpUrl('http://127.0.0.1:8011/'), 'http://127.0.0.1:8011/');
 });
 
+test('wrong verification target retains fresh observation and requires an explicit new plan', async () => {
+  let captures = 0, serial = 0;
+  const runtime = {
+    executeAgent: async () => ({ success: true, url: 'http://127.0.0.1:8767/', snapshot_id: 'next', page_id: 'page', navigation_generation: 1,
+      elements: [{ ref: 'e1', text: 'Saved' }], checks: [{ property: 'contains', expected: 'Saved', passed: true }] }),
+    captureCurrentViewport: async () => { captures++; return { captured_url: 'http://127.0.0.1:8767/', page_id: 'page', navigation_generation: 1 }; },
+  } as unknown as BrowserRuntime;
+  const replies = new Map<string, (result: Record<string, unknown>) => void>();
+  const host = new AgentBrowserHost(() => runtime, async (method, params) => {
+    if (method === 'host.browser.complete') { const r = params as { request_id: string; result: Record<string, unknown> }; replies.get(r.request_id)!(r.result); }
+    if (method === 'command.screenshot_evidence.create') return { id: 'capture' };
+  }, () => {});
+  const call = (name: string, args: Record<string, unknown>) => new Promise<Record<string, unknown>>(resolve => {
+    const id = String(++serial); replies.set(id, resolve);
+    host.handle({ request_id: id, run_id: 'run', conversation_id: 'conv', tool_call_id: id, name, arguments: args });
+  });
+  const cases = [{ id: 'saved', requirement: 'The saved value remains visible' }];
+  await call('browser_plan', { url: 'http://127.0.0.1:8766/', cases });
+  const args = { case_id: 'saved', snapshot_id: 'previous', checks: [{ property: 'contains', expected: 'Saved' }] };
+  const wrong = await call('browser_verify', args);
+  assert.equal(wrong.error_code, 'BROWSER_WRONG_TARGET');
+  assert.equal(wrong.success, false); assert.equal(wrong.target_matches_plan, false);
+  assert.equal(wrong.url, 'http://127.0.0.1:8767/'); assert.equal(wrong.plan_url, 'http://127.0.0.1:8766/');
+  assert.equal(wrong.snapshot_id, 'next'); assert.ok(Array.isArray(wrong.elements));
+  assert.match(String(wrong.guidance), /browser_plan/);
+  assert.equal(captures, 0);
+  assert.equal((await call('browser_verify', { ...args, snapshot_id: 'next' })).error_code, 'BROWSER_WRONG_TARGET');
+  await call('browser_plan', { url: 'http://127.0.0.1:8767/', cases });
+  assert.equal((await call('browser_verify', { ...args, snapshot_id: 'next' })).success, true);
+  assert.equal(captures, 1);
+});
+
+test('fresh browser host verifies with Core retained plan without replaying model planning', async () => {
+  const checks = [{ property: 'contains', expected: 'Saved', actual: 'Saved', passed: true }];
+  const runtime = {
+    executeAgent: async () => ({ success: true, url: 'http://127.0.0.1:8011/', snapshot_id: 'next', page_id: 'page', navigation_generation: 1, checks }),
+    captureCurrentViewport: async () => ({ captured_url: 'http://127.0.0.1:8011/', page_id: 'page', navigation_generation: 1 }),
+  } as unknown as BrowserRuntime;
+  let finish!: (value: Record<string, unknown>) => void;
+  const completed = new Promise<Record<string, unknown>>(resolve => { finish = resolve; });
+  const host = new AgentBrowserHost(() => runtime, async (method, params) => {
+    if (method === 'host.browser.complete') finish((params as { result: Record<string, unknown> }).result);
+    if (method === 'command.screenshot_evidence.create') return { id: 'screenshot' };
+  }, () => {});
+  host.handle({ request_id: 'verify', run_id: 'run', conversation_id: 'conv', tool_call_id: 'tool', name: 'browser_verify',
+    retained_plan: { url: 'http://127.0.0.1:8011/', cases: [{ id: 'saved', requirement: 'The saved value remains visible' }] },
+    arguments: { case_id: 'saved', snapshot_id: 'fresh', checks: [{ property: 'contains', expected: 'Saved' }] } });
+  const result = await completed;
+  assert.equal(result.success, true);
+  assert.equal(result.requirement, 'The saved value remains visible');
+  assert.deepEqual(result.checks, checks);
+});
+
 test('development server arguments remain literal and reject shell programs', () => {
   assert.equal(browserServerCommand({ program: 'npm', argv: ['run', 'dev', '--', '--host', '127.0.0.1'] }, 'win32'), "& 'npm.cmd' 'run' 'dev' '--' '--host' '127.0.0.1'");
   assert.equal(browserServerCommand({ program: 'node', argv: ["test'file.js", '$(secret); `echo x`'] }, 'win32'), "& 'node' 'test''file.js' '$(secret); `echo x`'");
@@ -192,6 +245,110 @@ test('invalid cases and stale snapshots never reach the page backend', async () 
   assert.equal(calls, 0);
   assert.equal(completed.length, 2);
   assert.ok(JSON.stringify(completed).includes('BROWSER_STALE_SNAPSHOT'));
+});
+
+test('verification rejects missing element refs and malformed before targets without observing the page', async () => {
+  let backendCalls = 0, reveals = 0, serial = 0;
+  const replies = new Map<string, (result: Record<string, unknown>) => void>();
+  const host = new AgentBrowserHost(() => { backendCalls++; throw new Error('must not access page'); }, async (_, params) => {
+    const reply = params as { request_id: string; result: Record<string, unknown> };
+    replies.get(reply.request_id)!(reply.result);
+  }, () => { reveals++; });
+  const retained_plan = { url: 'http://127.0.0.1:8011/', cases: [{ id: 'saved', requirement: 'The saved value remains visible' }] };
+  const invalid: Record<string, unknown>[] = [];
+  for (const property of ['text', 'value', 'visible', 'enabled', 'readonly', 'before']) {
+    for (const ref of [undefined, null, '', 12, 'body', 'e1000']) {
+      invalid.push({ property, ref, expected: property === 'before' ? 'e2' : 'Saved' });
+    }
+  }
+  for (const expected of [undefined, null, '', 'Saved', 'e1000']) invalid.push({ property: 'before', ref: 'e1', expected });
+  for (const property of ['contains', 'absent']) invalid.push({ property, expected: '' });
+  try {
+    for (const check of invalid) {
+      const id = `invalid-check-${++serial}`;
+      const pending = new Promise<Record<string, unknown>>(resolve => { replies.set(id, resolve); });
+      host.handle({ request_id: id, run_id: 'run', conversation_id: 'conv', tool_call_id: id, name: 'browser_verify', retained_plan,
+        arguments: { case_id: 'saved', snapshot_id: 'fresh', checks: [check] } });
+      const result = await pending;
+      assert.equal(result.success, false);
+      assert.equal(result.error_code, 'BROWSER_INVALID_CHECK', JSON.stringify(check));
+      assert.equal(result.input_state, 'NOT_DISPATCHED');
+      assert.equal(result.outcome_unknown, false);
+      assert.equal(result.snapshot_id, undefined, 'Invalid parameters must not advance the observation');
+      assert.match(String(result.guidance), /observed ref/);
+      assert.match(String(result.guidance), /before also requires another observed ref in expected/);
+      assert.match(String(result.guidance), /Preserve the intended assertion/);
+      assert.match(String(result.guidance), /Repeating inspect.*cannot fix missing arguments/);
+    }
+    assert.equal(backendCalls, 0);
+    assert.equal(reveals, 0);
+  } finally { host.reset(); }
+});
+
+test('page contains and absent checks still omit refs while element checks retain their exact comparison', async () => {
+  let serial = 0, captures = 0;
+  const observed: unknown[] = [];
+  const runtime = {
+    executeAgent: async (_run: string, args: { checks: { property: string; expected: string; ref?: string }[] }) => {
+      observed.push(args.checks);
+      const checks = args.checks.map(check => ({ ...check, actual: check.property === 'text' ? 'Saved' : 'true',
+        passed: check.property === 'text' ? check.expected === 'Saved' : true }));
+      return { success: checks.every(check => check.passed), url: 'http://127.0.0.1:8011/', snapshot_id: 'next',
+        page_id: 'page', navigation_generation: 1, checks };
+    },
+    captureCurrentViewport: async () => { captures++; return { captured_url: 'http://127.0.0.1:8011/', page_id: 'page', navigation_generation: 1 }; },
+  } as unknown as BrowserRuntime;
+  const replies = new Map<string, (result: Record<string, unknown>) => void>();
+  const host = new AgentBrowserHost(() => runtime, async (method, params) => {
+    if (method === 'command.screenshot_evidence.create') return { id: 'capture' };
+    const reply = params as { request_id: string; result: Record<string, unknown> };
+    replies.get(reply.request_id)!(reply.result);
+  }, () => {});
+  const retained_plan = { url: 'http://127.0.0.1:8011/', cases: [{ id: 'saved', requirement: 'The saved value remains visible' }] };
+  const calls = [
+    { checks: [{ property: 'contains', expected: 'Saved' }, { property: 'absent', expected: 'Error' }], passes: true },
+    { checks: [{ property: 'text', ref: 'e1', expected: 'Saved' }], passes: true },
+    { checks: [{ property: 'text', ref: 'e1', expected: 'Save' }], passes: false },
+    { checks: [{ property: 'before', ref: 'e1', expected: 'e2' }], passes: true },
+  ];
+  try {
+    for (const entry of calls) {
+      const id = `valid-check-${++serial}`;
+      const pending = new Promise<Record<string, unknown>>(resolve => { replies.set(id, resolve); });
+      host.handle({ request_id: id, run_id: 'run', conversation_id: 'conv', tool_call_id: id, name: 'browser_verify', retained_plan,
+        arguments: { case_id: 'saved', snapshot_id: 'fresh', checks: entry.checks } });
+      const result = await pending;
+      assert.equal(result.success, entry.passes);
+      assert.equal(result.error_code, undefined);
+      assert.deepEqual(observed.at(-1), entry.checks, 'Host must not rewrite the property, target or expected value');
+      assert.ok(result.screenshot);
+    }
+    assert.equal(captures, calls.length);
+  } finally { host.reset(); }
+});
+
+test('well-formed verification refs can still fail as stale without becoming parameter errors', async () => {
+  let backendCalls = 0, captures = 0;
+  const runtime = {
+    executeAgent: async () => { backendCalls++; return { success: false, error_code: 'BROWSER_STALE_ELEMENT', snapshot_id: 'new-observation' }; },
+    captureCurrentViewport: async () => { captures++; throw new Error('must not capture failed check'); },
+  } as unknown as BrowserRuntime;
+  let finish!: (result: Record<string, unknown>) => void;
+  const pending = new Promise<Record<string, unknown>>(resolve => { finish = resolve; });
+  const host = new AgentBrowserHost(() => runtime, async (_, params) => {
+    finish((params as { result: Record<string, unknown> }).result);
+  }, () => {});
+  try {
+    host.handle({ request_id: 'stale-ref', run_id: 'run', conversation_id: 'conv', tool_call_id: 'tool', name: 'browser_verify',
+      retained_plan: { url: 'http://127.0.0.1:8011/', cases: [{ id: 'saved', requirement: 'The saved value remains visible' }] },
+      arguments: { case_id: 'saved', snapshot_id: 'fresh', checks: [{ property: 'text', ref: 'e1', expected: 'Saved' }] } });
+    const result = await pending;
+    assert.equal(result.success, false);
+    assert.equal(result.error_code, 'BROWSER_STALE_ELEMENT');
+    assert.equal(result.snapshot_id, 'new-observation');
+    assert.equal(backendCalls, 1);
+    assert.equal(captures, 0);
+  } finally { host.reset(); }
 });
 
 test('queued cancellation cannot execute a browser side effect', async () => {

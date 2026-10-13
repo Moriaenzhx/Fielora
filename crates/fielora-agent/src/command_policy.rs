@@ -118,6 +118,8 @@ pub fn preview(root: &Path, permission: AgentPermission, arguments: &Value) -> V
         permission == AgentPermission::FullControl && project_install.is_some() && sandbox;
     let reason = if automatic_install {
         "PROJECT_DEPENDENCIES"
+    } else if permission == AgentPermission::FullControl {
+        "PRESET_ALLOWED"
     } else if install {
         if project_install.is_some() && !sandbox {
             "SANDBOX_UNAVAILABLE"
@@ -268,14 +270,7 @@ mod tests {
             Some("PROJECT_PYTHON_DEPENDENCIES")
         );
         let full = decision(&root, AgentPermission::FullControl, &args);
-        assert_eq!(
-            full,
-            if fielora_platform::command_sandbox::available() {
-                AgentPolicyDecision::Allow
-            } else {
-                AgentPolicyDecision::Ask
-            }
-        );
+        assert_eq!(full, AgentPolicyDecision::Allow);
         for permission in [AgentPermission::ReadOnly, AgentPermission::ReviewChanges] {
             assert_eq!(decision(&root, permission, &args), AgentPolicyDecision::Ask);
         }
@@ -284,6 +279,14 @@ mod tests {
             assert_eq!(project_install(&root, &bad), None);
             assert_eq!(
                 decision(&root, AgentPermission::FullControl, &bad),
+                AgentPolicyDecision::Allow
+            );
+            assert_eq!(
+                preview(&root, AgentPermission::FullControl, &bad)["automatic_boundary"],
+                "CURRENT_USER_HOST"
+            );
+            assert_eq!(
+                decision(&root, AgentPermission::ReviewChanges, &bad),
                 AgentPolicyDecision::Ask
             );
         }

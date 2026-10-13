@@ -31,8 +31,8 @@
       "bytes": 2973
     },
     "README.md": {
-      "sha256": "a5c820c84c1eb173ecc2c97de1cd7368ff9d1b37c58fecb6bf0e9478c88df7c1",
-      "bytes": 16021
+      "sha256": "748f49703a72263ef9bbdb2b6d47bd05f421b903e2b3cb26cd4691aec03d8a0e",
+      "bytes": 16636
     },
     "AGENTS.md": {
       "sha256": "945ab1688386cf1f28525b9ecedb455717be64acbb6447e73a2e632bae5cb02b",
@@ -47,12 +47,12 @@
       "bytes": 12955
     },
     "docs/context/02_PROJECT_REALITY.md": {
-      "sha256": "d3d22ab6d219bfd012f4e85e3579beafb51e3941d83ebbf36198a28a4ee4c7d6",
-      "bytes": 344365
+      "sha256": "f685d291aa3bd63148a9075d20b2c16b65db5a9f4ef7939b6d1489019b3b5248",
+      "bytes": 418881
     },
     "docs/context/03_DECISIONS.md": {
-      "sha256": "0ccdd79e62f8481bd562d72047d3df3ec39398045c4e0f2fc0f4ea1de67f668a",
-      "bytes": 169265
+      "sha256": "396cede48d33da1dc4395e6f66d05ec7fbaf4e10aa7f8db0ddd2708ffeb1702d",
+      "bytes": 199145
     },
     "docs/context/04_REJECTED_DEFERRED.md": {
       "sha256": "0b4f9bd00ad5b9a198e4f3a6523503aaacbf8b5630aaa5d029577ee08abbc160",
@@ -79,8 +79,8 @@
       "bytes": 18107
     },
     "docs/architecture/FIELORA_V0.1_AGENT_ARCHITECTURE_SPEC.md": {
-      "sha256": "9c4bb8bc2a30ad985916c43e02bc7856fc4e74d9cf9ffd3b45aca1e3537974ae",
-      "bytes": 135612
+      "sha256": "f3c03dea84b7d5a9f00524a8096326d98f32345e433899eb144d032f3a4a3b79",
+      "bytes": 185304
     },
     "docs/architecture/FIELORA_IDR_V2_DESIGN_CANDIDATE.md": {
       "sha256": "5c390ed9f03013de0d8e277089d6900f7163f26b26fc73943a93e97054dad0a6",
@@ -375,8 +375,8 @@
       "bytes": 3980
     },
     "docs/product/RAPID_DESKTOP_EXECUTION_V0.1.md": {
-      "sha256": "da24da2d6f31407b2cd6907550971e278f1fa5b17d7072ee08c833f13ab58e90",
-      "bytes": 5433
+      "sha256": "819816fc8471fee1ab0d4f89b2c9622d0e35e016e0cfa60db9e7de68f7ca14d0",
+      "bytes": 5952
     },
     "docs/engineering/AGENT_DESIGN_IMPLEMENTATION_LESSONS.md": {
       "sha256": "71655bd5281f8fee2b67ef6c9ddaf46c8a90cb0b6434462e7ae3667d7a19612a",
@@ -395,16 +395,16 @@
       "bytes": 1653
     },
     "docs/architecture/AGENT_ENGINEERING_VIEWS_V0.1.md": {
-      "sha256": "a5afae7ae7f2acaa5b65eda3631bacf6e0bd203216776fa3cad839bdb1edc7e8",
-      "bytes": 9204
+      "sha256": "c6eb6aab7c07d8950fc814d5365f734d711e3a6409847a5b9dcf7a367b52a682",
+      "bytes": 9779
     },
     "docs/engineering/AGENT_ENGINEERING_VIEWS_CHANGE_IMPACT_V0.1.md": {
       "sha256": "39f9edcb1ada6bdd2f8a442fc54c17b40c35dadce7462d4bdb509d7577a08c1d",
       "bytes": 2329
     },
     "docs/architecture/CAPABILITY_INVENTORY_V0.1.md": {
-      "sha256": "9bd314d18fe3cf2c8c955c87a043364b9e909e974684a83464ca151a0c85277d",
-      "bytes": 14408
+      "sha256": "d769a314b3dca0d7270202296a0e089f76bde6b8b93206ffeeabf31dcfc549e9",
+      "bytes": 17319
     }
   }
 }

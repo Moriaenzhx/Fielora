@@ -2,6 +2,22 @@ import type { AgentEventView, ListAgentEventsRequest } from '@fielora/contracts'
 
 export const AGENT_PROJECTION_UNAVAILABLE_MESSAGE = '运行记录暂时无法更新，Agent 仍会继续工作。';
 
+// A foreground projection is owned by one selection, including its generation.
+// Returning to the same conversation must not revive an earlier async callback.
+export interface ConversationAgentSelection {
+  projectId: string;
+  conversationId: string;
+  generation: number;
+}
+
+export function sameAgentSelection(current: ConversationAgentSelection, requested: ConversationAgentSelection): boolean {
+  return current.projectId === requested.projectId && current.conversationId === requested.conversationId && current.generation === requested.generation;
+}
+
+export function agentForConversation<T extends { conversationId: string }>(agent: T | null, conversationId: string): T | null {
+  return conversationId && agent?.conversationId === conversationId ? agent : null;
+}
+
 export function mergeAgentEventPages(
   current: AgentEventView[],
   incoming: AgentEventView[],

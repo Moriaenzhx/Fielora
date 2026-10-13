@@ -2860,6 +2860,15 @@ pub struct ApprovalView {
     pub tool_call_id: ToolCallId,
     pub decision: Option<ApprovalDecision>,
     pub nonce: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub confirmation_stage: Option<u8>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub required_confirmations: Option<u8>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub operation_digest: Option<String>,
     #[ts(type = "number")]
     pub created_at: i64,
     #[ts(type = "number | null")]
@@ -2929,6 +2938,68 @@ pub struct McpConnectionCatalogView {
     pub connection_count: u32,
     pub connections: Vec<McpConnectionView>,
     pub diagnostics: Vec<McpDiagnosticView>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
+pub struct WebSearchConfigView {
+    pub provider_id: String,
+    pub available: bool,
+    pub credential_present: bool,
+    pub providers: Vec<WebSearchProviderView>,
+    pub config_error: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
+pub struct WebSearchProviderView {
+    pub provider_id: String,
+    pub display_name: String,
+    pub endpoint: Option<String>,
+    pub credential_mode: String,
+    pub credential_present: bool,
+    pub available: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
+#[serde(deny_unknown_fields)]
+pub struct UpdateWebSearchConfigRequest {
+    pub provider_id: String,
+    pub endpoint: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Deserialize, TS)]
+#[serde(deny_unknown_fields)]
+pub struct WebSearchProviderRequest {
+    #[serde(default)]
+    #[ts(optional)]
+    pub provider_id: Option<String>,
+}
+
+// Deliberately no Debug: this trusted input contains secret bytes.
+#[derive(Deserialize, TS)]
+#[serde(deny_unknown_fields)]
+pub struct StoreWebSearchCredentialRequest {
+    pub secret: String,
+    #[serde(default)]
+    #[ts(optional)]
+    pub provider_id: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
+pub struct WebSearchSourceView {
+    pub title: String,
+    pub url: String,
+    pub published_at: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
+pub struct WebSearchProbeView {
+    pub provider_id: String,
+    pub success: bool,
+    pub error_code: Option<String>,
+    pub result_count: u32,
+    pub sources: Vec<WebSearchSourceView>,
+    #[ts(type = "number")]
+    pub checked_at: i64,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]

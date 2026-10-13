@@ -82,7 +82,7 @@ capability_status 的空参数保留兼容；可分页列举本次目录，按�
 
 ## 6. 能力差距及交付边界
 
-用户后续提出的 36 项能力已逐项核对，见 [能力对照与补齐清单](CAPABILITY_INVENTORY_V0.1.md)。尤其 Web Search/Fetch 的 adapter 存在不代表默认产品已注册；第一批沿 capability_status 补候选筛选，其他缺口按表分批交付。
+用户后续提出的 36 项能力已逐项核对，见 [能力对照与补齐清单](CAPABILITY_INVENTORY_V0.1.md)。Web Fetch已于2026-10-11接入默认目录；Web Search仍需配置和凭据绑定。adapter存在不能代替本轮目录事实；候选检索沿capability_status，其他缺口按表分批交付。
 
 | 能力 | 当前状态/本轮措施 | 验收方式 |
 | --- | --- | --- |
@@ -96,3 +96,8 @@ capability_status 的空参数保留兼容；可分页列举本次目录，按�
 | 真实模型可靠选工具与完成原 Archify 安装 | 尚待真实验收 | 不能以替身或本轮重命名关闭 |
 
 补能力沿纵向用户流程推进；此表区分已交付、实际缺口和扩展方向，不能把所有图中名词视为当前产品承诺。
+
+
+### 2026-10-12 — 搜索链路补齐
+
+Exa属于Capability内的SearchBackend；默认注册和工具发现对应Harness L2，模型收到来源、压缩和冷恢复对应L3/L6，受控网络和异步探测对应L5，独立凭据与不可信正文边界对应L7，来源及错误展示对应L9。模型继续负责检索策略、比较和论证；搜索动作/来源存在不能替代L8结果验收。没有新增Runtime、Evidence或Permission系统。具体契约见Agent Spec同日补充与AGENT_WEB_SEARCH_CHANGE_IMPACT.md。

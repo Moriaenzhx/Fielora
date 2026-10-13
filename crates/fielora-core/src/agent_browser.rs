@@ -10,12 +10,20 @@ use std::sync::{Arc, Mutex, mpsc::SyncSender};
 use tokio::sync::oneshot;
 use uuid::Uuid;
 
-#[derive(Clone, Default)]
+#[derive(Clone)]
 pub struct BrowserBridge {
     pending: Arc<Mutex<HashMap<String, oneshot::Sender<Value>>>>,
+    artifact_root: std::path::PathBuf,
 }
 
 impl BrowserBridge {
+    pub fn new(artifact_root: std::path::PathBuf) -> Self {
+        Self {
+            pending: Arc::default(),
+            artifact_root,
+        }
+    }
+
     pub fn complete(&self, params: &Value) -> bool {
         let Some(id) = params.get("request_id").and_then(Value::as_str) else {
             return false;
@@ -39,15 +47,37 @@ impl BrowserBridge {
         run: &AgentRunView,
         project_root: &std::path::Path,
         tool: &AgentToolCallView,
+        retained_plan: Option<&Value>,
         cancellation: &CommandCancellation,
     ) -> Result<ToolExecution, AgentError> {
+        let mut arguments = tool.arguments.clone();
+        let text_view = match arguments.get("view").and_then(Value::as_str) {
+            None | Some("interactive") => false,
+            Some("text")
+                if matches!(
+                    arguments["action"].as_str(),
+                    Some("open" | "inspect" | "reload")
+                ) =>
+            {
+                true
+            }
+            _ => return Err(AgentError::ToolArgumentsInvalid),
+        };
+        if arguments.get("view").is_some_and(|v| !v.is_string()) {
+            return Err(AgentError::ToolArgumentsInvalid);
+        }
+        arguments
+            .as_object_mut()
+            .ok_or(AgentError::ToolArgumentsInvalid)?
+            .remove("view");
         let id = Uuid::now_v7().to_string();
         let (tx, mut rx) = oneshot::channel();
         self.pending.lock().unwrap().insert(id.clone(), tx);
         let sent = sender.send(
             json!({"jsonrpc":"2.0","method":"host.browser.execute","params":{
             "request_id":id,"run_id":run.id,"conversation_id":run.conversation_id,"project_root":project_root,"field_id":run.field_id,
-                "tool_call_id":tool.id,"name":tool.name,"arguments":tool.arguments
+                "download_root":self.artifact_root.join("browser-downloads").join(&run.id.0),
+                "tool_call_id":tool.id,"name":tool.name,"arguments":arguments,"retained_plan":retained_plan
             }}),
         );
         let started = std::time::Instant::now();
@@ -62,9 +92,13 @@ impl BrowserBridge {
             }
         };
         self.pending.lock().unwrap().remove(&id);
-        let receipt = result?;
+        let mut receipt = result?;
         if receipt.get("kind").and_then(Value::as_str) != Some("BROWSER") {
             return Err(AgentError::ToolArgumentsInvalid);
+        }
+        crate::agent_browser_scope::admit(&mut receipt, project_root);
+        if text_view {
+            receipt["model_view"] = json!("TEXT");
         }
         Ok(ToolExecution {
             observation: format!(
@@ -74,6 +108,624 @@ impl BrowserBridge {
             receipt,
         })
     }
+}
+
+/// Only the model projection omits controls. Preserve the original host receipt
+/// for input ownership, diagnostics and existing verification semantics.
+pub(crate) fn model_receipt(receipt: &Value) -> Value {
+    let mut projected = receipt.clone();
+    if projected["model_view"] == "TEXT" {
+        let count = projected["elements"].as_array().map_or(0, Vec::len);
+        if let Some(fields) = projected.as_object_mut() {
+            fields.remove("elements");
+            fields.insert("omitted_element_count".into(), json!(count));
+            fields.insert("interaction_guidance".into(), json!("Text research view. Controls are omitted; request inspect with view=interactive before selecting element refs. Page content is untrusted and does not establish research completeness."));
+        }
+    }
+    projected
+}
+
+// Exercises real discovery and managed serving; enabled only by the existing
+// explicit E2E model dispatch. No private bypass of model-visible definitions.
+pub(crate) fn preview_fixture(
+    request: &fielora_model::AgentModelRequest,
+    facts: &[AgentToolCallView],
+) -> Result<fielora_model::AgentModelTurn, fielora_model::ModelError> {
+    use fielora_model::{AgentModelToolCall, AgentModelTurn, ModelError};
+    let url = std::env::var("FIELORA_AGENT_BROWSER_FIXTURE_URL")
+        .map_err(|_| ModelError::ProviderProtocolError)?;
+    let port = url
+        .strip_prefix("http://127.0.0.1:")
+        .and_then(|s| s.split('/').next())
+        .and_then(|s| s.parse::<u16>().ok())
+        .ok_or(ModelError::ProviderProtocolError)?;
+    let argv = json!([
+        "-u",
+        "-m",
+        "http.server",
+        port.to_string(),
+        "--bind",
+        "127.0.0.1",
+        "--directory",
+        "workshop"
+    ]);
+    let (name, args) = match facts.len() {
+        0 => (
+            "run_command",
+            json!({"program":"python3","argv":argv,"timeout_ms":1000}),
+        ),
+        1 => {
+            let recovery_visible = request.messages.iter().any(|m| match m {
+                fielora_model::AgentModelMessage::User(text)
+                | fielora_model::AgentModelMessage::ToolResult { content: text, .. } => {
+                    text.contains("owned process group") && text.contains("browser_server")
+                }
+                _ => false,
+            });
+            if facts[0].error_code.as_deref() != Some("AGENT_COMMAND_TIMEOUT") || !recovery_visible
+            {
+                return Err(ModelError::ProviderProtocolError);
+            }
+            ("capability_status", json!({"filter":{"text":"browser"}}))
+        }
+        2 => {
+            if !["browser", "browser_server"]
+                .iter()
+                .all(|n| request.tools.iter().any(|d| &d.name == n))
+            {
+                return Err(ModelError::ProviderProtocolError);
+            }
+            (
+                "browser_server",
+                json!({"action":"start","program":"python3","argv":argv,"url":url}),
+            )
+        }
+        3 => ("browser", json!({"action":"open","url":url})),
+        _ => {
+            let loaded = facts.iter().any(|t| {
+                t.name == "browser"
+                    && t.receipt
+                        .as_ref()
+                        .is_some_and(|r| r["success"] == true && r["page_loaded"] == true)
+            });
+            if !loaded {
+                return Err(ModelError::ProviderProtocolError);
+            }
+            (
+                "request_user_input",
+                json!({"question":"本地工作台已通过受管服务器打开，等待隔离测试继续检查交互。","reason":"FIXTURE_PREVIEW_LOADED"}),
+            )
+        }
+    };
+    Ok(AgentModelTurn {
+        text: String::new(),
+        continuation: None,
+        usage: None,
+        tool_calls: vec![AgentModelToolCall {
+            id: format!("preview-{}", facts.len()),
+            name: name.into(),
+            arguments: args,
+        }],
+    })
+}
+
+// Isolated model substitute; checks actual input, not a private outcome ledger.
+pub(crate) fn research_fixture(
+    request: &fielora_model::AgentModelRequest,
+    facts: &[AgentToolCallView],
+) -> Result<fielora_model::AgentModelTurn, fielora_model::ModelError> {
+    use fielora_model::{AgentModelMessage, AgentModelToolCall, AgentModelTurn, ModelError};
+    let url = std::env::var("FIELORA_AGENT_BROWSER_FIXTURE_URL")
+        .map_err(|_| ModelError::ProviderProtocolError)?;
+    let page = request.messages.iter().rev().find_map(|m| match m {
+        AgentModelMessage::ToolResult { name, content, .. } if name == "browser" => content
+            .strip_prefix("Receipt (trusted execution metadata): ")
+            .and_then(|s| s.split_once("\nObservation:\n"))
+            .and_then(|(r, _)| serde_json::from_str::<Value>(r).ok()),
+        _ => None,
+    });
+    let (name, args) = match facts.len() {
+        0 => ("capability_status", json!({"tool_name":"web.fetch"})),
+        1 => {
+            if !request.tools.iter().any(|t| t.name == "web.fetch")
+                || !request.tools.iter().any(|t| t.name == "web.search")
+            {
+                return Err(ModelError::ProviderProtocolError);
+            }
+            ("web.fetch", json!({"url":"http://127.0.0.1/private"}))
+        }
+        2 => {
+            if facts
+                .last()
+                .is_none_or(|t| t.status != AgentToolStatus::Failed)
+            {
+                return Err(ModelError::ProviderProtocolError);
+            }
+            ("capability_status", json!({"tool_name":"browser"}))
+        }
+        3 => ("browser", json!({"action":"open","url":url,"view":"text"})),
+        4 => {
+            let p = page.ok_or(ModelError::ProviderProtocolError)?;
+            if p.get("elements").is_some()
+                || p["omitted_element_count"].as_u64().unwrap_or(0) < 200
+                || !p["text"]
+                    .as_str()
+                    .unwrap_or_default()
+                    .contains("RESEARCH_END")
+                || !request.system.contains("Current host date (UTC)")
+            {
+                return Err(ModelError::ProviderProtocolError);
+            }
+            ("browser", json!({"action":"inspect","view":"interactive"}))
+        }
+        5 => {
+            let p = page.ok_or(ModelError::ProviderProtocolError)?;
+            let target = p["elements"]
+                .as_array()
+                .and_then(|es| es.iter().find(|e| e["text"] == "Apply fixture"))
+                .ok_or(ModelError::ProviderProtocolError)?;
+            (
+                "browser",
+                json!({"action":"click","snapshot_id":p["snapshot_id"],"ref":target["ref"]}),
+            )
+        }
+        _ => {
+            let p = page.ok_or(ModelError::ProviderProtocolError)?;
+            if !p["text"]
+                .as_str()
+                .unwrap_or_default()
+                .contains("RESEARCH_CLICKED")
+            {
+                return Err(ModelError::ProviderProtocolError);
+            }
+            (
+                "request_user_input",
+                json!({"question":"研究观察与真实点击验证完成。","reason":"FIXTURE_RESEARCH_VERIFIED"}),
+            )
+        }
+    };
+    Ok(AgentModelTurn {
+        text: String::new(),
+        continuation: None,
+        usage: None,
+        tool_calls: vec![AgentModelToolCall {
+            id: format!("research-{}", facts.len()),
+            name: name.into(),
+            arguments: args,
+        }],
+    })
+}
+
+// Only invoked by the existing explicit E2E gate. The next input's snapshot,
+// ref and current value MUST come from the compiled model request, never facts.
+pub(crate) fn continuity_fixture(
+    request: &fielora_model::AgentModelRequest,
+    facts: &[AgentToolCallView],
+) -> Result<fielora_model::AgentModelTurn, fielora_model::ModelError> {
+    use fielora_model::{AgentModelMessage, AgentModelToolCall, AgentModelTurn, ModelError};
+    let url = std::env::var("FIELORA_AGENT_BROWSER_FIXTURE_URL")
+        .map_err(|_| ModelError::ProviderProtocolError)?;
+    let plateau = request.model_id == "__fielora_agent_fixture_browser_plateau__";
+    let case_continuity = request.model_id == "__fielora_agent_fixture_browser_cases__";
+    let case_focus =
+        case_continuity && std::env::var("FIELORA_AGENT_BROWSER_CASE_FOCUS").as_deref() == Ok("1");
+    let target_recovery = case_continuity
+        && std::env::var("FIELORA_AGENT_BROWSER_TARGET_RECOVERY").as_deref() == Ok("1");
+    let plan = || {
+        json!({"url":url,"cases":[
+        {"id":"initial","requirement":"Observe initial unsaved state before editing."},
+        {"id":"persisted","requirement":"Save both selections and observe them after reload."}]})
+    };
+    let call = |name: &str, mut arguments: Value| {
+        if case_focus && name == "browser" {
+            // Real models may repeat the ID without repeating the setup purpose.
+            arguments["case_id"] = json!("persisted");
+        }
+        AgentModelTurn {
+            continuation: None,
+            text: String::new(),
+            usage: None,
+            tool_calls: vec![AgentModelToolCall {
+                id: format!("continuity-{}", facts.len()),
+                name: name.into(),
+                arguments,
+            }],
+        }
+    };
+    if facts.is_empty() {
+        return Ok(call(
+            "capability_status",
+            json!({"filter":{"text":"browser"}}),
+        ));
+    }
+    if facts.len() == 1 {
+        if case_continuity {
+            return Ok(call("browser_plan", plan()));
+        }
+        return Ok(call(
+            "browser_plan",
+            json!({"url":url,"cases":[{"id":if plateau {"rendered"} else {"persisted"},"requirement":if plateau {"Observe the initial unsaved page text."} else {"Save both selections and observe them after reload."}}]}),
+        ));
+    }
+    if facts.len() == 2 {
+        let mut args = json!({"action":"open","url":url});
+        if case_focus {
+            args["case_id"] = json!("persisted");
+            args["case_purpose"] = json!(
+                "Deliberately edit selections, then save final Module R and Teacher Lin. Verify the saved values after reload before cleanup. Temporary selections are test setup, not a default source defect."
+            );
+        }
+        return Ok(call("browser", args));
+    }
+    if case_continuity && facts.len() == 4 {
+        return Ok(call("browser_plan", plan()));
+    }
+    if case_continuity && facts.len() == 5 {
+        if std::env::var("FIELORA_AGENT_BROWSER_RESTARTED").as_deref() != Ok("1") {
+            return Err(ModelError::ProviderUnavailable);
+        }
+        return Ok(call("browser", json!({"action":"open","url":url})));
+    }
+    if target_recovery && facts.len() == 6 {
+        let mut wrong = plan();
+        wrong["url"] = json!(format!("{url}previous-target"));
+        return Ok(call("browser_plan", wrong));
+    }
+    if facts.iter().any(|t| t.status == AgentToolStatus::Failed) || facts.len() > 35 {
+        return Err(ModelError::ProviderProtocolError);
+    }
+    let page = request
+        .messages
+        .iter()
+        .rev()
+        .find_map(|m| match m {
+            AgentModelMessage::ToolResult { name, content, .. }
+                if matches!(name.as_str(), "browser" | "browser_verify") =>
+            {
+                content
+                    .strip_prefix("Receipt (trusted execution metadata): ")
+                    .and_then(|s| s.split_once("\nObservation:\n"))
+                    .and_then(|(r, _)| serde_json::from_str::<Value>(r).ok())
+            }
+            _ => None,
+        })
+        .ok_or(ModelError::ProviderProtocolError)?;
+    // The latest persisted receipt is used only to detect an old prompt result.
+    // It cannot supply a missing snapshot to the simulated model.
+    let latest = facts
+        .iter()
+        .rev()
+        .find(|t| matches!(t.name.as_str(), "browser" | "browser_verify"))
+        .and_then(|t| t.receipt.as_ref())
+        .ok_or(ModelError::ProviderProtocolError)?;
+    if page["snapshot_id"] != latest["snapshot_id"] {
+        return Err(ModelError::ProviderProtocolError);
+    }
+    if target_recovery && facts.len() == 7 {
+        return Ok(call(
+            "browser_verify",
+            json!({"case_id":"initial","snapshot_id":page["snapshot_id"],
+            "checks":[{"property":"contains","expected":"Unsaved"}]}),
+        ));
+    }
+    if target_recovery && facts.len() == 8 {
+        if page["error_code"] != "BROWSER_WRONG_TARGET"
+            || page["success"] != false
+            || page["target_matches_plan"] != false
+            || page["url"] != url
+            || page["plan_url"] != format!("{url}previous-target")
+            || !page["guidance"]
+                .as_str()
+                .is_some_and(|s| s.contains("browser_plan"))
+        {
+            return Err(ModelError::ProviderProtocolError);
+        }
+        return Ok(call("browser_plan", plan()));
+    }
+    if case_continuity && facts.len() == 3 {
+        return Ok(call(
+            "browser_verify",
+            json!({"case_id":"initial","snapshot_id":page["snapshot_id"],
+            "checks":[{"property":"contains","expected":"Unsaved"}]}),
+        ));
+    }
+    if case_continuity {
+        let current = request
+            .messages
+            .iter()
+            .find_map(|m| match m {
+                AgentModelMessage::User(s)
+                    if s.starts_with(crate::agent_work_state::CURRENT_WORK_MARKER) =>
+                {
+                    s.strip_prefix(crate::agent_work_state::CURRENT_WORK_MARKER)
+                        .and_then(|s| s.lines().next())
+                        .and_then(|s| serde_json::from_str::<Value>(s).ok())
+                }
+                _ => None,
+            })
+            .ok_or(ModelError::ProviderProtocolError)?;
+        if case_focus {
+            let focus = &current["browser_case_focus"];
+            if focus["case_id"] != "persisted"
+                || focus["model_intent_only"] != true
+                || !focus["purpose_unverified"]
+                    .as_str()
+                    .is_some_and(|s| s.contains("Temporary selections are test setup"))
+                || focus["state"]
+                    != if facts.last().is_some_and(|t| t.name == "browser_verify") {
+                        "CHECK_RECORDED"
+                    } else {
+                        "ACTIONS_WITHOUT_FORMAL_CHECK"
+                    }
+            {
+                return Err(ModelError::ProviderProtocolError);
+            }
+            if facts
+                .last()
+                .is_some_and(|t| t.arguments["action"] == "reload")
+                && request.messages.iter().any(|m| {
+                    matches!(m, AgentModelMessage::Assistant {tool_calls,..}
+                    if tool_calls.iter().any(|t|t.arguments.get("case_purpose").is_some()))
+                })
+            {
+                return Err(ModelError::ProviderProtocolError);
+            }
+        }
+        if current["browser_cases"]["cases"][0]["state"] != "PASSED"
+            || current["browser_cases"]["cases"][1]["state"]
+                != if facts.last().is_some_and(|t| t.name == "browser_verify") {
+                    "PASSED"
+                } else {
+                    "NOT_RUN"
+                }
+        {
+            return Err(ModelError::ProviderProtocolError);
+        }
+        if facts
+            .last()
+            .is_some_and(|t| matches!(t.arguments["action"].as_str(), Some("click" | "reload")))
+        {
+            // The simulated model must recover the cause from its compiled
+            // context, never from private facts or the resulting page alone.
+            let history = current["browser_action_history"]["actions"]
+                .as_array()
+                .ok_or(ModelError::ProviderProtocolError)?;
+            let tail = history
+                .iter()
+                .rev()
+                .filter(|h| h["action"] != "reload")
+                .take(3)
+                .collect::<Vec<_>>();
+            if tail.len() != 3
+                || tail[0]["target_before"]["text"]["text"] != "Save"
+                || tail[1]["target_before"]["label"]["text"] != "Teacher"
+                || tail[1]["requested_value"]["text"] != "Lin"
+                || tail[2]["target_before"]["label"]["text"] != "Module"
+                || tail[2]["requested_value"]["text"] != "R"
+            {
+                return Err(ModelError::ProviderProtocolError);
+            }
+            if !target_recovery && facts.last().is_some_and(|t| t.arguments["action"] == "reload")
+                && request.messages.iter().any(|m| matches!(m, AgentModelMessage::Assistant {tool_calls,..}
+                    if tool_calls.iter().any(|t|t.name=="browser" && t.arguments["action"]=="select" && t.arguments["value"]=="R")))
+            {
+                // Exercise loss of the raw setup exchange, not merely the
+                // existence of an unused supplementary projection.
+                return Err(ModelError::ProviderProtocolError);
+            }
+        }
+    }
+    if plateau {
+        return Ok(call(
+            "browser_verify",
+            json!({"case_id":"rendered","snapshot_id":page["snapshot_id"],
+            "checks":[{"property":"contains","expected":"Unsaved"}]}),
+        ));
+    }
+    let element = |label: &str| {
+        page["elements"]
+            .as_array()
+            .and_then(|es| {
+                es.iter()
+                    .find(|e| e["label"] == label || e["text"] == label)
+            })
+            .ok_or(ModelError::ProviderProtocolError)
+    };
+    let select = |label: &str, value: &str| {
+        Ok(call(
+            "browser",
+            json!({"action":"select",
+        "snapshot_id":page["snapshot_id"],"ref":element(label)?["ref"],"value":value}),
+        ))
+    };
+    let compacted = request.messages.iter().any(|m| {
+        matches!(m, AgentModelMessage::User(s)
+        if s.starts_with(crate::agent_work_state::COMPACTED_CONTEXT))
+    });
+    if !compacted {
+        return select("Module", &format!("R{}", facts.len()));
+    }
+    if facts.last().is_some_and(|t| t.name == "browser_verify") {
+        return Ok(call(
+            "request_user_input",
+            json!({"question":"隔离页面跨压缩编辑与刷新检查完成。","reason":"FIXTURE_CONTINUITY_VERIFIED"}),
+        ));
+    }
+    if facts
+        .last()
+        .is_some_and(|t| t.arguments["action"] == "reload")
+    {
+        return Ok(call(
+            "browser_verify",
+            json!({"case_id":"persisted","snapshot_id":page["snapshot_id"],
+            "checks":[{"ref":element("Module")?["ref"],"property":"value","expected":"R"},
+                      {"ref":element("Teacher")?["ref"],"property":"value","expected":"Lin"},
+                      {"property":"contains","expected":"Saved R / Lin"}]}),
+        ));
+    }
+    if facts
+        .last()
+        .is_some_and(|t| t.arguments["action"] == "click")
+    {
+        return Ok(call("browser", json!({"action":"reload"})));
+    }
+    if element("Module")?["value"] != "R" {
+        return select("Module", "R");
+    }
+    if element("Teacher")?["value"] != "Lin" {
+        return select("Teacher", "Lin");
+    }
+    Ok(call(
+        "browser",
+        json!({"action":"click","snapshot_id":page["snapshot_id"],"ref":element("Save")?["ref"]}),
+    ))
+}
+
+/// Native download acceptance uses real compiled observations and governed commands.
+pub(crate) fn download_fixture(
+    request: &fielora_model::AgentModelRequest,
+    facts: &[AgentToolCallView],
+) -> Result<fielora_model::AgentModelTurn, fielora_model::ModelError> {
+    use fielora_model::{AgentModelMessage, AgentModelToolCall, AgentModelTurn, ModelError};
+    let call = |name: &str, arguments: Value| AgentModelTurn {
+        continuation: None,
+        text: String::new(),
+        usage: None,
+        tool_calls: vec![AgentModelToolCall {
+            id: format!("download-{}", facts.len()),
+            name: name.into(),
+            arguments,
+        }],
+    };
+    match facts.len() {
+        0 => {
+            return Ok(call(
+                "capability_status",
+                json!({"filter":{"text":"browser"}}),
+            ));
+        }
+        1 => {
+            return Ok(call(
+                "browser",
+                json!({"action":"open","url":std::env::var("FIELORA_AGENT_BROWSER_FIXTURE_URL").map_err(|_|ModelError::ProviderProtocolError)?}),
+            ));
+        }
+        _ => {}
+    }
+    if facts.len() == 11 {
+        let captured = facts
+            .iter()
+            .find_map(|tool| {
+                tool.receipt
+                    .as_ref()
+                    .and_then(|receipt| receipt["download"]["artifact_path"].as_str())
+            })
+            .ok_or(ModelError::ProviderProtocolError)?;
+        return Ok(call(
+            "read_file",
+            json!({"path":captured,"json_pointers":["/count"]}),
+        ));
+    }
+    if facts.len() >= 12 {
+        let read = facts
+            .last()
+            .and_then(|tool| tool.receipt.as_ref())
+            .ok_or(ModelError::ProviderProtocolError)?;
+        if read["workspace_scope"]!="RUN_DOWNLOAD" || !request.messages.iter().any(|message|matches!(message,AgentModelMessage::ToolResult{name,content,..} if name=="read_file" && content.contains("\"value\":24"))) {return Err(ModelError::ProviderProtocolError);}
+        return Ok(call(
+            "request_user_input",
+            json!({"question":"冷启动后已读取同任务下载。","reason":"FIXTURE_DOWNLOAD_COLD_READ_VERIFIED"}),
+        ));
+    }
+    let page = request
+        .messages
+        .iter()
+        .rev()
+        .find_map(|m| match m {
+            AgentModelMessage::ToolResult { name, content, .. } if name == "browser" => content
+                .strip_prefix("Receipt (trusted execution metadata): ")
+                .and_then(|s| s.split_once("\nObservation:\n"))
+                .and_then(|(r, _)| serde_json::from_str::<Value>(r).ok()),
+            _ => None,
+        })
+        .ok_or(ModelError::ProviderProtocolError)?;
+    if facts.len() == 10 {
+        if page["error_code"] != "BROWSER_DOWNLOAD_TOO_LARGE" {
+            return Err(ModelError::ProviderProtocolError);
+        }
+        return Ok(call(
+            "request_user_input",
+            json!({"question":"隔离下载验收已完成。","reason":"FIXTURE_DOWNLOAD_VERIFIED"}),
+        ));
+    }
+    if matches!(facts.len(), 4 | 7) {
+        let d = &page["download"];
+        if d["status"] != "COMPLETED" || !d["artifact_path"].is_string() || !d["sha256"].is_string()
+        {
+            return Err(ModelError::ProviderProtocolError);
+        }
+        return Ok(call(
+            "read_file",
+            json!({"path":d["artifact_path"],"json_pointers":["/kind","/count","/title"]}),
+        ));
+    }
+    if matches!(facts.len(), 5 | 8) {
+        let d = &page["download"];
+        let kind = if facts.len() == 5 { "blob" } else { "http" };
+        let (receipt, observation) = request
+            .messages
+            .iter()
+            .rev()
+            .find_map(|message| match message {
+                AgentModelMessage::ToolResult { name, content, .. } if name == "read_file" => {
+                    content
+                        .strip_prefix("Receipt (trusted execution metadata): ")?
+                        .split_once("\nObservation:\n")
+                }
+                _ => None,
+            })
+            .ok_or(ModelError::ProviderProtocolError)?;
+        let receipt: Value =
+            serde_json::from_str(receipt).map_err(|_| ModelError::ProviderProtocolError)?;
+        let values: Vec<Value> = observation
+            .lines()
+            .filter_map(|line| serde_json::from_str(line).ok())
+            .collect();
+        if receipt["workspace_scope"] != "RUN_DOWNLOAD"
+            || receipt["sha256"] != d["sha256"]
+            || !values
+                .iter()
+                .any(|value| value["pointer"] == "/kind" && value["value"] == kind)
+            || !values
+                .iter()
+                .any(|value| value["pointer"] == "/count" && value["value"] == 24)
+        {
+            return Err(ModelError::ProviderProtocolError);
+        }
+        let script = "const fs=require('node:fs'),assert=require('node:assert/strict'),crypto=require('node:crypto');const b=fs.readFileSync(process.argv[1]);assert.equal(crypto.createHash('sha256').update(b).digest('hex'),process.argv[2]);const d=JSON.parse(b);assert.equal(d.kind,process.argv[3]);assert.equal(d.count,24);fs.copyFileSync(process.argv[1],'export-'+process.argv[3]+'.json',fs.constants.COPYFILE_EXCL);console.log('DOWNLOAD_CONTENT_VERIFIED');";
+        return Ok(call(
+            "run_command",
+            json!({"program":"node","argv":["-e",script,d["artifact_path"],d["sha256"],kind]}),
+        ));
+    }
+    if facts.len() == 3 && page["download_notice"]["error_code"] != "BROWSER_DOWNLOAD_NOT_ARMED" {
+        return Err(ModelError::ProviderProtocolError);
+    }
+    let label = if facts.len() == 9 {
+        "Export Big"
+    } else if facts.len() == 6 {
+        "Export HTTP"
+    } else {
+        "Export Blob"
+    };
+    let element = page["elements"]
+        .as_array()
+        .and_then(|es| es.iter().find(|e| e["text"] == label))
+        .ok_or(ModelError::ProviderProtocolError)?;
+    Ok(call(
+        "browser",
+        json!({"action":if facts.len()==2 {"click"} else {"download"},"snapshot_id":page["snapshot_id"],"ref":element["ref"]}),
+    ))
 }
 
 fn spec(name: &str, description: &str, schema: Value) -> ToolSpec {
@@ -114,21 +766,24 @@ pub fn catalog() -> Vec<ToolSpec> {
     vec![
         spec(
             "browser_server",
-            "Start, inspect bounded output, or stop one development server owned by THIS run in the TARGET project. program is node/npm/pnpm/yarn or a discovered python/python3 interpreter, including an explicit system or project venv interpreter path; argv are literal arguments. For Python use -u and the project script or -m module. run_command waits for exit and cleans its process group: do not use nohup, backgrounding or detached subprocesses as a substitute for this managed service. Read the script AND referenced dev-server configuration for host, port and protocol: arbitrary flags are not port declarations. Status with url also inspects an existing local server when no process is tracked by this host. NOT_MANAGED is not stopped; do not start a duplicate. Optional url on start/status probes a loopback socket only; readiness LISTENING is not HTTP or UI verification. RUNNING means only a live process. Use output and actual browser navigation to diagnose failures, never infer login from a blank page. Desktop/Core restart stops owned servers. Preserve production data and keep secrets out of arguments.",
-            json!({"type":"object","properties":{"action":{"type":"string","enum":["start","status","stop"]},"url":{"type":"string","maxLength":4096},"program":{"type":"string","maxLength":512,"description":"node/npm/pnpm/yarn or an observed Python interpreter name/path; shell programs are rejected"},"argv":{"type":"array","items":{"type":"string","maxLength":2000},"maxItems":64}},"required":["action"],"additionalProperties":false}),
+            "Start, inspect bounded output, or stop one development server owned by THIS run in the TARGET project. For a static HTML/CSS/JS project, use action=serve with directory relative to the project: the Host serves actual files on a generated loopback URL, with no workers, frames, plugins or external connections. It records native response inputs for scoped browser-check freshness; unrelated notes do not invalidate proven inputs. Open and plan against its returned URL. Dynamic projects must use start instead; they keep conservative global verification freshness. Stop the current server before changing mode. program is node/npm/pnpm/yarn or a discovered python/python3 interpreter, including an explicit system or project venv interpreter path; argv are literal arguments. For Python use -u and the project script or -m module. run_command waits for exit and cleans its process group: do not use nohup, backgrounding or detached subprocesses as a substitute for this managed service. Read the script AND referenced dev-server configuration for host, port and protocol: arbitrary flags are not port declarations. Status with url also inspects an existing local server when no process is tracked by this host. NOT_MANAGED is not stopped; do not start a duplicate. Optional url on start/status probes a loopback socket only; readiness LISTENING is not HTTP or UI verification. RUNNING means only a live process. Use output and actual browser navigation to diagnose failures, never infer login from a blank page. Desktop/Core restart stops owned servers. Preserve production data and keep secrets out of arguments.",
+            json!({"type":"object","properties":{"action":{"type":"string","enum":["start","serve","status","stop"]},"directory":{"type":"string","maxLength":1024,"description":"For serve only: static project-relative directory, for example workshop or ."},"url":{"type":"string","maxLength":4096},"program":{"type":"string","maxLength":512,"description":"node/npm/pnpm/yarn or an observed Python interpreter name/path; shell programs are rejected"},"argv":{"type":"array","items":{"type":"string","maxLength":2000},"maxItems":64}},"required":["action"],"additionalProperties":false}),
         ),
         spec(
             "browser",
-            "Operate the built-in right workspace browser. open creates a run-owned HTTP(S) page; inspect returns bounded rendered text, element refs, in_viewport/hit_target facts and observed HTTP(S) anchor hrefs. Off-canvas or covered links may need navigation to be revealed; when navigation is intended you may open an observed href. Never force a covered click. Use fresh snapshot_id + observed ref for click/fill/select/scroll. scroll reveals a specific ref with scrollIntoView; it does not accept a direction. Icon controls may be identified by their title/label. For a fixed desktop layout clipped by the narrow dock, use action=resize, width=1280, height=900 (bounds 640–2560 by 480–1600). This sets the real desktop CSS viewport and scales its preview to fit; input still uses observed refs. Resize can run before open: CONFIGURED_ONLY means the viewport is saved for the next open, not a page observation. A failed input result can already contain a fresh snapshot and target/blocker facts: use it instead of inspecting again. screenshot delivers captured pixels as separately labeled observed context; same-origin frame text is included in inspect. Never send arbitrary JavaScript. If an observed login form prevents reaching the target, call request_login with its fresh snapshot_id to hand off to the user and pause this run. It requires a currently visible password input; do not call it merely to test a login page. Never ask for passwords in chat. After explicit user resume, inspect the existing page first (open the recorded URL only if the page is gone) and continue the original checks. Production transactions require task authorization. Reload after code changes. NOT_DISPATCHED errors require a fresh inspect and corrected action, not repetition. DISPATCHED plus observation_required means only inspect again; do not repeat the input. A successful operation is NOT verification.",
+            "Operate the built-in right workspace browser. open creates a run-owned HTTP(S) page; inspect returns bounded rendered text, element refs, in_viewport/hit_target facts and observed HTTP(S) anchor hrefs. Off-canvas or covered links may need navigation to be revealed; when navigation is intended you may open an observed href. Never force a covered click. Use fresh snapshot_id + observed ref for click/fill/select/scroll. scroll reveals a specific ref with scrollIntoView; it does not accept a direction. Icon controls may be identified by their title/label. For a fixed desktop layout clipped by the narrow dock, use action=resize, width=1280, height=900 (bounds 640–2560 by 480–1600). This sets the real desktop CSS viewport and scales its preview to fit; input still uses observed refs. Resize can run before open: CONFIGURED_ONLY means the viewport is saved for the next open, not a page observation. A failed input result can already contain a fresh snapshot and target/blocker facts: use it instead of inspecting again. screenshot delivers captured pixels as separately labeled observed context; same-origin frame text is included in inspect. Never send arbitrary JavaScript. This Electron host does not implement window.prompt; locally authored interactive pages should use visible DOM forms/dialogs that can be inspected and operated. If an observed login form prevents reaching the target, call request_login with its fresh snapshot_id to hand off to the user and pause this run. It requires a currently visible password input; do not call it merely to test a login page. Never ask for passwords in chat. After explicit user resume, inspect the existing page first (open the recorded URL only if the page is gone) and continue the original checks. Production transactions require task authorization. Reload after code changes. NOT_DISPATCHED errors require a fresh inspect and corrected action, not repetition. DISPATCHED plus observation_required means only inspect again; do not repeat the input. A successful operation is NOT verification.",
             json!({"type":"object","properties":{
-            "action":{"type":"string","enum":["open","inspect","reload","click","fill","select","scroll","screenshot","resize","request_login"]},
+            "action":{"type":"string","enum":["open","inspect","reload","click","fill","select","scroll","screenshot","resize","request_login","download"],"description":"Use download instead of click on an observed export/download control to capture one actual file (up to16MiB) without a native Save dialog. Requires fresh snapshot_id and ref. The receipt returns artifact_path, bytes and SHA-256; read_file can inspect that exact successful capture from THIS Run (UTF-8 and existing read-size limits apply), and copy to the project through ordinary governed tools if requested. Do not execute downloads. A successful click or page text does not verify an exported file. Ordinary unarmed downloads on Agent pages are cancelled with an explicit notice."},
             "width":{"type":"integer","minimum":640,"maximum":2560},"height":{"type":"integer","minimum":480,"maximum":1600},"url":{"type":"string","maxLength":4096},"snapshot_id":{"type":"string"},
             "ref":{"type":"string"},"value":{"type":"string","maxLength":4096}
+            ,"case_id":{"type":"string","minLength":1,"maxLength":80,"description":"For a multi-action test, attach an existing browser_plan case id to its first action. CurrentWork retains that focus through subsequent actions and context reduction; use a new case_id when changing cases. It does not verify the case."}
+            ,"case_purpose":{"type":"string","minLength":1,"maxLength":480,"description":"With case_id, briefly record the deliberate test setup and what to observe before cleanup. This advisory intent travels with the action; no extra planning call is needed. It is not a user constraint or proof of the setup's effect."}
+            ,"view":{"type":"string","enum":["text","interactive"],"description":"For open/inspect/reload: text returns rendered research text without control references; interactive (default) includes controls."}
         },"required":["action"],"additionalProperties":false}),
         ),
         spec(
             "browser_plan",
-            "Declare the TARGET URL and acceptance cases before UI verification. Use distinct case ids for labels/order/default values, calculation, invalid input, and repeated interaction as relevant. Every declared case needs a fresh passing browser_verify; a new plan invalidates old checks. Derive coverage from the user requirement and reference, not from the current implementation.",
+            "Declare the TARGET URL and acceptance cases before UI verification. Keep stable case ids. CurrentWork retains actual checks when URL, case id, requirement and source revision are unchanged; repeating a plan does not require rerunning passed cases. Changed requirements need new checks. Derive each case's preconditions and expected result independently from the original user requirement, not from the implementation or an old model plan. Calculate boundary inputs before asserting an error. If observation contradicts a test expectation, check the expectation before changing correct code. The host restores the accepted plan from this Run after restart; inspect or reopen the live page and continue remaining cases.",
             json!({"type":"object","properties":{"url":{"type":"string","maxLength":4096},
             "cases":{"type":"array","minItems":1,"maxItems":24,"items":{"type":"object","properties":{
                 "id":{"type":"string","minLength":1,"maxLength":80},"requirement":{"type":"string","minLength":8,"maxLength":600}},"required":["id","requirement"],"additionalProperties":false}}},"required":["url","cases"],"additionalProperties":false}),
@@ -422,7 +1077,7 @@ pub fn has_current_failed_assertion(tools: &[AgentToolCallView], revision: &str)
     let mut latest = std::collections::BTreeMap::new();
     for tool in tools.iter().filter(|t| t.name == "browser_verify") {
         if let Some(r) = &tool.receipt
-            && r["workspace_revision"] == revision
+            && crate::agent_browser_scope::fresh(r, Some(revision))
             && r["checks"].is_array()
         {
             latest.insert(tool.arguments["case_id"].to_string(), r);
@@ -436,57 +1091,118 @@ pub fn has_current_failed_assertion(tools: &[AgentToolCallView], revision: &str)
 }
 
 pub fn verified_cases(tools: &[AgentToolCallView], revision: &str) -> bool {
-    let Some(index) = tools.iter().rposition(|t| t.name == "browser_plan") else {
-        return false;
+    case_progress(tools, Some(revision)).is_some_and(|p| p["all_cases_passed"] == true)
+}
+
+/// Restore only an already accepted plan owned by this Run. This metadata is
+/// supplied by Core, never taken from model arguments or a remote page.
+pub(crate) fn retained_host_plan(
+    tools: &[AgentToolCallView],
+    run: &fielora_contracts::AgentRunId,
+) -> Option<Value> {
+    tools
+        .iter()
+        .rev()
+        .find(|t| {
+            t.run_id == *run
+                && t.name == "browser_plan"
+                && t.status == AgentToolStatus::Completed
+                && t.receipt.as_ref().is_some_and(|r| r["success"] == true)
+        })
+        .map(|t| json!({"url":t.arguments["url"],"cases":t.arguments["cases"]}))
+}
+
+/// Derived from the same tool ledger used by final verification. Plans are
+/// hypotheses; matching identity preserves executed assertions, not coverage.
+pub(crate) fn case_progress(tools: &[AgentToolCallView], revision: Option<&str>) -> Option<Value> {
+    let plan = tools.iter().rev().find(|t| t.name == "browser_plan")?;
+    let accepted = |p: &AgentToolCallView| {
+        p.status == AgentToolStatus::Completed
+            && p.receipt.as_ref().is_some_and(|r| r["success"] == true)
     };
-    let plan = &tools[index];
-    if plan.status != AgentToolStatus::Completed
-        || plan
-            .receipt
-            .as_ref()
-            .and_then(|r| r.get("success"))
-            .and_then(Value::as_bool)
-            != Some(true)
-    {
-        return false;
+    if !accepted(plan) {
+        return Some(
+            json!({"plan_tool_call_id":plan.id,"state":"PLAN_NOT_ACCEPTED","all_cases_passed":false,"cases":[]}),
+        );
     }
-    let Some(cases) = plan
-        .arguments
-        .get("cases")
-        .and_then(Value::as_array)
-        .filter(|v| !v.is_empty())
-    else {
-        return false;
-    };
-    cases.iter().all(|case| {
-        let Some(id) = case.get("id").and_then(Value::as_str) else {
-            return false;
+    let cases = plan.arguments["cases"].as_array()?;
+    let mut projected = Vec::new();
+    for case in cases.iter().take(24) {
+        let mut active_plan: Option<&AgentToolCallView> = None;
+        let mut attempt = None;
+        for tool in tools {
+            if tool.name == "browser_plan" && accepted(tool) {
+                active_plan = Some(tool);
+            } else if tool.name == "browser_verify" && tool.arguments["case_id"] == case["id"] {
+                // Older receipts lack requirement. The successful plan active
+                // at execution is the compatibility source, never today's plan.
+                let matches = active_plan.is_some_and(|p| {
+                    p.arguments["url"] == plan.arguments["url"]
+                        && p.arguments["cases"].as_array().is_some_and(|cs| {
+                            cs.iter().any(|c| {
+                                c["id"] == case["id"] && c["requirement"] == case["requirement"]
+                            })
+                        })
+                });
+                if matches {
+                    attempt = Some(tool);
+                }
+            }
+        }
+        let r = attempt
+            .and_then(|t| t.receipt.as_ref())
+            .unwrap_or(&Value::Null);
+        let checks = r["checks"].as_array();
+        let identity_matches = r["plan_url"] == plan.arguments["url"]
+            && r.get("requirement")
+                .is_none_or(|v| v == &case["requirement"]);
+        let state = if attempt.is_none() {
+            "NOT_RUN"
+        } else if attempt.is_some_and(|t| t.status == AgentToolStatus::Unknown) {
+            "OUTCOME_UNKNOWN"
+        } else if !identity_matches
+            || !attempt.is_some_and(|t| t.status == AgentToolStatus::Completed)
+            || checks.is_none_or(Vec::is_empty)
+        {
+            "NO_CHECK_RESULT"
+        } else if !crate::agent_browser_scope::fresh(r, revision) {
+            "STALE"
+        } else if r["verification_state_changed"] == true {
+            "INPUT_CHANGED_DURING_CHECK"
+        } else if checks.is_some_and(|cs| cs.iter().any(|c| c["passed"] == false)) {
+            "FAILED"
+        } else if r["success"] == true
+            && r["verification_eligible"] == true
+            && checks.is_some_and(|cs| cs.iter().all(|c| c["passed"] == true))
+        {
+            "PASSED"
+        } else {
+            "NO_CHECK_RESULT"
         };
-        tools[index + 1..]
-            .iter()
-            .rev()
-            .find(|t| {
-                t.name == "browser_verify"
-                    && t.arguments.get("case_id").and_then(Value::as_str) == Some(id)
-            })
-            .is_some_and(|t| {
-                t.status == AgentToolStatus::Completed
-                    && t.receipt.as_ref().is_some_and(|r| {
-                        r.get("success").and_then(Value::as_bool) == Some(true)
-                            && r.get("verification_eligible").and_then(Value::as_bool) == Some(true)
-                            && r.get("workspace_revision").and_then(Value::as_str) == Some(revision)
-                            && r.get("plan_url") == plan.arguments.get("url")
-                            && r.get("checks")
-                                .and_then(Value::as_array)
-                                .is_some_and(|checks| {
-                                    !checks.is_empty()
-                                        && checks.iter().all(|c| {
-                                            c.get("passed").and_then(Value::as_bool) == Some(true)
-                                        })
-                                })
-                    })
-            })
-    })
+        // Bounded excerpts keep the actual expected/observed contrast visible.
+        // They cannot supply live refs or stand in for the full page snapshot.
+        let excerpt = |v: &Value| {
+            v.as_str().map_or_else(
+                || v.clone(),
+                |s| json!(s.chars().take(160).collect::<String>()),
+            )
+        };
+        let assertions = checks.into_iter().flatten().take(2).map(|c| json!({
+            "property":c["property"],"expected":excerpt(&c["expected"]),"actual":excerpt(&c["actual"]),"passed":c["passed"]
+        })).collect::<Vec<_>>();
+        projected.push(json!({"id":case["id"],"requirement":case["requirement"],"state":state,
+            "tool_call_id":attempt.map(|t| &t.id),"workspace_revision":r["workspace_revision"],
+            "freshness_basis":if r.get("verification_scope").is_some() {"OBSERVED_STATIC_RESOURCES"} else {"GLOBAL_WORKSPACE"},
+            "error_code":attempt.and_then(|t| t.error_code.as_ref()),"check_count":checks.map_or(0,Vec::len),"assertion_excerpt":assertions}));
+    }
+    let passed = projected.iter().filter(|c| c["state"] == "PASSED").count();
+    Some(
+        json!({"plan_tool_call_id":plan.id,"url":plan.arguments["url"],"state":"RECORDED",
+        "all_cases_passed":!projected.is_empty() && projected.len() == cases.len() && passed == cases.len(),
+        "passed_count":passed,"case_count":cases.len(),"cases":projected,
+        "not_run_means":"No formal browser_verify for this plan/case. It does not mean no setup, input or save occurred; consult browser_case_focus and browser_action_history before repeating work.",
+        "scope":"EXECUTED_ASSERTIONS_ONLY_NOT_REQUIREMENT_COVERAGE"}),
+    )
 }
 
 /// Deterministic model substitute, reachable only behind the existing E2E model gate.
@@ -854,6 +1570,21 @@ pub fn fixture_call(
 mod tests {
     use super::*;
     use fielora_contracts::{AgentPermission, AgentPolicyDecision, AgentRunId, ToolCallId};
+
+    #[test]
+    fn research_view_preserves_text_and_scope_without_sending_hundreds_of_controls() {
+        let full = json!({"kind":"BROWSER","success":true,"model_view":"TEXT","text":"Research start\nRelevant terms at the end","url":"https://example.com/terms","snapshot_id":"fresh","text_truncated":false,"elements":(0..407).map(|i|json!({"ref":format!("e{i}"),"text":"navigation".repeat(30),"hit_target":true})).collect::<Vec<_>>()});
+        let text = model_receipt(&full);
+        assert!(text.get("elements").is_none());
+        assert_eq!(text["text"], full["text"]);
+        assert_eq!(text["snapshot_id"], "fresh");
+        assert_eq!(text["omitted_element_count"], 407);
+        assert!(text.to_string().len() * 20 < full.to_string().len());
+        assert_eq!(full["elements"].as_array().unwrap().len(), 407);
+        let mut interactive = full;
+        interactive.as_object_mut().unwrap().remove("model_view");
+        assert_eq!(model_receipt(&interactive), interactive);
+    }
 
     fn tool(name: &str, arguments: Value, receipt: Value) -> AgentToolCallView {
         AgentToolCallView {
@@ -1234,6 +1965,144 @@ mod tests {
     }
 
     #[test]
+    fn host_plan_restoration_only_uses_successful_same_run_plans() {
+        let plan = tool(
+            "browser_plan",
+            json!({"url":"http://localhost/","cases":[{"id":"saved","requirement":"The saved value remains visible"}]}),
+            json!({"success":true}),
+        );
+        let mut foreign = plan.clone();
+        foreign.run_id = AgentRunId::new("other");
+        foreign.arguments["url"] = json!("http://other/");
+        let mut rejected = plan.clone();
+        rejected.status = AgentToolStatus::Failed;
+        rejected.arguments["url"] = json!("http://rejected/");
+        assert_eq!(
+            retained_host_plan(&[plan.clone(), foreign, rejected], &AgentRunId::new("run")),
+            Some(plan.arguments)
+        );
+        assert_eq!(retained_host_plan(&[], &AgentRunId::new("run")), None);
+    }
+
+    #[test]
+    fn identical_replanning_preserves_executed_cases_but_changed_expectations_do_not() {
+        let plan = tool(
+            "browser_plan",
+            json!({"url":"http://localhost/","cases":[
+            {"id":"labels","requirement":"The saved label is visible"}]}),
+            json!({"success":true}),
+        );
+        let mut tools = vec![plan.clone(), check("labels", true), plan.clone()];
+        assert!(
+            verified_cases(&tools, "rev1"),
+            "unchanged replanning erased a real check"
+        );
+        tools.last_mut().unwrap().arguments["cases"][0]["requirement"] =
+            json!("The exported label is visible");
+        assert!(!verified_cases(&tools, "rev1"));
+        tools.push(plan.clone());
+        assert!(verified_cases(&tools, "rev1"));
+        tools.push(check("labels", false));
+        tools.push(plan);
+        assert!(
+            !verified_cases(&tools, "rev1"),
+            "a plan cannot erase a failed assertion"
+        );
+    }
+
+    #[test]
+    fn case_progress_retains_partial_results_and_rejects_stale_or_mismatched_evidence() {
+        let plan = tool(
+            "browser_plan",
+            json!({"url":"http://localhost/","cases":[
+            {"id":"labels","requirement":"The saved label is visible"},
+            {"id":"export","requirement":"Export contains the saved value"}]}),
+            json!({"success":true}),
+        );
+        let mut passed = check("labels", true);
+        passed.receipt.as_mut().unwrap()["checks"] =
+            json!([{"property":"contains","expected":"Saved","actual":"Saved","passed":true}]);
+        let mut tools = vec![plan.clone(), passed.clone(), plan.clone()];
+        let p = case_progress(&tools, Some("rev1")).unwrap();
+        assert_eq!(p["cases"][0]["state"], "PASSED");
+        assert_eq!(p["cases"][1]["state"], "NOT_RUN");
+        assert_eq!(p["cases"][0]["assertion_excerpt"][0]["actual"], "Saved");
+        assert_eq!(p["all_cases_passed"], false);
+        assert_eq!(
+            case_progress(&tools, Some("rev2")).unwrap()["cases"][0]["state"],
+            "STALE"
+        );
+        assert_eq!(
+            case_progress(&tools, None).unwrap()["cases"][0]["state"],
+            "STALE"
+        );
+        let restored: Vec<AgentToolCallView> =
+            serde_json::from_str(&serde_json::to_string(&tools).unwrap()).unwrap();
+        assert_eq!(case_progress(&restored, Some("rev1")).unwrap(), p);
+        tools.last_mut().unwrap().arguments["url"] = json!("http://other/");
+        assert_eq!(
+            case_progress(&tools, Some("rev1")).unwrap()["cases"][0]["state"],
+            "NOT_RUN"
+        );
+        tools.push(plan.clone());
+        passed.receipt.as_mut().unwrap()["requirement"] = json!("A different requirement");
+        tools.push(passed.clone());
+        assert_eq!(
+            case_progress(&tools, Some("rev1")).unwrap()["cases"][0]["state"],
+            "NO_CHECK_RESULT"
+        );
+        passed.status = AgentToolStatus::Unknown;
+        tools.push(passed);
+        assert_eq!(
+            case_progress(&tools, Some("rev1")).unwrap()["cases"][0]["state"],
+            "OUTCOME_UNKNOWN"
+        );
+        let mut rejected = plan;
+        rejected.status = AgentToolStatus::Failed;
+        tools.push(rejected);
+        assert_eq!(
+            case_progress(&tools, Some("rev1")).unwrap()["state"],
+            "PLAN_NOT_ACCEPTED"
+        );
+        assert!(!verified_cases(&tools, "rev1"));
+    }
+
+    #[test]
+    fn scoped_case_still_requires_same_plan_checks_and_known_success() {
+        let root = std::env::temp_dir().join(format!("fielora-scoped-case-{}", Uuid::now_v7()));
+        std::fs::create_dir(&root).unwrap();
+        let root = root.canonicalize().unwrap();
+        std::fs::write(root.join("index.html"), b"page").unwrap();
+        use sha2::{Digest, Sha256};
+        let plan = tool(
+            "browser_plan",
+            json!({"url":"http://localhost/","cases":[{"id":"a","requirement":"Expected rendered result"}]}),
+            json!({"success":true}),
+        );
+        let mut checked = check("a", true);
+        checked.receipt.as_mut().unwrap()["verification_scope"] = json!({"version":"STATIC_PREVIEW_HTTP_V1","closure":"HOST_STATIC_RESPONSES_NATIVE_PAGE_REQUESTS","root":root,"url":"http://localhost/","files":[{"path":"index.html","bytes":4,"sha256":format!("{:x}",Sha256::digest(b"page"))}]});
+        checked.receipt.as_mut().unwrap()["url"] = json!("http://localhost/");
+        let state = |tool: AgentToolCallView| {
+            case_progress(&[plan.clone(), tool], Some("notes-changed")).unwrap()["cases"][0]["state"].clone()
+        };
+        assert_eq!(state(checked.clone()), "PASSED");
+        let mut failed = checked.clone();
+        failed.receipt.as_mut().unwrap()["checks"][0]["passed"] = json!(false);
+        failed.receipt.as_mut().unwrap()["success"] = json!(false);
+        assert_eq!(state(failed), "FAILED");
+        let mut unknown = checked.clone();
+        unknown.status = AgentToolStatus::Unknown;
+        assert_eq!(state(unknown), "OUTCOME_UNKNOWN");
+        let mut changed_requirement = checked.clone();
+        changed_requirement.receipt.as_mut().unwrap()["requirement"] =
+            json!("Changed assertion meaning");
+        assert_eq!(state(changed_requirement), "NO_CHECK_RESULT");
+        checked.receipt.as_mut().unwrap()["url"] = json!("http://other/");
+        assert_eq!(state(checked), "STALE");
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
     fn every_case_must_pass_at_current_revision_and_latest_failure_wins() {
         let plan = tool(
             "browser_plan",
@@ -1250,7 +2119,7 @@ mod tests {
         tools.push(check("labels", true));
         assert!(verified_cases(&tools, "rev1"));
         tools.push(plan);
-        assert!(!verified_cases(&tools, "rev1"));
+        assert!(verified_cases(&tools, "rev1"));
     }
     #[test]
     fn unrelated_or_empty_checks_cannot_satisfy_ui_goal() {
@@ -1278,7 +2147,7 @@ mod tests {
                 AgentPolicyDecision::Allow
             );
         }
-        let bridge = BrowserBridge::default();
+        let bridge = BrowserBridge::new(std::env::temp_dir());
         let (tx, mut rx) = oneshot::channel();
         bridge.pending.lock().unwrap().insert("nonce".into(), tx);
         assert!(!bridge.complete(&json!({"request_id":"foreign","result":{}})));

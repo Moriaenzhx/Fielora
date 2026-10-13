@@ -17,6 +17,8 @@ PERSONAL STEWARD: LONG-TERM
 
 先做一个真正可日常使用的 Codex 类桌面工作软件，再逐步增加 Fielora 的能力。
 
+2026-10-10 用户明确近期最低能力目标：在相同国产模型、服务商、任务及资源条件下，编码任务的正确完成率至少达到 OpenCode，并在人工干预、无收益调用或可靠恢复等明确指标上证明改善。先稳定 Build B/C 编码闭环；功能目录、UI 丰富度和确定性替身通过不替代真实任务结果。当前尚未达到该验收，固定版本、比较方法和未运行项见 [OpenCode 对照协议](../../evals/china-model/OPENCODE_COMPARISON.md)。
+
 “Codex 类”表示学习成熟的工作流和信息架构，不复制专有源码、商标、文字或视觉资产。近期不要求产品先证明独特性；稳定、清楚、能完成工作优先。
 
 现阶段 `Field` 在用户侧按普通 `Project` 理解。已有 Field storage 可以作为兼容实现继续使用，但不得再扩展一套没有行为价值的 Reality 术语。Conversation、Project、Folder、Task、File、Diff、Terminal 与 Provider 是近期一级对象。

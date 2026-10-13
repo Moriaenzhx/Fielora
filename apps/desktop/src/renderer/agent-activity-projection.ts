@@ -69,6 +69,8 @@ export interface ConversationActivityApprovalItem {
   approvalId: string;
   toolCallId: string;
   decision: 'ALLOW_ONCE' | 'DENY' | null;
+  confirmationStage?: number;
+  requiredConfirmations?: number;
 }
 
 export interface ConversationContextActivityItem {
@@ -242,6 +244,10 @@ function approvalIdentity(event: AgentEventView): { approvalId: string; toolCall
 function narrativeFor(event: AgentEventView): ConversationActivityNarrativeItem | null {
   const payload = payloadOf(event);
   if (event.kind === 'CHECKPOINT_CREATED' && payload?.kind === 'WORK_REVIEW_V1' && payload.status === 'RECORDED') {
+    if (payload.guidance_status === 'HISTORICAL_INPUTS_REASSESS') {
+      return { id: `review-${event.sequence}`, kind: 'NARRATIVE', sequence: event.sequence, occurredAt: event.created_at,
+        step: payloadNumber(payload, 'step'), text: '已有更新的执行证据，旧复盘保留为历史记录。' };
+    }
     const review = payload.review;
     const next = review && typeof review === 'object' && !Array.isArray(review) ? (review as EventPayload).next_check : null;
     if (typeof next !== 'string' || !next.trim()) return null;
@@ -293,6 +299,10 @@ export function buildConversationActivityProjection(
   let lastPhase = '';
 
   const appendEntry = (entry: ConversationActivityEntry) => {
+    // Research has visible result content, so it must not disappear inside a
+    // mixed batch (or move out of order when that batch is disclosed).
+    const research = entry.kind === 'TOOL' && ['web.search', 'web.fetch'].includes(entry.tool.name);
+    if (research) currentGroup = null;
     if (!currentGroup) {
       currentGroup = {
         id: `group-${entry.sequence}`,
@@ -313,6 +323,7 @@ export function buildConversationActivityProjection(
       : null;
     currentGroup.groupKind = groupKind(currentGroup.entries);
     currentGroup.title = groupTitle(currentGroup.entries);
+    if (research) currentGroup = null;
   };
 
   const appendTool = (event: AgentEventView) => {
@@ -419,8 +430,13 @@ export function buildConversationActivityProjection(
       currentGroup = null;
       const identity = approvalIdentity(event);
       if (!identity) continue;
+      const previous = approvals.get(identity.approvalId);
+      if (previous && !previous.completedAt) {
+        previous.completedAt = event.created_at;
+        previous.decision = 'ALLOW_ONCE';
+      }
       const item: ConversationActivityApprovalItem = {
-        id: `approval-${identity.approvalId}`,
+        id: `approval-${identity.approvalId}-${event.sequence}`,
         kind: 'APPROVAL',
         sequence: event.sequence,
         occurredAt: event.created_at,
@@ -428,6 +444,8 @@ export function buildConversationActivityProjection(
         approvalId: identity.approvalId,
         toolCallId: identity.toolCallId,
         decision: null,
+        confirmationStage: typeof (payloadOf(event)?.approval as Record<string, unknown> | undefined)?.confirmation_stage === 'number' ? (payloadOf(event)?.approval as Record<string, number>).confirmation_stage : undefined,
+        requiredConfirmations: typeof (payloadOf(event)?.approval as Record<string, unknown> | undefined)?.required_confirmations === 'number' ? (payloadOf(event)?.approval as Record<string, number>).required_confirmations : undefined,
       };
       approvals.set(identity.approvalId, item);
       items.push(item);

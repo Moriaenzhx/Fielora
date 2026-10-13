@@ -1,0 +1,9 @@
+# Model HTTP failure recovery — 2026-10-12
+
+User flow: a long task rejected by its model service preserves the same Run and gives an evidence-based reason and retry interval. The original workshop reached step310 with legacy PROVIDER_RATE_LIMITED, no HTTP status and no new tools; this does not prove either quota exhaustion or a browser restriction.
+
+Confirmed mechanism: the Model adapter collapses HTTP408/429 into one content-free variant and discards Retry-After; Harness retries after350ms. Change the existing response diagnostic projection to retain numeric HTTP status and an optional parsed retry interval, distinguish408 timeout from429 rate limiting, and preserve5xx status. Do not read/store rejected429 bodies, raw headers, credentials, request IDs or provider prose. An absent interval remains unknown. Historical ambiguous events remain unchanged.
+
+Harness L3/L6 keeps its existing one automatic retry: honor a valid interval up to30s, pause without another request when the interval is longer; use2s for a rate response without advice. Waiting remains cancellable. Explicit user resume remains explicit, not a background scheduler. No automatic provider switch, purchase, budget increase, second state owner, permission change, schema or migration. Numeric diagnostics live in existing event JSON; older readers ignore the optional field. Code rollback is sufficient.
+
+Verify wire408/429/503, numeric/date/malformed/overflow Retry-After, content non-retention, retry bounds/cancellation, stable same-Run pause/resume across app restart and visible native-app reasons. Fixtures establish recovery mechanics only; real Qwen/original-workshop acceptance stays separately unresolved. Sources: [HTTP semantics](https://www.rfc-editor.org/rfc/rfc9110.html#name-retry-after), [httpdate parser](https://docs.rs/httpdate/1.0.3/httpdate/fn.parse_http_date.html).

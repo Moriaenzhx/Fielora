@@ -137,16 +137,30 @@ test('running presentation is narrative and activity chronology followed by hone
 });
 
 test('composer queues steering without parallel runs and keeps an explicit user turn status', () => {
-  assert.match(workspace, /if \(activeAgentRef\.current\) \{\s*sendingRef\.current = true;[\s\S]*?await queueFollowUp\(content\)/);
+  assert.match(workspace, /if \(agentForConversation\(activeAgentRef\.current, conversationId\)\) \{\s*sendingRef\.current = true;[\s\S]*?await queueFollowUp\(content\)/);
   assert.match(workspace, /data-testid="queued-follow-up-status"/);
   assert.match(workspace, /data-after-run-id=\{item\.afterRunId\}/);
   assert.match(workspace, /data-testid="queued-follow-up-card"/);
   assert.match(workspace, /editQueuedFollowUp\(item\)/);
   assert.match(workspace, /removeQueuedFollowUp\(item\.id\)/);
-  assert.match(workspace, /if \(!project \|\| !conversation \|\| activeAgentRef\.current \|\| !agentRunIsTerminal\) return/);
+  assert.match(workspace, /if \(!project \|\| !conversation \|\| agentForConversation\(activeAgentRef\.current, conversationId\) \|\| !agentRunIsTerminal\) return/);
   assert.match(workspace, /data-testid="send-steering"/);
   assert.match(workspace, /data-testid="stop-agent-secondary"/);
   assert.match(workspace, /data-testid="stop-agent"/);
+});
+
+test('foreground identity is released on selection and checked by send, queue and late acknowledgement paths', () => {
+  const selectionEffect = workspace.slice(workspace.indexOf('    selectedConversationRef.current = conversationId;'), workspace.indexOf('  useEffect(() => () => recognitionRef'));
+  assert.match(selectionEffect, /agentSelectionRef\.current = selection/);
+  assert.match(selectionEffect, /activeAgentRef\.current = null/);
+  assert.doesNotMatch(selectionEffect, /agent\.cancel/);
+  assert.match(workspace, /const active = agentForConversation\(activeAgentRef\.current, conversationId\)/);
+  assert.match(workspace, /previous\.conversation_id !== conversation\.id/);
+  assert.match(workspace, /loadAgentRun\(await window\.fielora\.agent\.get\(\{ run_id: started\.id \}\), true, selection\)/);
+  assert.doesNotMatch(workspace, /loadAgentRun\(await window\.fielora\.agent\.get\(\{ run_id: started\.id \}\), true\)/);
+  assert.match(workspace, /clearComposerDraft\(composerDraftKey\(project\.field_id, targetConversationId\), composerDraftSnapshot\)/);
+  assert.match(workspace, /queuedFollowUpStartingRef\.current\.has\(next\.id\)/);
+  assert.doesNotMatch(selectionEffect, /queuedFollowUpStartingRef\.current\s*=/);
 });
 
 test('auto follow can be paused by scrolling and restored to the active task', () => {
@@ -176,15 +190,16 @@ test('terminal result expands changed files and routes an exact file into Human 
   assert.match(workspace, /historicalReview\?\.review \?\? agentReview/);
 });
 
-test('activity has one lightweight list and one selected detail outside its scrollport', () => {
+test('activity opens file links in the workspace and details within their operation row', () => {
   const css = readFileSync(path.join(rendererRoot, 'styles/conversation-execution.css'), 'utf8');
   assert.match(turn, /data-testid="operation-group-toggle" aria-expanded=\{state.open\}/);
   assert.match(turn, /data-testid="operation-list"/);
-  assert.match(turn, /OperationDetail key=\{selected.id\}/);
+  assert.match(turn, /expanded && <OperationDetail entry=\{entry\}/);
+  assert.match(turn, /className="operation-file-link"/);
   assert.match(turn, /activityDetailFields\(entry.tool\)/);
   assert.match(turn, /window.fielora.clipboard.writeText\(field.text\)/);
   assert.doesNotMatch(turn, /className="conversation-tool-body"|className="compact-command-panel" data-testid="compact-operation-detail"/);
-  assert.match(css, /max-height: 256px; overflow-y: auto/);
+  assert.doesNotMatch(css, /max-height: 256px; overflow-y: auto/);
   assert.match(css, /920px/);
   assert.match(css, /@container conversation \(max-width: 640px\)/);
 });

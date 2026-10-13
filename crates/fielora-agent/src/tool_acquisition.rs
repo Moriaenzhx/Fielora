@@ -36,7 +36,7 @@ pub fn catalog() -> Vec<ToolSpec> {
         ),
         tool(
             "tools.install",
-            "Publish a complete portable tool from a successful tools.prepare in THIS Run. Harness displays and checks the prepared source/version/hash/actual size/isolated destination. Only trusted official packages <=20 MiB with no system/PATH changes or install hooks qualify for automatic installation; other packages require human confirmation even in Full access. Never self-classify trust. No overwrite, no execution. Use returned absolute executable with run_command and verify its version and task result.",
+            "Publish a complete portable tool from a successful tools.prepare in THIS Run. Harness displays and checks the prepared source/version/hash/actual size/isolated destination. Full control permits prepared installation. For other presets, only trusted official packages <=20 MiB with no system/PATH changes or install hooks qualify for automatic installation; other packages require human confirmation. Never self-classify trust. No overwrite, no execution. Use returned absolute executable with run_command and verify its version and task result.",
             AgentToolEffect::WorkspaceWrite,
             json!({"type":"object","properties":{"prepared_tool_call_id":{"type":"string","minLength":1,"maxLength":128}},"required":["prepared_tool_call_id"],"additionalProperties":false}),
         ),
@@ -649,7 +649,7 @@ mod tests {
         fs::remove_dir_all(root).unwrap();
     }
     #[test]
-    fn policy_requires_install_approval_even_with_full_control() {
+    fn full_control_allows_installs_while_other_presets_require_confirmation() {
         let catalog = coding_tool_catalog();
         let command = catalog
             .iter()
@@ -666,6 +666,14 @@ mod tests {
                     command,
                     &json!({"program":program,"argv":argv})
                 ),
+                AgentPolicyDecision::Allow
+            );
+            assert_eq!(
+                PolicyEngine.decide(
+                    AgentPermission::ReviewChanges,
+                    command,
+                    &json!({"program":program,"argv":argv})
+                ),
                 AgentPolicyDecision::Ask
             );
         }
@@ -679,7 +687,7 @@ mod tests {
                 install,
                 &json!({"risk":"low","bytes":1})
             ),
-            AgentPolicyDecision::Ask
+            AgentPolicyDecision::Allow
         );
         assert_eq!(
             PolicyEngine.decide(

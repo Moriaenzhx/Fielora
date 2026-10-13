@@ -13,8 +13,8 @@
 | 3 | Capability Resolver | 已有精确工具名→绑定路由；本轮补描述/来源/副作用候选筛选 [A] | 当前仅词面候选查找，不是自然语言语义匹配、自动规划或自动切换 provider；后续补任务级选择评测 |
 | 4 | Browser Runtime | 已有：Electron 隔离页面、导航、DOM 观察/交互、截图和校验 [D] | 扩展真实网站稳定性验收；页面就绪失败不能推断网络全局不可达 |
 | 5 | CDP / DevTools | 部分：内部使用受限 debugger 命令完成输入；测试也使用 CDP [D] | 未向 Agent 开放任意 CDP 会话。需要具体调试用户流程再增受控操作 |
-| 6 | Web Search | **适配器已实现，默认产品未接入**：Brave backend、schema、凭据接口与测试存在 [E][F] | 配置入口、准确凭据绑定、注册与真实搜索验收；不能把 skills.search 冒充通用搜索 |
-| 7 | Web Fetch | **适配器已实现，默认产品未接入**：PublicWebFetcher 有界抓取、DNS/redirect 校验 [E][F] | 优先独立接入无搜索凭据的公开网页 fetch；验证页面文本与字节下载的边界 |
+| 6 | Web Search | **2026-10-12默认接入**：Exa免密钥搜索、可选独立Key、设置测试、日期/域名过滤和来源展示；Brave适配器保留 [E][F] | 实际Exa搜索→公开正文读取通过；公共额度不保证可用，真实模型及原工作坊任务仍待验收 |
+| 7 | Web Fetch | **2026-10-11默认产品已接入**：无搜索凭据的PublicWebFetcher，有界抓取、DNS/redirect校验 [E][F] | 真实公开文本抓取与桌面路由分别验证；JS/登录页面使用Browser，不代表搜索API或原任务已验收 |
 | 8 | MCP Client | 已有受限实现：rmcp stdio 握手、发现、调用、超时/取消 [C] | 尚未形成 HTTP/SSE、OAuth、Resources/Prompts 的完整产品支持 |
 | 9 | MCP Provider Adapter | 已有：MCP 工具经 ToolProvider 准入和 RoutedToolExecutor 执行 [A][C] | 新传输复用此接口和治理链，不另建 MCP Agent |
 | 10 | Skill System | 已有：发现/加载、公共来源查找、完整 bundle 准备/安装和验证 [B] | 私有来源、更新/卸载体验、更多真实 Skill 验收；结构通过不等于脚本运行通过 |
@@ -52,7 +52,7 @@
 按真实用户流程逐批推进，每批交付代码、对应回归与限制；没有实现的行保持缺失，不建立空服务：
 
 1. **本批：当前工具目录候选查找。** 在 capability_status 增加结构化筛选和分页查询摘要。无需预知准确工具名即可发现候选；复用 ToolSpec，不新建 Registry/Resolver 状态库。Registry/Discovery/Resolver 的通用资产支持仍是部分完成。
-2. **下一优先：Web Fetch 产品接入、Web Search provider 配置/诊断。** 先补代码到默认运行的缺口，再验证真实请求、失败分类与权限；浏览器渲染、API 搜索、静态抓取、Skill 下载保持独立。
+2. **Web Search与Fetch默认接入、独立Key配置/诊断已补。** 继续区分真实请求、失败分类与权限；浏览器渲染、API 搜索、静态抓取、Skill 下载保持独立。
 3. **资源与知识：** 本地 Resource 读取合同 → 有来源的 Knowledge Search → 需要时增加 Vector Search；复用 Library/Artifact/Context 和项目范围。
 4. **扩展资产：** Skill/Plugin 管理和版本兼容 → Connector/provider 管理 → Agent Blueprint 与受限 SubAgent 扩展。
 5. **持续任务：** Scheduler 时区/并发/恢复 → Event/Trigger → 环境事实和跨重启交接。
@@ -81,7 +81,7 @@
 - [B] [SkillCatalog/Loader](../../crates/fielora-agent/src/skills.rs)，[完整获取](../../crates/fielora-agent/src/skill_acquisition.rs)，[结构检查](../../crates/fielora-agent/src/skill_verification.rs)，[Plugin manifest](../../crates/fielora-agent/src/plugins.rs)。
 - [C] [MCP stdio](../../crates/fielora-agent/src/mcp.rs)，[连接快照](../../crates/fielora-agent/src/mcp_connections.rs)。
 - [D] [BrowserRuntime](../../apps/desktop/src/browser-runtime.ts)，[Agent Browser Host](../../apps/desktop/src/agent-browser-host.ts)，[Core browser bridge](../../crates/fielora-core/src/agent_browser.rs)。
-- [E] [WebToolProvider / Brave / PublicWebFetcher](../../crates/fielora-agent/src/web.rs)。
+- [E] [WebToolProvider / Exa / Brave / PublicWebFetcher](../../crates/fielora-agent/src/web.rs)。
 - [F] [AgentCoordinator](../../crates/fielora-core/src/agent_runtime.rs)：`new` 以空 ToolProvider 向量初始化，`with_user_config_root` 只补 MCP/plugin 配置路径；`with_brave` 未被产品构造调用。浏览器与已激活 MCP 沿专有现有接缝加入目录。
 - [G] [Artifact 操作](../../crates/fielora-agent/src/artifact.rs)。
 - [H] [Storage / 证据](../../crates/fielora-storage/src/lib.rs)，[平台进程与凭据](../../crates/fielora-platform/src/lib.rs)。
@@ -97,3 +97,22 @@
 - Capability Provider Management / Permission：新增 tools.prepare / tools.install，官方 Node、ripgrep 便携 ZIP 及需审批的公开 HTTPS ZIP；同 Run 回执解析、实际包摘要与体积、隔离发布。可信 <=20 MiB 免安装确认，其他 Ask，沿现有权限和审批事件。
 - 未覆盖：完整包管理器生命周期、自动安装脚本、MSI、TAR、多平台、自动全局 PATH 更新。常见 npm/pip/winget/npx 等获取命令要求审批；这不是任意脚本语义分析或全面进程沙箱。
 - Execution Evidence：真实普通 PATH 发现兼容 Node 并执行 Archify、真实官方 ripgrep 下载发布/version 已有维护证据；模型主动选择能力仍须真实任务验收。
+
+## 可交互原型补充（2026-10-12）
+
+interactive_prototype 内置 Skill + 既有受控文件写入/结果引用 + Desktop 隔离预览组成一条流程。首版支持 <=256 KiB 自包含 HTML/CSS/JS 的按钮、输入和页面内状态；源码持久保存在项目。页面无外部资源/API/应用桥/持久存储权限，预览输入在重载后重置。无需新模型供应商、工具执行器、Artifact 类型或迁移；复杂多文件站点继续用既有 Browser/server。具体宿主与模型验收边界见 artifacts/interactive-prototype-20261012/DELIVERY.md。
+
+### 2026-10-13 — Browser export capture
+
+Existing browser action=download captures native Blob/HTTP downloads into Core-owned observation artifacts (<=16MiB), returning actual path/size/hash for ordinary governed inspection and optional Project copy. Fresh snapshot/ref, actual WebContents binding, bounded wait/cancellation and generated filenames are required. Unarmed Agent-page downloads are cancelled with guidance; ordinary Browse unchanged. This enables export inspection, not general desktop control or automatic content verification. Evidence: artifacts/agent-workshop-continuation-20261013/download-dev/; final package and real-model outcome are recorded separately.
+
+### 2026-10-12 search settings extension
+
+The shipped independent web.search product now selects Exa, Brave, or an explicitly configured SearXNG-compatible JSON service. Settings owns selection, separate key management and probes; public web.fetch remains independent. Self-hosted loopback access is limited to the configured search endpoint and grants no general local fetch authority. This is search-provider compatibility, not a Fielora-owned crawler/index or general OS computer control. Live service acceptance and fixture protocol coverage are reported separately in artifacts/agent-search-providers-20261012/.
+
+
+### 2026-10-13 native desktop and static acceptance adapters
+
+`computer` is a governed builtin with macOS status/identity/AX observe/activate/native input. First application observation requires task/application/model-receiver consent, then ordinary FullControl actions reuse that scope. Fresh native target/ref/focus checks and protected approval surfaces apply. Screenshot and Windows native support remain explicitly unavailable in this slice; declaration, OS permission, dispatch and verified result are separate facts. Common clear/upload preparation uses existing Approval, with two human stages for whole-scope clearing. Arbitrary host/MCP effects remain outside complete mediation.
+
+`browser_server serve` reuses the existing Run-owned managed preview with static resource provenance. Browser checks can retain freshness across unrelated delivery-note edits only when Host-observed resources and current fingerprints support it; otherwise existing global invalidation remains.

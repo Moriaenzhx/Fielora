@@ -16,7 +16,7 @@ async function launch() {
   const launched = await launchElectron({ root: path.join(root, 'apps/desktop'), dataRoot, output,
     executablePath: process.env.FIELORA_PACKAGED_EXE ?? process.execPath,
     args: process.env.FIELORA_PACKAGED_EXE ? [] : [path.join(root, 'node_modules/@electron-forge/cli/dist/electron-forge.js'), 'start'],
-    extraEnv: { Path: `${path.dirname(process.execPath)};${process.env.Path ?? ''}` },
+    extraEnv: { PATH: `${path.dirname(process.execPath)}${path.delimiter}${process.env.PATH ?? ''}` },
   });
   child=launched.child;
   cdp=await connectToFieloraApp({port:launched.port,output,timeoutMs:120000,enablePage:true});
@@ -51,7 +51,7 @@ try {
   await writeFile(path.join(projectRoot, 'settings.js'), base);
   await writeFile(path.join(projectRoot, 'verify.cjs'), "require('node:assert/strict').equal(require('./settings.js').value, 'right');\n");
   await writeFile(path.join(projectRoot, 'evidence.txt'), 'Original screenshot evidence.\n');
-  assert.equal(spawnSync('git.exe', ['init'], { cwd: projectRoot, windowsHide: true }).status, 0);
+  assert.equal(spawnSync(process.platform==='win32'?'git.exe':'git', ['init'], { cwd: projectRoot, windowsHide: true }).status, 0);
   await launch();
   ids = await cdp.eval(`(async()=>{const provider=await window.fielora.provider.create({provider_kind:'OPENAI_COMPATIBLE',display_name:'Turn context fixture',base_url:'https://dashscope.aliyuncs.com/compatible-mode/v1',default_model:'__fielora_agent_fixture_turn_context__',custom_endpoint_acknowledged:true});await window.fielora.provider.storeCredential({provider_config_id:provider.id,secret:'fixture-only'});const project=await window.fieloraTest.createProject({title:'目标驱动回归',goal:null,root_path:${JSON.stringify(projectRoot)}});return {provider,project}})()`);
 

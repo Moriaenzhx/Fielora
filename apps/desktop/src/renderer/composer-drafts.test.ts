@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { ComposerDraftStore, composerDraftKey } from './composer-drafts.ts';
+import { ComposerDraftStore, composerDraftKey, consumeComposerDraft } from './composer-drafts.ts';
 import type { WorkspaceAttachmentView } from '../workspace-types';
 
 test('unsent drafts remain isolated across conversations, projects and late attachment completion', () => {
@@ -25,4 +25,23 @@ test('first send moves the project draft to its created conversation without lea
   assert.equal(store.read(to).prompt, '开始工作'); assert.equal(store.read(from).prompt, '');
   store.move(from, to);
   assert.equal(store.read(to).prompt, '开始工作', 'an absent source must never clear an existing draft');
+});
+
+test('late start acknowledgement consumes only its submitted snapshot, preserving a later identical draft', () => {
+  const store = new ComposerDraftStore();
+  const a = composerDraftKey('p', 'a'); const b = composerDraftKey('p', 'b');
+  const submitted = { prompt: '运行任务', attachments: [] };
+  store.write(a, submitted);
+  store.write(b, { prompt: 'B 的草稿', attachments: [] });
+  const newlyTyped = { ...submitted };
+  store.write(a, newlyTyped);
+  store.write(a, consumeComposerDraft(store.read(a), submitted));
+  assert.equal(store.read(a), newlyTyped, 'same text entered later is still a different draft');
+  assert.equal(store.read(b).prompt, 'B 的草稿');
+  store.write(a, consumeComposerDraft(store.read(a), newlyTyped));
+  assert.equal(store.read(a).prompt, '');
+  const from = composerDraftKey('p', '');
+  store.write(from, submitted); store.move(from, a);
+  store.write(a, consumeComposerDraft(store.read(a), submitted));
+  assert.equal(store.read(a).prompt, '', 'owned first-send transfer retains its snapshot identity');
 });

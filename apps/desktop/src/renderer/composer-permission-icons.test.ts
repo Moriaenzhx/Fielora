@@ -35,7 +35,7 @@ test('composer permission uses three semantic icons without a trigger chevron', 
 test('permission copy distinguishes approval and actual command isolation', () => {
   assert.match(workspace, /label: '请求批准', description: '读取自动进行；修改文件、运行命令和联网前询问'/);
   assert.match(workspace, /label: '帮我批准', description: '自动修改项目；支持时隔离执行普通命令，安装和风险操作仍需批准'/);
-  assert.match(workspace, /label: '完全访问权限', triggerLabel: '完全访问', description: '符合条件的项目依赖可自动安装，其他安装仍需批准；普通命令不使用沙箱'/);
+  assert.match(workspace, /label: '完全访问权限', triggerLabel: '完全访问', description: '自动执行任务所需操作；清空两次确认，非代码数据外发确认；电脑观察按任务和应用授权。普通命令无沙箱'/);
   assert.match(primitives, /selected\?\.triggerLabel \?\? selected\?\.label \?\? ariaLabel/);
 });
 

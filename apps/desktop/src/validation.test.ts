@@ -5,7 +5,7 @@ import {
   validateSnapshot, validateSnapshotV1,
   validateCreateProvider, validateStoreCredential, validateStartModel, validateCreateCapture,
   validateCreateConversation, validateCreateConversationMessage, validateUpdateProject, validateApplyWorkspaceFile,
-  validateRunTerminal,
+  validateRunTerminal, validateWebSearchCredential, validateWebSearchConfig, validateWebSearchProvider,
   validateStartAgent, validateResumeAgent, validateListAgentEvents, validateResolveAgentApproval,
   validateListFileArtifactReviews, validateMarkFileArtifactReviewed, validateUndoFileArtifactRevision,
   validateActivateMcpConnection,
@@ -204,4 +204,25 @@ test('send preflight accepts only provider and bounded model identity', async ()
   for (const patch of [{ model_id: '' }, { model_id: 'x'.repeat(257) }, { model_id: 5 }, { secret: 'forbidden' }, { task: 'forbidden' }, { provider_config_id: '../invalid' }]) {
     assert.throws(() => validatePrepareProviderSend({ ...value, ...patch }));
   }
+});
+
+
+test('search credential bridge accepts one bounded secret and never echoes invalid input', () => {
+  assert.deepEqual(validateWebSearchCredential({secret:'  synthetic-key  '}), {secret:'synthetic-key'});
+  for (const input of [{secret:''}, {secret:'synthetic\nkey'}, {secret:'x'.repeat(2049)}, {secret:'密钥'}, {secret:'synthetic-secret',endpoint:'https://evil.example'}]) {
+    assert.throws(() => validateWebSearchCredential(input), error => !String(error).includes('synthetic-secret'));
+  }
+});
+
+test('search settings distinguish backend credentials from trusted custom endpoints', () => {
+  assert.deepEqual(validateWebSearchCredential({provider_id:'brave.search.v1',secret:'synthetic-brave'}),{provider_id:'brave.search.v1',secret:'synthetic-brave'});
+  assert.deepEqual(validateWebSearchProvider({}),{});
+  assert.deepEqual(validateWebSearchConfig({provider_id:'searxng.search.v1',endpoint:'http://localhost:8888/search'}),{provider_id:'searxng.search.v1',endpoint:'http://localhost:8888/search'});
+  for (const input of [
+    {provider_id:'arbitrary',endpoint:null},
+    {provider_id:'exa.search.v1',endpoint:'https://evil.example/search'},
+    {provider_id:'searxng.search.v1',endpoint:'http://example.com/search'},
+    {provider_id:'searxng.search.v1',endpoint:'https://secret@example.com/search'},
+    {provider_id:'searxng.search.v1',endpoint:'https://example.com/search?key=secret'},
+  ]) assert.throws(()=>validateWebSearchConfig(input),error=>!String(error).includes('secret'));
 });

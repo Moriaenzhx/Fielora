@@ -85,7 +85,7 @@ fn python_server_turn(task: &str, root: &Path, tools: &[AgentToolCallView]) -> A
         }
         _ if task.contains("PYTHON_SERVER_OUTCOME") => (
             "finish_task",
-            json!({"outcome":"completed","intent":"action","request_quote":task,
+            json!({"outcome":"completed","remaining_work":[],"required_evidence":[],"intent":"action","request_quote":task,
                 "summary":"Python 服务与完成证据回归通过；仅隔离机制测试，不代表原业务验收。",
                 "evidence_tool_call_ids":tools.iter().filter(|t| matches!(t.name.as_str(),"browser_server"|"browser_verify")).map(|t|t.id.clone()).collect::<Vec<_>>()}),
         ),
