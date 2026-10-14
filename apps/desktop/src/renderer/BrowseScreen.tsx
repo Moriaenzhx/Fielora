@@ -40,11 +40,12 @@ interface BrowseScreenProps {
 interface BrowsePanelProps extends Pick<BrowseScreenProps, 'browser' | 'onSaveToLibrary' | 'onOpenBrowserSettings'> {
   workspaceTabHostId?: string;
   workspaceActive?: boolean;
+  workspaceExpanded?: boolean;
   onRequestWorkspaceActivate?: () => void;
   onRequestWorkspaceClose?: () => void;
 }
 
-export function BrowsePanel({ browser, onSaveToLibrary, onOpenBrowserSettings, workspaceTabHostId, workspaceActive = false, onRequestWorkspaceActivate, onRequestWorkspaceClose }: BrowsePanelProps) {
+export function BrowsePanel({ browser, onSaveToLibrary, onOpenBrowserSettings, workspaceTabHostId, workspaceActive = false, workspaceExpanded = false, onRequestWorkspaceActivate, onRequestWorkspaceClose }: BrowsePanelProps) {
   const [page, setPage] = useState<BrowserPageState>(EMPTY_BROWSER);
   const [address, setAddress] = useState('');
   const [actionError, setActionError] = useState('');
@@ -57,6 +58,16 @@ export function BrowsePanel({ browser, onSaveToLibrary, onOpenBrowserSettings, w
   const editingAddress = useRef(false);
   const activePageIdRef = useRef('');
   const nativeViewVisibleRef = useRef(false);
+  const wasExpanded = useRef(workspaceExpanded);
+
+  useEffect(() => {
+    const expanding = workspaceExpanded && !wasExpanded.current;
+    wasExpanded.current = workspaceExpanded;
+    if (!expanding || !workspaceActive) return;
+    void browser.getState().then((state) => {
+      if (state.fixed_viewport && state.active_page_id) return browser.fitToWindow({ page_id: state.active_page_id });
+    }).catch((reason) => setActionError(toBrowserUserMessage(reason)));
+  }, [browser, workspaceActive, workspaceExpanded]);
 
   useLayoutEffect(() => {
     setWorkspaceTabHost(workspaceTabHostId ? document.getElementById(workspaceTabHostId) : null);
@@ -296,9 +307,7 @@ export function BrowsePanel({ browser, onSaveToLibrary, onOpenBrowserSettings, w
         leading={<span className="browser-page-visual" aria-hidden="true">
           {item.is_loading
             ? <span className="browser-page-loader" />
-            : item.favicon_data_url
-              ? <img src={item.favicon_data_url} alt="" />
-              : <span className="browser-page-fallback" />}
+            : <AppIcon name="browse"/>}
         </span>}
       />)
     : [<Tab
@@ -342,7 +351,7 @@ export function BrowsePanel({ browser, onSaveToLibrary, onOpenBrowserSettings, w
                   ? <span className="browser-page-loader" />
                   : item.favicon_data_url
                     ? <img src={item.favicon_data_url} alt="" />
-                    : <span className="browser-page-fallback" />}
+                    : <AppIcon name="browse"/>}
               </span>}
           />)}
         </TabStrip>
@@ -377,7 +386,8 @@ export function BrowsePanel({ browser, onSaveToLibrary, onOpenBrowserSettings, w
           />
         </form>
         <div className="browser-toolbar-end" ref={menuRef}>
-          <span className="page-title" title={page.title}>{page.title}</span>
+          <span className="page-title sr-only">{page.title}</span>
+          {page.fixed_viewport && <button className="browser-fit-window" type="button" title={`当前固定预览 ${page.fixed_viewport.width} × ${page.fixed_viewport.height}，恢复随窗口排版`} onClick={() => void act(() => browser.fitToWindow({ page_id: page.active_page_id }))} data-testid="browser-fit-window">适应窗口</button>}
           <button className="browser-overflow-button" type="button" aria-label="浏览器菜单" aria-haspopup="menu" aria-expanded={menuOpen} onClick={() => setMenuOpen((current) => !current)} data-testid="browser-overflow"><AppIcon name="more"/></button>
           {menuOpen && <div className="browser-overflow-menu" role="menu" aria-label="浏览器菜单" data-surface="overlay" data-testid="browser-overflow-menu">
             <div className="browser-menu-group">

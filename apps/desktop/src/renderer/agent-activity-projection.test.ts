@@ -1,7 +1,76 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import type { AgentEventKind, AgentEventView, AgentToolCallView } from '@fielora/contracts';
-import { buildConversationActivityProjection, compactOperationTimeline, reconcileLiveNarrative } from './agent-activity-projection.ts';
+import { applicationActivityGroups, buildConversationActivityProjection, compactOperationTimeline, computerApplicationActivity, reconcileLiveNarrative } from './agent-activity-projection.ts';
+
+const observedApplication = { app_id: 'com.example.notes', bundle_id: 'com.example.notes', name: 'Notes', pid: 42, launch_identity: 'actual-launch' };
+
+test('native application attribution uses receipts and never discovery or proposed identity', () => {
+  const call = tool('native', 'computer', 'PROCESS', 'COMPLETED', { action: 'observe', app_id: 'com.fabricated.app' }, { kind: 'COMPUTER', action: 'observe', success: true, target: observedApplication });
+  assert.deepEqual(computerApplicationActivity(call), {
+    target: { appId: 'com.example.notes', bundleId: 'com.example.notes', name: 'Notes' }, action: 'observe', status: 'COMPLETED', label: '已读取应用窗口', succeeded: true, canPreview: true,
+  });
+  const discovery = { ...call, arguments: { action: 'status' }, receipt: { kind: 'COMPUTER', action: 'status', available: true, applications: [observedApplication], target: observedApplication } };
+  assert.equal(computerApplicationActivity(discovery)?.label, '已检查电脑控制状态');
+  assert.equal(computerApplicationActivity({ ...discovery, receipt: { ...discovery.receipt, available: false } })?.label, '已检查电脑控制状态');
+  assert.equal(computerApplicationActivity(discovery)?.target, null);
+  assert.equal(computerApplicationActivity(discovery)?.canPreview, false);
+  assert.equal(computerApplicationActivity({ ...call, receipt: null })?.target, null);
+  assert.equal(computerApplicationActivity({ ...call, receipt: { target: observedApplication, success: true } })?.target, null);
+  assert.equal(computerApplicationActivity({ ...call, name: 'run_command' }), null);
+});
+
+test('application execution states cannot promote missing failed or unknown receipts to successful use', () => {
+  const call = tool('native', 'computer', 'PROCESS', 'COMPLETED', { action: 'click' }, { kind: 'COMPUTER', action: 'click', success: true, target: observedApplication });
+  for (const status of ['PROPOSED', 'RUNNING', 'WAITING_APPROVAL', 'FAILED', 'DENIED', 'CANCELLED', 'UNKNOWN'] as const) {
+    const activity = computerApplicationActivity({ ...call, status });
+    assert.equal(activity?.canPreview, false, status);
+    assert.equal(activity?.succeeded, false, status);
+    assert.equal(activity?.status, status);
+  }
+  const failed = computerApplicationActivity({ ...call, receipt: { ...call.receipt as Record<string, unknown>, success: false } });
+  assert.equal(failed?.status, 'FAILED');
+  assert.equal(failed?.label, '点击控件 · 未成功');
+  assert.equal(failed?.canPreview, false);
+  const unknown = computerApplicationActivity({ ...call, receipt: { ...call.receipt as Record<string, unknown>, outcome_unknown: true } });
+  assert.equal(unknown?.status, 'UNKNOWN');
+  assert.equal(unknown?.label, '点击控件 · 结果待确认');
+  const unknownProjection = buildConversationActivityProjection([event(1, 'TOOL_PROPOSED', { tool_call_id: call.id })], [{ ...call, receipt: { ...call.receipt as Record<string, unknown>, outcome_unknown: true } }]);
+  assert.equal(unknownProjection[0]?.kind === 'GROUP' && unknownProjection[0].entries[0]?.status, 'UNKNOWN');
+  const legacy = computerApplicationActivity({ ...call, receipt: { kind: 'COMPUTER', target: observedApplication } });
+  assert.equal(legacy?.label, '点击控件 · 历史结果未记录');
+  assert.equal(legacy?.canPreview, false);
+});
+
+test('application groups preserve failed attempts and keep files commands and discovered apps independent', () => {
+  const tools = [
+    tool('status', 'computer', 'OBSERVE', 'COMPLETED', {}, { kind: 'COMPUTER', action: 'status', success: true, applications: [observedApplication, { ...observedApplication, name: 'Unused' }] }),
+    tool('observe', 'computer', 'OBSERVE', 'COMPLETED', {}, { kind: 'COMPUTER', action: 'observe', success: true, target: observedApplication }),
+    tool('click', 'computer', 'PROCESS', 'COMPLETED', {}, { kind: 'COMPUTER', action: 'click', success: false, target: observedApplication }),
+    tool('read', 'read_file', 'OBSERVE', 'COMPLETED', { path: 'app.ts' }),
+    tool('cmd', 'run_command', 'PROCESS', 'COMPLETED'),
+  ];
+  const items = buildConversationActivityProjection(tools.map((call, index) => event(index + 1, 'TOOL_PROPOSED', { tool_call_id: call.id })), tools);
+  const entries = items.flatMap(item => item.kind === 'GROUP' ? item.entries : []);
+  const groups = applicationActivityGroups(entries);
+  assert.equal(groups.length, 1);
+  assert.deepEqual(groups[0]?.toolIds, ['observe', 'click']);
+  assert.equal(groups[0]?.label, '已完成 1 项应用操作，1 项未确认成功');
+  assert.equal(groups[0]?.previewTool?.id, 'observe');
+  assert.equal(entries.length, 5);
+  assert.deepEqual(applicationActivityGroups(entries.filter(entry => entry.id !== 'tool-observe'))[0]?.previewTool, null);
+});
+
+test('old native receipts retain local display fallback without inventing a current preview target', () => {
+  const call = tool('old', 'computer', 'OBSERVE', 'COMPLETED', {}, { kind: 'COMPUTER', action: 'observe', success: true, target: { bundle_id: 'org.example.old', name: '' } });
+  const activity = computerApplicationActivity(call);
+  assert.equal(activity?.target?.name, 'org.example.old');
+  assert.equal(activity?.canPreview, false);
+  const items = buildConversationActivityProjection([event(1, 'TOOL_PROPOSED', { tool_call_id: call.id })], [call]);
+  const group = items.find(item => item.kind === 'GROUP');
+  assert.equal(group && applicationActivityGroups(group.entries)[0]?.label, '已完成 1 项应用操作');
+  assert.equal(computerApplicationActivity({ ...call, receipt: { kind: 'COMPUTER', success: true, target: { app_id: '\nmalformed', name: 'Fake' } } })?.target, null);
+});
 
 test('research results stay separate and chronological without assistant announcements creating calls', () => {
   const tools = [tool('a','read_file','OBSERVE','COMPLETED'),tool('b','web.search','NETWORK','COMPLETED'),tool('c','web.fetch','NETWORK','FAILED'),tool('d','read_file','OBSERVE','COMPLETED')];

@@ -306,6 +306,11 @@ body[data-sidebar-collapsed="true"] .project-layout.workspace-open.dock-focused 
   opacity: 1;
 }
 
+/* In focus mode the Dock takes over the Content edge beside navigation. */
+.project-layout.workspace-open.dock-focused .right-workspace-dock {
+  border-top-left-radius: var(--fl-radius-conversation-surface);
+}
+
 .right-workspace-dock.has-toolbar {
   grid-template-rows: 40px 40px minmax(0, 1fr);
 }

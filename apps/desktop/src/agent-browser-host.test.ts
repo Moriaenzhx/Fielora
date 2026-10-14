@@ -375,6 +375,34 @@ test('scroll argument failures explain the missing ref instead of restarting ins
   assert.match(String(result.guidance), /scrollIntoView/);
 });
 
+test('unsupported browser actions identify the tool mismatch without dispatch or argument echo', async () => {
+  let backendCalls = 0, reveals = 0, serial = 0;
+  const replies = new Map<string, (result: Record<string, unknown>) => void>();
+  const host = new AgentBrowserHost(() => { backendCalls++; throw new Error('must not dispatch'); }, async (_, params) => {
+    const reply = params as { request_id: string; result: Record<string, unknown> };
+    replies.get(reply.request_id)!(reply.result);
+  }, () => { reveals++; });
+  try {
+    for (const action of ['status', 'status', 'private-invalid-action', '', undefined, null, 4, ['inspect'], { action: 'inspect' }]) {
+      const id = `unknown-action-${++serial}`;
+      const pending = new Promise<Record<string, unknown>>(resolve => { replies.set(id, resolve); });
+      host.handle({ request_id: id, run_id: 'run', conversation_id: 'conv', tool_call_id: id,
+        name: 'browser', arguments: { action, snapshot_id: 'fresh', ref: 'e1' } });
+      const result = await pending;
+      assert.equal(result.success, false);
+      assert.equal(result.error_code, 'BROWSER_UNSUPPORTED_ACTION');
+      assert.equal(result.input_state, 'NOT_DISPATCHED');
+      assert.equal(result.outcome_unknown, false);
+      assert.match(String(result.guidance), /browser\(action=inspect\)/);
+      assert.match(String(result.guidance), /status belongs to browser_server/);
+      assert.doesNotMatch(JSON.stringify(result), /private-invalid-action/);
+      assert.deepEqual(result.allowed_actions, ['open', 'inspect', 'reload', 'click', 'fill', 'select', 'scroll', 'screenshot', 'resize', 'request_login', 'download']);
+    }
+    assert.equal(backendCalls, 0);
+    assert.equal(reveals, 0);
+  } finally { host.reset(); }
+});
+
 
 test('restarted host can inspect an existing local server without owning or stopping it', async () => {
   const server = createServer();

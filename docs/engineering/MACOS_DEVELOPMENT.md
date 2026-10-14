@@ -71,6 +71,8 @@ pnpm --filter @fielora/desktop make  # 生成本机 ZIP
 
 本机产物：`apps/desktop/out/Fielora-darwin-arm64/Fielora.app`，主程序与 sidecar 均为 ARM64。这是本机开发包，尚未配置 Apple Developer 分发签名/公证；不要当作对外发行包。品牌源仍为原 SVG/PNG，`pnpm --filter @fielora/desktop icon:mac` 用系统 sips/iconutil 机械生成 ICNS。
 
+2026-10-13 起，Forge 对最终 macOS 开发包及内部二进制执行本地 ad-hoc 签名，不需要证书；签名失败会中止打包。postPackage 额外严格检查整个包、Core 签名和 `com.fielora.desktop` 身份，避免仅改名的 Electron 签名被当成有效应用包。使用默认代码身份要求，不用宽松自定义要求继承旧权限。此措施不提供 Apple Developer 身份、公证或系统辅助功能授权；重新构建后系统可能需要用户重新确认。正常启动的 `computer.status` 与真实输入验收必须单独通过，终端/E2E 启动者的权限不能外推到 Finder 启动。详见 [Change Impact](MACOS_PACKAGE_IDENTITY_CHANGE_IMPACT.md)。
+
 ## 已补齐的 Mac 行为
 
 - Provider API Key 与静态 MCP credential 使用系统 Keychain，service 为 Fielora，account 延续原有目标命名空间。只在 native Core 读写，不放进配置文件或命令行；秘密上限仍为 2048 bytes。存在性查询不读取密码内容。

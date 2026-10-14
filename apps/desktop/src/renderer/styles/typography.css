@@ -30,19 +30,24 @@
   letter-spacing: 0;
 }
 
-/* Conversation emphasis changes weight, not the reading size. Keep the
- * original heading elements so navigation and document semantics survive. */
+/* A restrained heading scale makes long answers scannable. Respect the
+ * selected font family and size; only authored Markdown carries emphasis. */
 :where(.conversation-column .markdown-body h1, .conversation-column .markdown-body h2,
   .conversation-column .markdown-body h3, .conversation-column .markdown-body h4,
   .conversation-column .markdown-body h5, .conversation-column .markdown-body h6) {
   font-size: var(--fl-type-body-size);
   font-weight: var(--fl-font-weight-semibold);
   line-height: var(--fl-type-body-line-height);
+  color: var(--fl-color-text-strong);
 }
+
+:where(.conversation-column .markdown-body h1) { font-size: calc(var(--fl-type-body-size) * 1.25); }
+:where(.conversation-column .markdown-body h2) { font-size: calc(var(--fl-type-body-size) * 1.125); }
 
 :where(.conversation-column .markdown-body strong, .conversation-column .markdown-body b) {
   font-size: inherit;
   font-weight: var(--fl-font-weight-semibold);
+  color: var(--fl-color-text-strong);
 }
 
 :where(.section-title, .settings-section > header p, [data-type-role="section"]) {

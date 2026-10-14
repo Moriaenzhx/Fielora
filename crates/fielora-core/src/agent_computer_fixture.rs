@@ -83,6 +83,33 @@ pub fn model(
             json!({"action":"observe","app_id":target}),
         ));
     }
+    if std::env::var("FIELORA_AGENT_COMPUTER_PREVIEW_TEST").as_deref() == Ok("1") {
+        if request.messages.iter().any(|message| {
+            matches!(message, AgentModelMessage::UserMultimodal { images, .. } if !images.is_empty())
+        }) {
+            return Err(ModelError::ProviderProtocolError);
+        }
+        // Keep a real, governed Run alive while the desktop test inspects its
+        // local preview. This is a cancellable ordinary child process, not a
+        // sleep holding the adapter lock or blocking the Core executor.
+        let waits = facts
+            .iter()
+            .filter(|tool| tool.name == "run_command")
+            .count();
+        if waits < tools.len() - 1 {
+            return Ok(call(
+                "run_command",
+                json!({"program":"/bin/sleep","argv":[if waits == 0 { "45" } else { "5" }],"timeout_ms":60000}),
+            ));
+        }
+        if tools.len() == 2 {
+            return Ok(call(
+                "computer",
+                json!({"action":"observe","app_id":target}),
+            ));
+        }
+        return Ok(pause("FIXTURE_NATIVE_PREVIEW_COMPLETE"));
+    }
     // Native content must have travelled through the ordinary model context.
     if !request.messages.iter().any(|m| matches!(m, AgentModelMessage::ToolResult { name, content, .. } if name == "computer" && content.contains("Native desktop receipt"))) {
         return Err(ModelError::ProviderProtocolError);

@@ -28,6 +28,93 @@ export interface ConversationVerificationActivityEntry {
 
 export type ConversationActivityEntry = ConversationToolActivityEntry | ConversationVerificationActivityEntry;
 
+export interface ActivityApplicationTarget {
+  appId: string;
+  bundleId: string;
+  name: string;
+}
+
+export interface ComputerApplicationActivity {
+  target: ActivityApplicationTarget | null;
+  action: string;
+  status: AgentToolCallView['status'];
+  label: string;
+  succeeded: boolean;
+  canPreview: boolean;
+}
+
+export interface ApplicationActivityGroup {
+  target: ActivityApplicationTarget;
+  label: string;
+  previewTool: AgentToolCallView | null;
+  toolIds: string[];
+}
+
+function record(value: unknown): Record<string, unknown> | null {
+  return value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : null;
+}
+
+function applicationText(value: unknown): string {
+  return typeof value === 'string' && value.length <= 256 && [...value].every(character => character.charCodeAt(0) >= 32 && character.charCodeAt(0) !== 127) ? value.trim() : '';
+}
+
+/** Attribution comes only from the actual native receipt. Discovery results and
+ * proposed arguments do not prove that an application was used. */
+export function computerApplicationActivity(tool: AgentToolCallView): ComputerApplicationActivity | null {
+  if (tool.name !== 'computer') return null;
+  const receipt = record(tool.receipt);
+  const nativeReceipt = receipt?.kind === 'COMPUTER' ? receipt : null;
+  const args = record(tool.arguments);
+  const action = applicationText(nativeReceipt?.action) || applicationText(args?.action);
+  const observed = action !== 'status' ? record(nativeReceipt?.target) : null;
+  const appId = applicationText(observed?.app_id);
+  const bundleId = applicationText(observed?.bundle_id);
+  const name = applicationText(observed?.name) || bundleId || appId;
+  const target = name && (appId || bundleId) ? { appId, bundleId, name } : null;
+  const status = nativeReceipt?.outcome_unknown === true ? 'UNKNOWN'
+    : nativeReceipt?.success === false && tool.status === 'COMPLETED' ? 'FAILED' : tool.status;
+  const succeeded = status === 'COMPLETED' && (nativeReceipt?.success === true
+    || (nativeReceipt?.action === 'status' && typeof nativeReceipt.available === 'boolean'));
+  const actions: Record<string, string> = {
+    status: '检查电脑控制状态', observe: '读取应用窗口', screenshot: '查看窗口画面', activate: '切换应用',
+    click: '点击控件', type: '输入文字', press: '发送快捷键', scroll: '滚动窗口', move: '移动指针', drag: '拖动目标',
+  };
+  const phrase = actions[action] ?? '操作应用';
+  const label = succeeded ? `已${phrase}` : status === 'RUNNING' ? `正在${phrase}`
+    : status === 'PROPOSED' ? `准备${phrase}` : status === 'WAITING_APPROVAL' ? `${phrase} · 等待确认`
+      : status === 'UNKNOWN' ? `${phrase} · 结果待确认` : status === 'DENIED' ? `${phrase} · 已拒绝`
+        : status === 'CANCELLED' ? `${phrase} · 已取消` : status === 'FAILED' ? `${phrase} · 未成功`
+          : `${phrase} · 历史结果未记录`;
+  return { target, action, status, label, succeeded, canPreview: Boolean(succeeded && target?.appId && observed && nativeReceipt?.action !== 'status') };
+}
+
+/** A mixed execution group keeps app identities separate from file/command
+ * actions, so a native app never appears to own unrelated tool execution. */
+export function applicationActivityGroups(entries: readonly ConversationActivityEntry[]): ApplicationActivityGroup[] {
+  const groups = new Map<string, { group: ApplicationActivityGroup; completed: number; pending: number; incomplete: number }>();
+  for (const entry of entries) {
+    if (entry.kind !== 'TOOL') continue;
+    const activity = computerApplicationActivity(entry.tool);
+    if (!activity?.target) continue;
+    const key = activity.target.appId || activity.target.bundleId;
+    let current = groups.get(key);
+    if (!current) {
+      current = { group: { target: activity.target, label: '', previewTool: null, toolIds: [] }, completed: 0, pending: 0, incomplete: 0 };
+      groups.set(key, current);
+    }
+    current.group.toolIds.push(entry.toolId);
+    if (activity.succeeded) {
+      current.completed += 1;
+      if (activity.canPreview) current.group.previewTool = entry.tool;
+    } else if (['PROPOSED', 'RUNNING', 'WAITING_APPROVAL'].includes(activity.status)) current.pending += 1;
+    else current.incomplete += 1;
+  }
+  return [...groups.values()].map(({ group, completed, pending, incomplete }) => ({
+    ...group,
+    label: [completed && `已完成 ${completed} 项应用操作`, pending && `${pending} 项待完成`, incomplete && `${incomplete} 项未确认成功`].filter(Boolean).join('，'),
+  }));
+}
+
 export interface ConversationActivityGroupItem {
   id: string;
   kind: 'GROUP';
@@ -340,7 +427,7 @@ export function buildConversationActivityProjection(
       completedAt: terminal?.created_at ?? (['COMPLETED', 'FAILED', 'DENIED', 'CANCELLED', 'UNKNOWN'].includes(tool.status) ? tool.updated_at : null),
       activityKind: activityKindFor(tool, verificationToolIds),
       tool,
-      status: tool.status === 'COMPLETED' && tool.receipt && typeof tool.receipt === 'object' && !Array.isArray(tool.receipt) && ((tool.receipt as EventPayload).success === false || (typeof (tool.receipt as EventPayload).exit_code === 'number' && (tool.receipt as EventPayload).exit_code !== 0)) ? 'FAILED' : tool.status,
+      status: computerApplicationActivity(tool)?.status ?? (tool.status === 'COMPLETED' && tool.receipt && typeof tool.receipt === 'object' && !Array.isArray(tool.receipt) && ((tool.receipt as EventPayload).success === false || (typeof (tool.receipt as EventPayload).exit_code === 'number' && (tool.receipt as EventPayload).exit_code !== 0)) ? 'FAILED' : tool.status),
       toolId: tool.id,
     });
   };

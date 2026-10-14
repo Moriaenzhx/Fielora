@@ -5,6 +5,7 @@ edition.workspace = true
 license.workspace = true
 
 [dependencies]
+base64 = "=0.22.1"
 fielora-contracts = { path = "../fielora-contracts" }
 fontdb = "=0.23.0"
 serde.workspace = true
@@ -22,3 +23,6 @@ security-framework-sys = "=2.17.0"
 
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"
+
+[build-dependencies]
+cc = "=1.4.2"

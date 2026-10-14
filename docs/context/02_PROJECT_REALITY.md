@@ -4264,3 +4264,65 @@ CurrentWork从同Run既有ToolCall派生browser_case_focus，绑定声明时的�
 
 
 最终组合Cross341TS/627Rust/15FIPC通过，8 Rust ignored保留（其中身份专项另已实际通过）；Core d50a0150f31a57e40431bee3551d8b145ed0a083b1adffe77be68de859079ea3。打包真实Electron验证A暂停时向B/新C发送不串任务，另真正执行网页检查→修改README→带required_evidence提交finish到COMPLETED，补齐此前只检CurrentWork的遗漏。正常UI恢复同一真实Qwen工作坊纠正Run后，第77步成功COMPLETED；独立实际导出13项再次通过，真实互动及模型/评测者干预边界见DELIVERY。原生真实Qwen在新版复查仍因macOS辅助功能未授权于第10步有证据暂停，未派发输入。不能把受阻真实原生验收、未实现截图/Windows或尚未覆盖的全局外发治理写成已完成。
+
+## 2026-10-13 — 应用归属与仅本机窗口预览
+
+用户要求在 Fielora 加入参考图中的应用图标/名称执行摘要和可收起窗口预览。当前候选沿既有 `computer` 回执显示实际应用归属；不从模型叙述或参数猜应用，也不把 `status` 枚举到的所有应用当成已使用。文件编辑、命令与应用操作分别呈现，失败、未知和历史缺失不提升为成功。
+
+原生后端在 macOS 14+ 使用 ScreenCaptureKit 取得单个目标窗口的有界 PNG，依赖实际屏幕录制权限。UI query 只传同 Run 的 ToolCall 身份，由 Core 解析真实成功回执与现存应用快照；窗口身份失效、目标不明确或平台不支持时显示不可用，不捕获整屏代替。新的合格应用回执或手动刷新更新浮动快照，可收起/关闭；切换对话、暂停或结束时撤下当前预览。画面标注捕获时间，不是实时视频或过去操作时刻的证据。
+
+图标和像素仅用于本机临时显示，不发给模型、不写工具回执/文件/截图 Evidence。模型原生截图能力仍为 UNSUPPORTED，Windows 原生输入和捕获范围不变。此项属于 Capability 原生只读输出与 Harness L9/产品投影，复用 L5/L6/L7 和现有 Run、会话、审批；无新增 schema、权限或证据所有者。
+
+本轮 Cross 347 TS/631 Rust/15 FIPC 通过，8 个原有 Rust ignored 保留；开发版及独立打包版真实 680×500 窗口像素/图标、浮窗操作、对话隔离、900×640 窄窗、陈旧/跨 Run/暂停/停止拒绝及零模型图片通过。打包 Stop 在 0.40ms 确认；实际截图在调用后 102.2ms 返回时已晚于停止确认，返回 RUN_INACTIVE 且无像素。源码审查发现的长执行锁、空标题通配和枚举超时单飞缺口已修正，并发 barrier 测试通过；未模拟所有 OS 歧义/永久超时。PreMerge 的 Cross 与 Phase 02 桌面通过，Browse 关页后 CDP 仍为两 target 的断言失败，后续 Desktop Foundation 未执行；不能宣称完整回归或 main 准入通过。确定性模型驱动了真实 native/Electron；未运行真实模型预览任务，正常启动生产应用的系统权限另行成立。新包独立保存，不替换正在运行的应用。范围见 [Application preview Change Impact](../engineering/AGENT_APPLICATION_PREVIEW_CHANGE_IMPACT.md)。
+
+## 2026-10-13 — 对话呈现优化候选
+
+用户长对话截图及粘贴记录显示来源原始换行摘录占用大量页面、标题层级偏弱、较早过程重复铺陈、部分工具标签机械。用户授权优化并先备份：项目外快照包含源码、未提交/未跟踪文件、本地文档、现有证据和应用包，6871文件逐项校验；仅排除依赖/编译缓存，Git历史另存bundle。
+
+Renderer候选提供两条来源预览、逐条摘录展开、较早过程连续分区收拢及失败摘要、语义图标、标题/重点文字层级、暂停待办与已有文件入口。保留全部历史及终态结果，未知和待审批不藏；部分传输COMPLETED但receipt.success=false/unknown的回执按实际结果显示。未修改Core执行或模型策略，不以UI优化宣称原AI工具选型任务或重复尝试已解决。验收状态以本轮交付记录追加为准。
+
+本轮最终验证：UI Lane PASS（359 TS），UI/UX规范检查23项PASS，Docs/context审计PASS；真实Electron长历史/来源/窄窗/字号专项在dev与最终独立包通过。同包应用预览真实像素与停止迟到拒绝、搜索→读取→冷重启→继续→完成均再次通过，均为隔离确定性fixture。最终包位于apps/desktop/out-conversation-ui-20261013/，旧包未替换。没有重跑原用户真实模型任务或完整PreMerge；此前Browse关页回归问题未在此轮解决。证据与回退说明见artifacts/desktop-foundation/conversation-presentation-20261013/DELIVERY.md。
+
+## 2026-10-13 — macOS 包签名与实际权限身份
+
+系统设置的 Fielora 辅助功能开关已开启，正常启动 Core 仍返回 REQUIRED。只读核验确认 canonical 包 `codesign --verify` 失败：Electron linker 签名没有绑定最终 Info.plist/资源；TCC 对后台请求使用主程序路径，而另一些主应用请求使用 bundle ID。不能据此归责用户未授权，签名是否为唯一原因仍需修复后的正常启动对照。
+
+Forge 已补本地 ad-hoc 从内到外签名，签名错误中止打包；postPackage 严格核对资源、Core 签名与 com.fielora.desktop，之后才进入原包提升流程。本机没有有效签名证书，未生成或请求证书、未公证，不改变系统开关/TCC/运行权限。独立包签名、真实篡改拒绝用例、UI Lane 361 项及真实网页下载/重启专项通过；正常启动许可与真实原生输入另行记录，不能从打包成功推出已授权。范围见 [Change Impact](../engineering/MACOS_PACKAGE_IDENTITY_CHANGE_IMPACT.md)。
+
+最终独立包原生 13 工具/79 字节中文 emoji 保存及暂停旧快照拒绝通过。最终构建与测试包 282 个文件/链接逐项一致，canonical 已更新并正常启动。真实 Qwen 新 Run 01a135f7 单次 status 后完成诊断；系统 TCC 对 Core 请求的 subject 已正确变为 com.fielora.desktop，后台仍返回辅助功能/输入 REQUIRED，而设置页依然 ON。签名/身份机制已修，系统授权重新登记待用户确认，生产原生输入与原 AI 办公选型任务仍未完成，未改 TCC 或系统设置。旧包完整副本已核对保留。
+
+## 2026-10-14 — 原生模型截图、视觉输入与桌面反馈候选
+
+用户要求继续实现参考图中的跨应用操作和可见反馈。已在修改前创建项目外完整备份，8174文件逐项核对，含既有未提交源码、本地记录、证据与应用包，Git历史和diff另存。确认原实现只向模型提供AX文字，本机预览不能让模型看见没有可读标签的界面；这是Capability图像/输入与Harness上下文接入缺口，不是应用失去前台就停止执行。
+
+候选沿既有computer/ComputerSession加入WINDOW_IMAGE观察授权、精确窗口截图、多模态临时上下文、截图坐标移动/点击/滚动/拖动及ref-free焦点键盘输入。图像不进持久回执，每次输入消耗视觉快照；接收服务变化、取消、目标变化均重新核验。Desktop显示实际派发位置和应用操作状态，提供跨应用Stop；原生输入前等待浮层隐藏确认，多任务期间不恢复遮挡。Windows与真实模型支持不能从本机候选推断。最终工程、真实窗口、打包与生产权限范围见artifacts/agent-computer-vision-20261014/DELIVERY.md，测试结果随后追加。
+
+工程Cross已通过364 TypeScript、649 Rust、15 FIPC，8个旧Rust探测ignored保留；后续UI错误文案通过13项定向测试、23项UI/UX及类型/lint检查。独立arm64包完成且严格签名校验通过，原canonical包272个文件hash未变。真实视觉开发验收在observe前后因interactive_desktop=false/COMPUTER_DESKTOP_UNAVAILABLE拒绝，未取得模型图像或派发输入；后续原生session读取确认当前锁屏，最新锁定时间不能完整反推更早失败时各字段。已请求用户解锁；打包视觉、越屏、正常启动权限和真实外部模型视觉尚未验收，不能写为用户目标已完成。现有Browse PreMerge失败未在本轮重跑或解决。
+
+## 2026-10-14 — 终态结果样式纠正
+
+用户反馈终态耗时栏、结果包装标题和历史正文重复显示已停止，右侧查看过程与缺失分割线偏离参考图。确认额外状态/标题来自上一轮Renderer呈现，共用running-header的border:0覆盖原有分隔线。已先逐文件备份，再恢复左侧用时＋箭头和全宽细线，去包装标题/状态图标，正文置前，错误码在原过程折叠内、检查和失败说明在正文后。历史正文只去重匹配终态的通用标题，不改持久消息或完成语义。工程和实际Electron呈现结果见artifacts/desktop-foundation/result-layout-20261014/DELIVERY.md；原生视觉任务的待解锁验收仍单独保留。
+
+终态样式最终验证：UI Lane365项、presentation29项、UI/UX23项通过；真实Electron开发版与独立包均通过完成/失败/取消三种终态、1px全宽分隔线/8px紧靠箭头、窄窗/放大字号/原历史/来源/审批。相同包旧结果区专项验证文件/链接/Review/复制/键盘通过；纯隔离持久记录回放，不调用真实模型或改生产数据。独立包out-result-layout-20261014已严格签名，原canonical未替换，本次只纠正结果呈现。
+
+## 2026-10-14 — 解锁后的真实视觉验收与正常启动权限
+
+解锁后真实图像已进入模型请求并完成坐标点击，进一步暴露两项 Capability 故障：本地预览与模型截图共享原生单飞通道但没有协调，后者会得到 COMPUTER_BUSY；Rust 对 macOS variadic 滚轮函数漏写第4个固定参数，Apple Silicon 实际收到落点正确但 deltaY=0 的滚轮事件。分别补模型截图优先、锁外有界且可取消的 lease 等待，以及 SDK 固定参数滚轮 API。等待只处理未启动 SDK 的 BUSY，不重试已派发输入或超时截图。Core lane651项/8旧ignored及后续平台23项/Clippy通过，原始失败保留。
+
+严格无测试端重试的开发版及最终签名包均完成25步：随机Canvas目标的真实PNG→原生点击/全文输入/Enter/滚动/拖动/双击→图像六项完成标记、指针、全局Stop、陈旧快照拒绝及实际SQLite零图像。打包越屏窗口完整捕获且屏外输入拒绝，同包旧预览回归通过；Stop约1.3ms确认，106.8ms后返回的捕获被拒绝且无像素。测试替身只根据实际模型请求PNG定位，不能读取目标DOM/AX坐标；这仍不是外部模型泛化或原办公任务验收。
+
+保留用户要求的终态简洁排版后，将最终包放回canonical路径，旧包原件和282项校验副本另存Fielora-backups/20261014-102730-before-verified-computer-app。正常UI启动真实Qwen3.7 Run01a13840-c6e2-7d60-adff-98128ade5257，实际status为interactive_desktop=true、accessibility/input_permission/screen_recording全部REQUIRED，模型在图像/输入前有证据暂停。系统设置旧Fielora辅助功能开关确为on，但这不能证明当前包权限成立；已请求用户确认重新关联当前应用，尚未修改系统授权。验收记录见artifacts/agent-computer-vision-20261014/DELIVERY.md；旧Browse PreMerge失败仍未重验或解决。
+
+## 2026-10-14 — 正常启动系统授权通过与截图回执歧义
+
+用户明确允许重绑当前应用并自行完成系统认证。Screen Recording 添加当前 canonical 后生效；Accessibility 对已有条目再次添加、开关重开和正常重启仍无效。只读系统日志确认 TCC responsible 为正确的 canonical Fielora，但旧 ad-hoc code requirement 与当前签名不匹配。实际移除旧辅助功能条目后重新添加当前包，正常退出并启动，真实 Qwen 同 Run 于 12:38:11 返回 available=true、Accessibility/input/Screen Recording 全部 GRANTED。没有修改 TCC 数据、降低签名校验或加入私有 entitlement。当前开发包的 ad-hoc 签名仍不保证未来重打包继承授权。
+
+新的暂停不是 OS 权限失败：Core observation 无条件写入 screenshot_available=false，模型据此把 status 未附图解释为截图不可用，未调用 screenshot 或触发图像审批。这是 Harness 回执表述混淆了能力与本次附件；源码修正将 status 的 screenshots 支持状态与 image_attached 分开，仅 screenshot 保留原兼容字段。工程修复、当前安装包和真实模型视觉分别记录；尚不能声称 Qwen 已看图或完成原办公任务。继续验收时桌面再次锁定，已请求用户解锁。
+
+该窄修正6项computer与2项visual-context测试、Core Clippy和独立只读审查通过；release及独立out-computer-status-20261014包构建完成，包/Core严格签名与三项源码指纹一致。canonical原268个普通文件hash未变，新包尚未启动或提升，不能把此前实机专项PASS归给新候选。证据见artifacts/agent-computer-vision-20261014/status-fix/build-validation.json；解锁后须继续新包实际截图及真实模型验收。
+
+### 2026-10-14 — 修正版正常启动真实看图操作闭环
+
+按用户要求未重跑全量测试。status-fix 已安装到 canonical，原包保留在 Fielora-backups/20261014-130049-before-status-receipt-fix/Fielora.app；新签名的辅助功能与录屏在既有授权范围内重新绑定。真实 Qwen 同 Run 01a13840-c6e2-7d60-adff-98128ade5257 已识别全部权限、触发图像审批、获取820×660截图，按图点击红色目标。后续截图与独立目标可信事件共同确认 clicks=1，最小看图操作闭环成立；焦点变化、缺少新截图、陈旧快照均先被零派发拒绝，模型自行重观察恢复。
+
+收窄范围的追加消息进入队列，未即时改变旧任务；模型继续其他合成动作后于step45完成，记录保留此额外执行。排队消息随后启动重复Run，已拒绝其图像授权，零图像与零输入后暂停，不再继续。该样本不证明通用应用可靠性或原办公任务完成，也不替代既有全量PreMerge边界。具体证据见artifacts/agent-computer-vision-20261014/DELIVERY.md。

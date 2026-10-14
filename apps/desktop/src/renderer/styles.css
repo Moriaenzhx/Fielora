@@ -709,9 +709,6 @@ button.agent-terminal-runtime:hover { color: var(--fl-color-text); }
 .browser-page-visual { width: 15px; height: 15px; flex: 0 0 auto; display: grid; place-items: center; }
 .browser-page-visual img { display: block; width: 14px; height: 14px; object-fit: contain; }
 .browser-page-loader { width: 13px; height: 13px; border: 2px solid #d6cdec; border-top-color: var(--fielora-accent); border-radius: 50%; animation: browser-tab-loading 720ms linear infinite; }
-.browser-page-fallback { position: relative; width: 13px; height: 13px; border: 1.5px solid #9ca7bc; border-radius: 50%; }
-.browser-page-fallback::before { content: ""; position: absolute; inset: 1px 4px; border-left: 1px solid #9ca7bc; border-right: 1px solid #9ca7bc; border-radius: 50%; }
-.browser-page-fallback::after { content: ""; position: absolute; left: 1px; right: 1px; top: 5px; border-top: 1px solid #9ca7bc; }
 .browser-page-label { min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
 .browser-page-close { width: 26px; height: 26px; padding: 0; border-radius: 8px; font-size: 16px; line-height: 1; }
 .browser-page-close:hover { color: #7c3144; background: #f7e8ec; }

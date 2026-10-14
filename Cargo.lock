@@ -527,6 +527,7 @@ dependencies = [
  "futures-util",
  "office_oxide",
  "regex",
+ "reqwest",
  "serde",
  "serde_json",
  "sha2 0.10.9",
@@ -568,6 +569,8 @@ dependencies = [
 name = "fielora-platform"
 version = "0.1.0"
 dependencies = [
+ "base64",
+ "cc",
  "core-foundation",
  "fielora-contracts",
  "fontdb",

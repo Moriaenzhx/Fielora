@@ -4,6 +4,7 @@ import { MakerZIP } from '@electron-forge/maker-zip';
 import { WebpackPlugin } from '@electron-forge/plugin-webpack';
 import { mainConfig } from './webpack.main';
 import { rendererConfig } from './webpack.renderer';
+import { macDevelopmentSigning, verifyMacPackage } from './src/build/macos-package';
 
 const config: ForgeConfig = {
   outDir: process.env.FIELORA_OUT_DIR || 'out',
@@ -16,6 +17,16 @@ const config: ForgeConfig = {
     icon: path.resolve(__dirname, 'assets', process.platform === 'darwin' ? 'fielora.icns' : 'fielora.ico'),
     extraResource: [path.resolve(__dirname, '../../target/release', process.platform === 'win32' ? 'fielora-core.exe' : 'fielora-core')],
     electronZipDir: process.env.FIELORA_ELECTRON_ZIP_DIR || undefined,
+    osxSign: macDevelopmentSigning,
+  },
+  hooks: {
+    postPackage: async (_config, result) => {
+      if (result.platform !== 'darwin') return;
+      for (const output of result.outputPaths) {
+        await verifyMacPackage(path.join(output, 'Fielora.app'));
+      }
+      console.log('MACOS_PACKAGE_SIGNATURE_VERIFIED local-development=ad-hoc');
+    },
   },
   rebuildConfig: {},
   makers: [new MakerZIP({})],

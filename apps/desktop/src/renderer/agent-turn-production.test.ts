@@ -96,7 +96,8 @@ test('one stream survives the live-to-terminal transition and states remain dist
   assert.match(turn, /!textOnlyAnswer && run && presentation/);
   assert.match(turn, /data-testid="agent-pause-notice"/);
   assert.match(turn, /stopping \? '正在停止'/);
-  assert.match(turn, /currentRunStateLabel/);
+  assert.match(turn, /className="agent-run-state" data-status=\{run.status\}/);
+  assert.match(turn, /run.status === 'PAUSED' \? '已暂停' : run.status === 'WAITING_APPROVAL' \? '等待确认' : '任务进行中'/);
   assert.equal((turn.match(/<ConversationActivityStream /g) ?? []).length, 1);
 });
 
@@ -245,11 +246,12 @@ test('terminal duration leads collapsed chronology and the exact result Markdown
   ].join('\n');
   assert.match(turn, /已处理 \{presentation.elapsed\}/);
   assert.match(turn, /className="agent-execution-detail is-history"/);
-  const execution = turn.indexOf('<ConversationActivityStream items={activityItems}');
+  const execution = turn.indexOf('<ConversationActivityStream ');
   const result = turn.indexOf('<AgentTerminalResult run={run}');
   assert.ok(execution > 0 && result > execution);
+  assert.ok(turn.indexOf('<WebResearchSummary tools={tools}') > result, 'final result precedes supporting sources');
   assert.doesNotMatch(turn, /function ResultText|naturalResultParagraph|stripAnswerHeading/);
-  assert.match(turn, /const markdown = message\?\.content \|\| result\.detail/);
+  assert.match(turn, /const markdown = agentResultMarkdown\(status, message\?\.content \|\| result\.detail\)/);
   assert.equal(actionFixture.split('\n')[0], '## 修改');
   assert.match(actionFixture, /- A\n- B/);
   assert.match(actionFixture, /```text\nhello\n```/);

@@ -150,6 +150,14 @@ export function activityToolIssue(tool: AgentToolCallView): string | null {
   if (tool.name === 'computer') {
     const code = String(receipt?.error_code ?? tool.error_code ?? '');
     if (tool.status === 'UNKNOWN' || receipt?.outcome_unknown === true) return '输入结果尚未确认；任务已保留现场，不能自动重复该操作。';
+    if (code === 'COMPUTER_SCREEN_RECORDING_REQUIRED') return 'macOS 尚未授予屏幕录制权限，模型未取得窗口图片；辅助功能权限不能代替录屏授权。';
+    if (code === 'COMPUTER_DESKTOP_UNAVAILABLE') return '当前桌面无法交互，本次未输入；请确认电脑已解锁并进入当前用户的桌面。';
+    if (code === 'COMPUTER_CANCELLED' || code === 'COMPUTER_FEEDBACK_CANCELLED') return '操作开始前已停止，没有派发输入。';
+    if (code.startsWith('COMPUTER_FEEDBACK_')) return '操作提示浮层尚未确认隐藏，本次未派发输入，避免遮挡目标。';
+    if (code === 'COMPUTER_SCREENSHOT_REQUIRED') return '需要先取得当前窗口的新截图，再按画面位置操作。';
+    if (code === 'COMPUTER_TARGET_OFFSCREEN' || code === 'COMPUTER_TARGET_OCCLUDED') return '目标位置在屏幕外或被其他窗口遮挡，本次未输入；请先让目标窗口可见。';
+    if (code === 'COMPUTER_COORDINATE_OUT_OF_BOUNDS') return '操作位置超出当前截图范围，本次未输入。';
+    if (code === 'COMPUTER_SCREENSHOT_INVALID') return '未取得可交给模型的有效窗口图片，需要重新截图。';
     if (code.includes('PERMISSION') || code.includes('ACCESSIBILITY')) return 'macOS 尚未授予辅助功能权限；完全访问不会替代系统授权，本次未输入。';
     if (code.includes('UNSUPPORTED')) return '当前系统尚不支持此项电脑控制能力，未执行操作。';
     if (code.includes('STALE') || code.includes('FOCUS') || code.includes('TARGET_CHANGED')) return '应用或焦点已变化，未派发输入；需要重新观察当前窗口。';

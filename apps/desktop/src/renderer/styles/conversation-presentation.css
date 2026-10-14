@@ -1,0 +1,108 @@
+/* Conversation presentation owns density and disclosure, never task truth. */
+.message-list .agent-running-header {
+  display: flex; align-items: center; flex-wrap: wrap; gap: 8px 14px;
+  width: 100%; border: 0; color: var(--fl-color-text-muted);
+  font-size: var(--fl-font-size-meta); text-align: left;
+}
+.message-list .agent-run-state { display: inline-flex; align-items: center; gap: 7px; color: var(--fl-color-text); font-weight: var(--fl-font-weight-medium); }
+.message-list .agent-run-state > .app-icon { width: 17px; height: 17px; transform: none; }
+.message-list .agent-run-state[data-status="FAILED"] { color: var(--fl-color-text-danger); }
+.message-list .agent-run-state[data-status="PAUSED"],
+.message-list .agent-run-state[data-status="WAITING_APPROVAL"] { color: var(--fl-color-text-warning); }
+.message-list .agent-elapsed { font-variant-numeric: tabular-nums; }
+.message-list .agent-history-toggle {
+  justify-content: flex-start; flex-wrap: nowrap; gap: 8px;
+  padding: 0 0 12px; margin-bottom: 20px; border-bottom: 1px solid var(--fl-color-divider);
+  border-radius: 0; background: transparent; font-weight: var(--fl-font-weight-regular);
+}
+.message-list .agent-history-toggle:hover { background: transparent; color: var(--fl-color-text); }
+.message-list .agent-history-toggle > .app-icon { width: 14px; height: 14px; flex: 0 0 14px; margin-left: 0; }
+.message-list .is-terminal .agent-terminal-result { margin-top: 0; }
+
+/* The statement is the reading focus; tool rows are compact, recognisable actions. */
+.message-list .conversation-narrative { padding-block: 5px; }
+.message-list .conversation-activity-stream { gap: 12px; }
+.message-list .operation-group { font-size: var(--fl-font-size-meta); line-height: 1.6; }
+.message-list .operation-summary { min-height: 34px; height: auto; gap: 9px; }
+.message-list .operation-summary > .app-icon:first-child,
+.message-list .operation-row-content > .app-icon:first-child { color: var(--fl-color-text); width: 18px; height: 18px; flex-basis: 18px; }
+.message-list .operation-label { max-width: 100%; }
+.message-list .operation-file-link { color: var(--fl-color-link); font-weight: var(--fl-font-weight-medium); text-decoration: none; }
+.message-list .operation-file-link:hover { text-decoration: underline; }
+.message-list .operation-row-content[data-operation-status="FAILED"],
+.message-list .operation-row-content[data-operation-status="DENIED"] { color: var(--fl-color-text-danger); }
+.message-list .operation-row-content[data-operation-status="UNKNOWN"],
+.message-list .operation-row-content[data-operation-status="WAITING_APPROVAL"] { color: var(--fl-color-text-warning); }
+.message-list .operation-row-content[data-operation-status="FAILED"] .app-icon:first-child,
+.message-list .operation-row-content[data-operation-status="UNKNOWN"] .app-icon:first-child { color: inherit; }
+.message-list .operation-issue { flex-shrink: 0; font-size: .92em; }
+.message-list .operation-list { margin: 2px 0 4px 8px; padding-left: 16px; border-left: 1px solid var(--fl-color-border-soft); }
+.message-list .operation-detail { font-size: var(--fl-font-size-meta); }
+.message-list .operation-detail-title { flex-wrap: wrap; }
+.message-list .operation-detail-title strong { flex: 1; min-width: 100px; white-space: normal; overflow-wrap: anywhere; }
+.message-list .operation-detail-title > span { margin-left: 0; }
+
+/* A bounded recent window keeps long tasks readable; the complete sequence is recoverable. */
+.message-list .activity-history { min-width: 0; padding: 10px 0; border-block: 1px solid var(--fl-color-border-soft); }
+.message-list .activity-history-toggle {
+  display: flex; align-items: center; gap: 9px; width: 100%; min-width: 0;
+  padding: 2px 0; border: 0; border-radius: 4px; box-shadow: none; background: transparent;
+  color: var(--fl-color-text-muted); font: inherit; font-size: var(--fl-font-size-meta); text-align: left; cursor: pointer;
+}
+.message-list .activity-history-toggle:hover { color: var(--fl-color-text); background: transparent; }
+.message-list .activity-history-toggle strong { min-width: 0; font-weight: var(--fl-font-weight-medium); overflow-wrap: anywhere; }
+.message-list .activity-history-toggle > .app-icon:first-child { width: 18px; height: 18px; flex: 0 0 18px; }
+.message-list .activity-history-action { margin-left: auto; flex-shrink: 0; font-weight: var(--fl-font-weight-regular); }
+.message-list .activity-history-toggle > .app-icon:last-child { transform: rotate(-90deg); }
+.message-list .activity-history-toggle[aria-expanded="true"] > .app-icon:last-child { transform: none; }
+.message-list .activity-history-region:not([hidden]) { display: grid; gap: 12px; margin-top: 16px; padding-left: 18px; border-left: 1px solid var(--fl-color-border-soft); }
+.message-list .activity-history-region[hidden] { display: none; }
+.message-list .activity-failure-summary { display: flex; align-items: flex-start; gap: 8px; margin: 6px 0 0 27px; color: var(--fl-color-text-danger); font-size: var(--fl-font-size-meta); line-height: 1.55; }
+.message-list .activity-failure-summary > .app-icon { width: 15px; height: 15px; flex: 0 0 15px; margin-top: 3px; }
+.message-list .activity-failure-summary > span { min-width: 0; overflow-wrap: anywhere; }
+.message-list .activity-failure-summary small { display: block; color: var(--fl-color-text-muted); font-size: inherit; }
+.message-list .activity-history-toggle:focus-visible,
+.message-list .agent-history-toggle:focus-visible { outline: 2px solid var(--fl-color-focus); outline-offset: 4px; }
+.message-list .conversation-activity-phase { display: flex; align-items: center; gap: 8px; margin: 10px 0 0; color: var(--fl-color-text); font-size: var(--fl-font-size-meta); font-weight: var(--fl-font-weight-medium); }
+.message-list .conversation-activity-phase > .app-icon { width: 16px; height: 16px; flex: 0 0 16px; }
+.message-list .context-activity { font-size: var(--fl-font-size-meta); }
+.message-list .context-activity > summary { justify-content: flex-start; gap: 8px; }
+.message-list .context-activity > summary > .app-icon:last-child { margin-left: 0; }
+
+/* Actionable handoff remains separate from model-authored prose. */
+.message-list .agent-pause-notice { padding: 14px 0 14px 16px; border-left: 2px solid var(--fl-color-text-warning); border-radius: 0; background: transparent; }
+.message-list .agent-pause-heading { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; font-size: var(--fl-font-size-meta); color: var(--fl-color-text); }
+.message-list .agent-pause-heading > .app-icon { color: var(--fl-color-text-warning); }
+.message-list .agent-pause-heading > .app-icon { width: 18px; height: 18px; flex: 0 0 18px; }
+.message-list .agent-pause-heading strong { font-weight: var(--fl-font-weight-semibold); }
+.message-list .agent-pending-list { font-size: var(--fl-font-size-meta); }
+.message-list .agent-pending-list > strong { font-weight: var(--fl-font-weight-medium); }
+.message-list .agent-pending-list ul { display: grid; gap: 6px; list-style: none; padding: 0; margin: 6px 0 0; }
+.message-list .agent-pending-list li { display: flex; align-items: flex-start; gap: 7px; }
+.message-list .agent-pending-list li .app-icon { flex: 0 0 15px; margin-top: 3px; color: var(--fl-color-text-warning); }
+.message-list .agent-pending-list li span { min-width: 0; overflow-wrap: anywhere; }
+.message-list .is-paused .file-delivery-card { margin-top: 18px; }
+.message-list .agent-result-verification { margin-top: 16px; }
+.message-list .agent-result-verification > summary { align-items: flex-start; line-height: 1.6; }
+.message-list .agent-result-verification li > span { color: var(--fl-color-text); font-weight: var(--fl-font-weight-medium); }
+.message-list .agent-run-error-detail { overflow-wrap: anywhere; font-size: var(--fl-font-size-meta); }
+
+/* Headings and emphasis follow the user's selected family and scale. */
+.message-list .markdown-body :is(h1, h2, h3, h4, h5, h6) { margin-block: 1.35em .55em; color: var(--fl-color-text-strong); line-height: 1.5; font-weight: var(--fl-font-weight-semibold); }
+.message-list .markdown-body h1 { font-size: 1.25em; }
+.message-list .markdown-body h2 { font-size: 1.125em; }
+.message-list .markdown-body :is(h3, h4, h5, h6) { font-size: 1em; }
+.message-list .markdown-body > :is(h1, h2, h3, h4, h5, h6):first-child { margin-top: 0; }
+.message-list .markdown-body :is(strong, b) { color: var(--fl-color-text-strong); font-weight: var(--fl-font-weight-semibold); }
+.message-list .markdown-body blockquote { margin: 14px 0; padding: 2px 0 2px 14px; border-left: 2px solid var(--fl-color-border-strong); color: var(--fl-color-text-muted); background: transparent; }
+.message-list .markdown-body li + li { margin-top: .35em; }
+.message-list .markdown-body th { color: var(--fl-color-text-strong); font-weight: var(--fl-font-weight-semibold); }
+.message-list .file-delivery-path strong { color: var(--fl-color-text-strong); font-weight: var(--fl-font-weight-medium); }
+
+@container conversation (max-width: 480px) {
+  .message-list .agent-running-header { gap: 6px 10px; }
+  .message-list .activity-history-region:not([hidden]) { padding-left: 10px; }
+  .message-list .activity-failure-summary { margin-left: 0; }
+  .message-list .operation-list { padding-left: 10px; margin-left: 0; }
+  .message-list .operation-issue { max-width: 38%; overflow: hidden; text-overflow: ellipsis; }
+}

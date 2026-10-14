@@ -91,7 +91,8 @@ function useManagedTooltip<T extends HTMLElement = HTMLButtonElement>(label: Rea
         ? preferredTop
         : alternateTop;
       const top = Math.min(maxTop, Math.max(safeTop, candidateTop));
-      const centeredLeft = anchorBounds.left + (anchorBounds.width - tooltipBounds.width) / 2;
+      const centeredLeft = variant === 'timestamp' ? anchorBounds.left
+        : anchorBounds.left + (anchorBounds.width - tooltipBounds.width) / 2;
       const left = Math.min(
         window.innerWidth - tooltipBounds.width - viewportInset,
         Math.max(viewportInset, centeredLeft),
@@ -105,7 +106,7 @@ function useManagedTooltip<T extends HTMLElement = HTMLButtonElement>(label: Rea
       window.removeEventListener('resize', updatePosition);
       window.removeEventListener('scroll', updatePosition, true);
     };
-  }, [label, open, placement]);
+  }, [label, open, placement, variant]);
 
   const tooltip = open ? createPortal(
     <span
@@ -129,7 +130,7 @@ export function TimestampHover({ timestamp, children }: { timestamp?: number | n
   const tip = useManagedTooltip<HTMLDivElement>(label, 'top', 'timestamp');
   if (!valid) return <>{children}</>;
   return <div className="timestamp-hover" ref={tip.anchorRef} data-recorded-at={timestamp} aria-describedby={tip.open ? tip.tooltipId : undefined}
-    onPointerEnter={() => tip.show()} onPointerLeave={tip.hide} onFocus={() => tip.show(0)} onBlur={tip.hide}
+    onPointerEnter={() => tip.show(750)} onPointerLeave={tip.hide} onPointerDown={tip.hide} onFocus={() => tip.show(0)} onBlur={tip.hide}
     onKeyDown={event => { if (event.key === 'Escape') tip.hide(); }}>
     {children}{tip.tooltip}
   </div>;

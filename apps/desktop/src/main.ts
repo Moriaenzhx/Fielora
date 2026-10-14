@@ -6,6 +6,7 @@ import path from 'node:path';
 import { app, BrowserWindow, Menu, clipboard, dialog, ipcMain, nativeImage, nativeTheme, protocol, shell } from 'electron';
 import type { ContextMenuParams, IpcMainInvokeEvent, MenuItemConstructorOptions } from 'electron';
 import type { AgentRunView, ConversationMessageView, LibraryMediaKind, LibraryObjectView, PortableBlobManifestEntryView, ProfileView, ProjectView, ScreenshotEvidenceView } from '@fielora/contracts';
+import { validateComputerPreview } from './computer-preview-types';
 import type { LibraryImagePreviewView } from './workspace-types';
 import { BrowserRuntime } from './browser-runtime';
 import { AgentBrowserHost } from './agent-browser-host';
@@ -51,6 +52,7 @@ import { StorageManager, directoryManifest, sha256File } from './storage-manager
 import { createPortableProfile, extractPortableProfile, portableLibraryInputs, type PortableInputFile } from './portable-profile';
 import { normalizeAppPreferences } from './renderer/app-preferences';
 import { ScheduledTaskService } from './scheduled-tasks';
+import { ComputerControlOverlay } from './computer-control-overlay';
 import { allowPrototypeFrameNavigation, PrototypePreviewRegistry, PROTOTYPE_SCHEME, sameFrameIdentity } from './prototype-preview';
 import type { CreateScheduledTaskRequest, ScheduledTaskRequest, ScheduledTaskView, UpdateScheduledTaskRequest } from './scheduled-task-types';
 
@@ -114,6 +116,8 @@ const prototypePreviews = new PrototypePreviewRegistry();
 let prototypeEpoch = 0;
 function clearPrototypePreviews(): void { prototypeEpoch += 1; prototypePreviews.clear(); }
 const supervisor = new CoreProcessSupervisor(() => storage().coreEnvironment());
+const computerControlOverlay = new ComputerControlOverlay((method, params) => method.startsWith('command.')
+  ? durableMutation(() => supervisor.request(method, params)) : supervisor.request(method, params));
 const agentBrowserHost = new AgentBrowserHost(browser, (method, params) => supervisor.request(method, params), (runId, conversationId) => {
   withUsableWindow(appWindow, window => window.webContents.send(channels.coreEvent, { event: 'event.agent.browser', run_id: runId, conversation_id: conversationId }));
 }, () => workspaceRuntime);
@@ -232,6 +236,11 @@ function endStorageMaintenance(): void { storageMaintenance = false; }
 function handle(channel: string, validator: (payload: unknown) => unknown, method: string): void {
   ipcMain.handle(channel, async (event, payload) => {
     assertBridgeEvent(event);
+    if (['command.agent.cancel', 'command.agent.pause', 'command.agent.resume'].includes(method)) {
+      const run = method === 'command.agent.resume' ? validateResumeAgent(payload) : validateAgentRun(payload);
+      if (method === 'command.agent.resume') computerControlOverlay.resume(run.run_id);
+      else computerControlOverlay.suspend(run.run_id);
+    }
     const request = () => method === 'command.agent.start'
       ? startAgentWithReconciliation((method, params) => supervisor.request(method, params), validateStartAgent(payload))
       : supervisor.request(method, validator(payload));
@@ -655,6 +664,7 @@ function registerBridgeHandlers(): void {
   handle(channels.agentUsage, validateModelUsageReport, 'query.agent.usage');
   handle(channels.agentEvents, validateListAgentEvents, 'query.agent.events');
   handle(channels.agentToolCalls, validateAgentRun, 'query.agent.tool_calls');
+  handle(channels.agentComputerPreview, validateComputerPreview, 'query.agent.computer_preview');
   handle(channels.agentCancel, validateAgentRun, 'command.agent.cancel');
   handle(channels.agentPause, validateAgentRun, 'command.agent.pause');
   handle(channels.agentResume, validateResumeAgent, 'command.agent.resume');
@@ -929,6 +939,7 @@ function registerBridgeHandlers(): void {
   ipcMain.handle(channels.browserBack, (event) => { assertBridgeEvent(event); return browser().back(); });
   ipcMain.handle(channels.browserForward, (event) => { assertBridgeEvent(event); return browser().forward(); });
   ipcMain.handle(channels.browserReload, (event) => { assertBridgeEvent(event); return browser().reload(); });
+  ipcMain.handle(channels.browserFitToWindow, (event, payload) => { assertBridgeEvent(event); return browser().fitToWindow(validateBrowserPageRequest(payload).page_id); });
   ipcMain.handle(channels.browserState, (event) => { assertBridgeEvent(event); return browser().getState(); });
   ipcMain.handle(channels.browserContext, (event) => { assertBridgeEvent(event); return browser().getContextCandidate(); });
   ipcMain.handle(channels.browserCaptureScreenshot, async (event): Promise<ScreenshotEvidenceView> => {
@@ -1101,6 +1112,7 @@ async function createWindow(): Promise<void> {
     clearPrototypePreviews();
   });
   window.on('closed', () => {
+    computerControlOverlay.dispose();
     trustedSession.removeListener('will-download', denyTrustedDownload);
     if (appWindow === window) appWindow = undefined;
   });
@@ -1126,12 +1138,21 @@ else {
     protocol.handle(PROTOTYPE_SCHEME, (request) => prototypePreviews.response(request.url, request.method, trustedOrigin));
     if (app.isPackaged) await registerApplicationProtocol();
     supervisor.on('notification', (message) => {
+      if (message.method === 'host.computer.prepare') {
+        const { run_id: runId, tool_call_id: toolId } = message.params;
+        const hidden = typeof runId === 'string' && typeof toolId === 'string'
+          && computerControlOverlay.prepare(runId, toolId);
+        void supervisor.request('host.browser.complete', { request_id: message.params.request_id, result: { kind: 'COMPUTER_FEEDBACK', hidden } }).catch(() => undefined);
+        return;
+      }
+      if (message.method === 'event.agent.computer') { void computerControlOverlay.handle(message.params); return; }
+      if (message.method === 'event.agent.changed') computerControlOverlay.changed(message.params);
       if (message.method === 'host.browser.execute') { agentBrowserHost.handle(message.params); return; }
       if (message.method === 'host.browser.cancel') { agentBrowserHost.cancel(message.params.request_id); return; }
       withUsableWindow(appWindow, (window) => window.webContents.send(channels.coreEvent, (message as { params: unknown }).params));
     });
     supervisor.on('health', (payload) => {
-      if (payload.state !== 'READY') agentBrowserHost.reset();
+      if (payload.state !== 'READY') { agentBrowserHost.reset(); computerControlOverlay.dispose(); }
       withUsableWindow(appWindow, (window) => window.webContents.send(channels.coreEvent, { event: 'event.core.health', ...payload }));
     });
     // Resolve the initial handshake before the renderer's first data request.
@@ -1145,6 +1166,7 @@ app.on('before-quit', (event) => {
   if (quitting) return;
   event.preventDefault();
   quitting = true;
+  computerControlOverlay.dispose();
   scheduledTaskService?.stop();
   void supervisor.shutdown().finally(() => {
     workspaceRuntime.dispose();

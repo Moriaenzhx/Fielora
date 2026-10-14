@@ -19,6 +19,23 @@ pub fn receiver_digest(provider: &fielora_contracts::ProviderConfigView) -> Stri
     )
 }
 
+/// A running loop keeps its receiving endpoint in PreparedRun. Re-reading
+/// settings for an approval must not authorize a different endpoint than the
+/// one this execution will actually call.
+pub fn execution_receiver_matches(
+    policy: &Value,
+    run: &AgentRunView,
+    endpoint: &fielora_model::ProviderEndpoint,
+) -> bool {
+    policy["kind"] != "COMPUTER_OBSERVATION"
+        || (policy["facts"]["endpoint_digest"]
+            == digest(
+                &json!({"kind":endpoint.kind,"base_url":endpoint.base_url,"optimization":endpoint.model_optimization}),
+            )
+            && policy["facts"]["model"] == run.model_id
+            && policy["facts"]["provider"] == run.provider_config_id.0)
+}
+
 /// Cold continuation must check before building/sending a model request: old
 /// observed application text must not silently move to a changed recipient.
 pub fn receiver_matches(
@@ -75,18 +92,36 @@ fn guard(
 /// Scope identity deliberately excludes transient PID, but the individual operation
 /// digest includes the entire prepared target, including its launch identity.
 pub fn observation(run: &AgentRunView, arguments: &Value, target: Value, endpoint: Value) -> Value {
-    let scope = digest(
-        &json!({"run":run.id,"app":target["bundle_id"],"path":target["executable"],"provider":run.provider_config_id,"model":run.model_id,"endpoint":endpoint}),
-    );
+    // Preserve the legacy text scope, while requiring a different, explicit
+    // grant before any window pixels can leave this machine. Image consent
+    // discloses the same window's AX text, so it can also satisfy a text call.
+    let scope_facts = json!({"run":run.id,"app":target["bundle_id"],"path":target["executable"],"provider":run.provider_config_id,"model":run.model_id,"endpoint":endpoint});
+    let text_scope = digest(&scope_facts);
+    let mut image_scope_facts = scope_facts;
+    image_scope_facts["modality"] = json!("WINDOW_IMAGE");
+    let image_scope = digest(&image_scope_facts);
+    let image = arguments["action"] == "screenshot";
+    let disclosure = if image {
+        "目标应用当前窗口的图片及可访问性文字将发送给当前模型服务。图片仅用于本任务的临时模型上下文，不在本机历史中留存；本机预览不会自动发送。此授权限本任务、应用与模型服务，文件上传仍需另行确认。"
+    } else {
+        "目标应用的可访问性文字将发送给当前模型服务；不包含窗口图片。此授权限本任务、应用与模型服务，截图和文件上传仍需另行确认。"
+    };
     let mut value = guard(
         run,
         "computer",
         arguments,
         "COMPUTER_OBSERVATION",
         1,
-        json!({"target":target,"model":run.model_id,"provider":run.provider_config_id,"endpoint_digest":digest(&endpoint),"disclosure":"目标应用的可访问性文字将发送给当前模型服务；不包含全屏截图。此授权限本任务、应用与模型服务，文件上传仍需另行确认。"}),
+        json!({"target":target,"model":run.model_id,"provider":run.provider_config_id,"endpoint_digest":digest(&endpoint),"modality":if image { "WINDOW_IMAGE" } else { "ACCESSIBILITY_TEXT" },"disclosure":disclosure}),
     );
-    value["scope_digest"] = json!(scope);
+    value["scope_digest"] = json!(if image {
+        image_scope.clone()
+    } else {
+        text_scope
+    });
+    if !image {
+        value["image_scope_digest"] = json!(image_scope);
+    }
     value
 }
 
@@ -145,11 +180,12 @@ pub fn authorized(
     tool: Option<&AgentToolCallView>,
     guard: &Value,
 ) -> Result<bool, DomainError> {
-    if guard["kind"] == "COMPUTER_OBSERVATION"
-        && let Some(scope) = guard["scope_digest"].as_str()
-        && storage.agent_operation_scope_authorized(run.id.clone(), scope.into())?
-    {
-        return Ok(true);
+    if guard["kind"] == "COMPUTER_OBSERVATION" {
+        for scope in admitted_observation_scopes(guard) {
+            if storage.agent_operation_scope_authorized(run.id.clone(), scope.into())? {
+                return Ok(true);
+            }
+        }
     }
     match (tool, guard["operation_digest"].as_str()) {
         (Some(tool), Some(digest)) => {
@@ -157,6 +193,19 @@ pub fn authorized(
         }
         _ => Ok(false),
     }
+}
+
+fn admitted_observation_scopes(guard: &Value) -> Vec<&str> {
+    let mut scopes = guard["scope_digest"]
+        .as_str()
+        .into_iter()
+        .collect::<Vec<_>>();
+    if guard["facts"]["modality"] == "ACCESSIBILITY_TEXT"
+        && let Some(image_scope) = guard["image_scope_digest"].as_str()
+    {
+        scopes.push(image_scope);
+    }
+    scopes
 }
 
 fn command_guard(run: &AgentRunView, root: &Path, name: &str, arguments: &Value) -> Option<Value> {
@@ -762,6 +811,53 @@ mod tests {
     }
 
     #[test]
+    fn window_image_grant_includes_text_but_legacy_text_never_grants_pixels() {
+        let target = json!({"bundle_id":"fixture.app","executable":"/Applications/Fixture.app","pid":1,"launch_identity":"one"});
+        let endpoint = json!("https://one");
+        let text = observation(
+            &run(),
+            &json!({"action":"observe"}),
+            target.clone(),
+            endpoint.clone(),
+        );
+        let image = observation(
+            &run(),
+            &json!({"action":"screenshot"}),
+            target.clone(),
+            endpoint.clone(),
+        );
+        let legacy_scope = digest(
+            &json!({"run":run().id,"app":target["bundle_id"],"path":target["executable"],"provider":run().provider_config_id,"model":run().model_id,"endpoint":endpoint}),
+        );
+        assert_eq!(text["scope_digest"], legacy_scope);
+        assert_ne!(image["scope_digest"], text["scope_digest"]);
+        assert_eq!(image["facts"]["modality"], "WINDOW_IMAGE");
+        assert!(
+            image["facts"]["disclosure"]
+                .as_str()
+                .unwrap()
+                .contains("图片及可访问性文字")
+        );
+        assert_eq!(
+            admitted_observation_scopes(&image),
+            vec![image["scope_digest"].as_str().unwrap()]
+        );
+        assert_eq!(
+            admitted_observation_scopes(&text),
+            vec![
+                legacy_scope.as_str(),
+                image["scope_digest"].as_str().unwrap()
+            ]
+        );
+        let mut changed = run();
+        changed.model_id = "other".into();
+        assert_ne!(
+            image["scope_digest"],
+            observation(&changed, &json!({"action":"screenshot"}), target, endpoint)["scope_digest"]
+        );
+    }
+
+    #[test]
     fn known_opaque_routes_are_incomplete_and_never_gain_a_safe_label() {
         let root = std::env::temp_dir();
         for args in [
@@ -930,6 +1026,14 @@ mod tests {
             json!({"bundle_id":"fixture","executable":"/Fixture"}),
             endpoint,
         );
+        let mut actual = fielora_model::ProviderEndpoint {
+            kind: provider.provider_kind,
+            base_url: provider.base_url.clone(),
+            model_optimization: provider.model_optimization,
+        };
+        assert!(execution_receiver_matches(&policy, &run(), &actual));
+        actual.base_url = Some("https://other.example/api".into());
+        assert!(!execution_receiver_matches(&policy, &run(), &actual));
         let call: AgentToolCallView=serde_json::from_value(json!({"id":"tool","run_id":"run","name":"computer","effect":"PROCESS","status":"COMPLETED","policy_decision":"ASK","arguments":{"_operation_policy":policy},"receipt":null,"error_code":null,"created_at":1,"updated_at":1})).unwrap();
         assert!(receiver_matches(
             std::slice::from_ref(&call),

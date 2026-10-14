@@ -65,7 +65,7 @@ try {
   await cdp.eval(`window.fielora.conversation.createMessage({conversation_id:${JSON.stringify(ids.conversation)},role:'ASSISTANT',content:${JSON.stringify(summary)},status:'COMPLETED',provider_config_id:${JSON.stringify(ids.provider)},model_id:'presentation-fixture',invocation_id:${JSON.stringify(run)},references:${JSON.stringify([ref])}})`);
   await load();await wait('document.querySelector("[data-testid=agent-terminal-result]")');
   assert.equal(await cdp.eval('document.querySelector("[data-testid=agent-result-verification] summary").textContent'),'已记录检查通过 · 需求覆盖未确认');
-  assert.equal(await cdp.eval('Boolean(document.querySelector("[data-testid=agent-result-verification]").compareDocumentPosition(document.querySelector(".agent-terminal-body")) & Node.DOCUMENT_POSITION_FOLLOWING)'),true,'Platform evidence precedes the model report');
+  assert.equal(await cdp.eval('Boolean(document.querySelector(".agent-terminal-body").compareDocumentPosition(document.querySelector("[data-testid=agent-result-verification]")) & Node.DOCUMENT_POSITION_FOLLOWING)'),true,'The result leads, with platform evidence available immediately below it');
   await click('[data-testid=agent-result-verification] summary');
   assert.equal(await cdp.eval('document.querySelector("[data-testid=agent-result-verification]").open'),true);
   assert.equal(await cdp.eval('document.querySelector("[data-testid=agent-result-verification] code").textContent'),'python3 -m unittest test_detector -v');

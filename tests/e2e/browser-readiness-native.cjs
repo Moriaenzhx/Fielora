@@ -78,6 +78,41 @@ app.whenReady().then(async () => {
       assert.match(reloadedClick.text, /clicked-once/);
       results.scaled_clicks.at(-1).reload_clicked = true;
     }
+    // User expansion/fit exits fixed test dimensions without reloading or
+    // discarding form state. A different run's fixed viewport is unaffected.
+    const fixedPageId = runtime.getState().active_page_id;
+    page = await call({ action: 'inspect' });
+    const staleSnapshot = page.snapshot_id;
+    runtime.fitToWindow(fixedPageId);
+    assert.equal(runtime.getState().fixed_viewport, undefined);
+    const stale = await call({ action: 'click', ref: page.elements[0].ref, snapshot_id: staleSnapshot });
+    assert.equal(stale.error_code, 'BROWSER_STALE_SNAPSHOT');
+    assert.equal(stale.input_state, 'NOT_DISPATCHED');
+    page = await call({ action: 'inspect' });
+    assert.deepEqual(page.viewport, { width: bounds.width, height: bounds.height });
+    assert.match(page.text, /clicked-once/, 'Fit must preserve the existing document');
+    const expandedBounds = { x: 20, y: 80, width: 1060, height: 560 };
+    runtime.show(expandedBounds);
+    page = await call({ action: 'inspect' });
+    assert.deepEqual(page.viewport, { width: expandedBounds.width, height: expandedBounds.height });
+    page = await call({ action: 'open', url: base });
+    assert.deepEqual(page.viewport, { width: expandedBounds.width, height: expandedBounds.height }, 'Opening must not resurrect the old run viewport');
+    page = await call({ action: 'click', ref: page.elements.find(e => e.text === 'Click').ref, snapshot_id: page.snapshot_id });
+    assert.match(page.text, /clicked-once/);
+    runtime.show(bounds);
+    page = await call({ action: 'reload' });
+    assert.deepEqual(page.viewport, { width: bounds.width, height: bounds.height });
+    await call({ action: 'resize', width: 1280, height: 900 });
+    const other = (args) => runtime.executeAgent('other-run', args, AbortSignal.timeout(24000));
+    await other({ action: 'resize', width: 640, height: 480 });
+    const otherPage = await other({ action: 'open', url: base });
+    runtime.fitToWindow(fixedPageId);
+    assert.deepEqual((await other({ action: 'inspect' })).viewport, { width: 640, height: 480 });
+    runtime.switchPage(fixedPageId);
+    assert.notEqual(otherPage.page_id, fixedPageId);
+    const resizedAgain = await call({ action: 'resize', width: 1280, height: 900 });
+    assert.deepEqual(resizedAgain.viewport, { width: 1280, height: 900 }, 'Agent can explicitly request a new test size');
+    results.fit_to_window = { preservedDocument: true, staleInputRejected: true, followsExpansionAndCollapse: true, navigationKeepsAdaptiveViewport: true, otherRunUnaffected: true, explicitResizeStillWorks: true };
     page = await call({ action: 'open', url: base + '/errors' });
     assert.equal(page.page_loaded, true, 'Navigation can succeed while application code fails');
     assert.ok(page.page_errors.some(e => e.message.includes('cIdx is not defined') && e.source === base + '/errors' && e.line > 0));

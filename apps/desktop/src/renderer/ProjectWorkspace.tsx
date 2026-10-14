@@ -15,6 +15,7 @@ import { PrimaryNav } from './PrimaryNav';
 import { AppIcon, FileTypeIcon, type AppIconName } from './ui';
 import { BrowsePanel } from './BrowseScreen';
 import { AgentTurn } from './AgentTurn';
+import { useApplicationPreview } from './ApplicationPreview';
 import { researchUrl } from './web-research';
 import { ConversationTurnNavigation } from './ConversationTurnNavigation';
 import { AgentHumanReview } from './AgentHumanReview';
@@ -2821,7 +2822,7 @@ export function ProjectWorkspace({ onNow, onBrowse, onFields, onSettings, newCon
       </DockResourceLayout>}
       {tab.kind === 'IMAGE' && <DockResourceLayout fileTree={dockFileTree} treeWidth={dockFileTreeWidth} treeCollapsed={dockFileTreeCollapsed} onTreeWidthChange={updateDockFileTreeWidth} onTreeCollapsedChange={setDockFileTreeCollapsed}>{imageAttachment?.data_url ? <div className="dock-image-preview" data-testid="file-image-preview"><button type="button" aria-label={`放大 ${imageAttachment.name}`} onClick={() => setPreviewAttachment(imageAttachment)} onContextMenu={(event) => openImageContextMenu(event, imageAttachment)}><img src={imageAttachment.data_url} alt={imageAttachment.name}/></button><small>{imageAttachment.mime_type} · {Math.max(1, Math.ceil(imageAttachment.size / 1024))} KB · 点击放大</small></div> : session?.preview?.kind === 'UNSUPPORTED' ? <div className="file-unsupported-preview" data-testid="file-unsupported-preview"><AppIcon name="image"/><h3>无法在此预览</h3><strong>{session.preview.relativePath}</strong><p>{session.preview.message}</p></div> : <div className="dock-resource-status" role="status"><AppIcon name="image"/><span>正在载入图片…</span></div>}</DockResourceLayout>}
       {tab.kind === 'REVIEW' && <div className="diff-workspace">{draft ? <><header><div><p className="eyebrow">REVIEW</p><h3>{draft.relativePath}</h3></div><span>写入前不会修改磁盘</span></header><pre className="diff-view" data-testid="diff-view">{draft.diff}</pre><footer><button className="secondary-button" onClick={() => { setDraft(null); setEditorContent(selectedFile?.content ?? ''); if (selectedFile) ensureDockTab({ id: `file:${selectedFile.relative_path}`, kind: 'FILE', label: fileTabLabel(selectedFile.relative_path), icon: 'files', relativePath: selectedFile.relative_path }); else openDockTool('FILES'); }}>放弃</button><button className="primary-button" onClick={() => void acceptDraft()} data-testid="accept-change">接受变更</button></footer></> : (tab.reviewSelection?.review ?? displayedAgentReview).files.length > 0 ? <AgentHumanReview review={tab.reviewSelection?.review ?? displayedAgentReview} task={tab.reviewSelection?.task ?? agentRun?.task ?? conversation?.title ?? ''} runId={tab.reviewSelection?.runId ?? agentRun?.id ?? ''} selectedPathHint={tab.relativePath ?? agentReviewPath} onOpenFile={(path) => void openAgentReviewFile(path)} onMarkReviewed={markAgentFileArtifactReviewed} onUndo={(file) => undoAgentFileArtifact(tab.reviewSelection?.runId ?? agentRun?.id ?? '', file)}/> : <div className="workspace-blank"><h3>{conversation ? '本次任务没有文件变更' : '当前 Project 没有可审阅的变更'}</h3><p>文件写入、补丁和替换会显示在这里。</p></div>}</div>}
-      {tab.kind === 'BROWSER' && <BrowsePanel browser={window.fielora.browser} onSaveToLibrary={(input) => window.fielora.library.saveWeb(input)} onOpenBrowserSettings={() => window.dispatchEvent(new CustomEvent('fielora:open-settings', { detail: 'BROWSER' }))} workspaceTabHostId={tab.tabHostId} workspaceActive={workspaceOpen && tab.id === activeDockTabId} onRequestWorkspaceActivate={() => activateDockTab(tab.id)} onRequestWorkspaceClose={() => closeDockTab(tab.id)}/>}
+      {tab.kind === 'BROWSER' && <BrowsePanel browser={window.fielora.browser} onSaveToLibrary={(input) => window.fielora.library.saveWeb(input)} onOpenBrowserSettings={() => window.dispatchEvent(new CustomEvent('fielora:open-settings', { detail: 'BROWSER' }))} workspaceTabHostId={tab.tabHostId} workspaceActive={workspaceOpen && tab.id === activeDockTabId} workspaceExpanded={dockFocused} onRequestWorkspaceActivate={() => activateDockTab(tab.id)} onRequestWorkspaceClose={() => closeDockTab(tab.id)}/>}
       {tab.kind === 'TERMINAL' && <div className="right-terminal-view" data-testid="terminal-dock"><TerminalSession workingDirectory={terminalWorkingDirectory || project.root_path} command={terminalCommand} lastCommand={terminalLastCommand} output={terminalOutput} running={Boolean(terminalRunId)} active={workspaceOpen && tab.id === activeDockTabId} onCommandChange={setTerminalCommand} onRun={() => void runTerminal(terminalCommand, 'RIGHT')} onCancel={() => terminalRunId ? void window.fielora.workspace.cancelTerminal({ run_id: terminalRunId }) : undefined} testId="terminal"/></div>}
       {tab.kind === 'ARTIFACT' && artifactSession && <ArtifactSurface
         session={artifactSession}
@@ -2834,12 +2835,15 @@ export function ProjectWorkspace({ onNow, onBrowse, onFields, onSettings, newCon
       />}
     </section>;
   }) : null;
+  const applicationPreview = useApplicationPreview(agentRun, agentTools, conversationId, agentStopping);
   const currentAgentTurn = agentRun && agentTurn?.userMessageId ? <AgentTurn
     run={agentRun}
     userMessageId={agentTurn.userMessageId}
     terminalMessage={currentTerminalMessage}
     events={agentEvents}
     tools={agentTools}
+    applicationIcons={applicationPreview.icons}
+    onPreviewApplication={applicationPreview.open}
     approval={approval}
     approvalSummary={approvalToolSummary}
     review={agentReview}
@@ -2919,6 +2923,7 @@ export function ProjectWorkspace({ onNow, onBrowse, onFields, onSettings, newCon
     >
 
       <section className={`conversation-column${environmentPinned ? ' has-environment-panel' : ''}${visibleMessages.length === 0 && !streamingOutput ? ' is-empty-conversation' : ''}`} data-surface="content">
+        {applicationPreview.panel}
         {!project ? newConversationStart ? <div className="new-conversation-start" data-testid="new-conversation-start"><div><p className="eyebrow">新对话</p><h2>开始一条新对话</h2><p>先选择一个本地文件夹建立 Project，然后即可创建第一条对话。Project 与对话各自独立，不会修改文件夹内容。</p><button className="secondary-button" onClick={() => void addProject()} data-testid="new-conversation-choose-project"><AppIcon name="folder"/>选择 Project 文件夹</button></div></div> : <div className="project-overview" data-testid="project-overview"><header><div><p className="eyebrow">PROJECTS</p><h1>项目</h1><p>本地文件夹、持久对话、文件变更和运行结果。</p></div><button className="secondary-button" onClick={() => void addProject()}><AppIcon name="folder"/>打开文件夹</button></header><div className="project-overview-empty"><h2>还没有项目</h2><p>使用左侧“项目”旁的 ＋ 或上方“打开文件夹”添加第一个本地 Project。</p></div></div> : <>
           <header className="conversation-header conversation-context-header"><div className="conversation-heading"><AppIcon name="folder"/><div className="conversation-title-line"><h2 title={conversation?.title ?? '新对话'}>{conversation?.title ?? '新对话'}</h2>{conversation && <ConversationActionsMenu onRename={() => setConversationDialog({ kind: 'RENAME', value: conversation.title })} onDelete={() => setConversationDialog({ kind: 'DELETE' })}/>}</div></div></header>
           {environmentPinned && <aside className="environment-popover environment-panel" aria-label="环境信息" data-surface="floating" data-testid="environment-panel">{environmentContent}</aside>}

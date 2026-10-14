@@ -1,3 +1,4 @@
+mod agent_application_preview;
 mod agent_browser;
 mod agent_browser_download;
 mod agent_browser_history;
@@ -7,6 +8,7 @@ mod agent_coding_loop;
 mod agent_command_policy_fixture;
 mod agent_computer;
 mod agent_computer_fixture;
+mod agent_computer_visual_fixture;
 mod agent_image_history;
 mod agent_model_repair;
 mod agent_operation_fixture;
@@ -67,7 +69,8 @@ use uuid::Uuid;
 
 const MAX_FRAME_BYTES: usize = 8 * 1024 * 1024;
 const PROTOCOL: ProtocolVersion = ProtocolVersion { major: 1, minor: 0 };
-const CAPABILITIES: [&str; 103] = [
+const CAPABILITIES: [&str; 104] = [
+    "agent.computer_preview",
     "web_search.config",
     "web_search.update",
     "web_search.store_credential",
@@ -533,6 +536,30 @@ fn handle_frame(runtime: &mut Runtime, bytes: &[u8]) -> Dispatch {
     }
 
     let id = request.id.clone();
+    // Native capture may wait for the OS; keep stop/pause and other FIPC reads responsive.
+    if request.method == "query.agent.computer_preview" {
+        let params = parse_params::<agent_application_preview::Request>(&request.params);
+        return match (params, runtime.async_runtime.as_ref()) {
+            (Ok(params), Some(executor)) => {
+                let agent = runtime.agent.clone();
+                let sender = runtime.event_sender.clone();
+                executor.spawn_blocking(move || {
+                    let response = match agent.computer_preview(params) {
+                        Ok(value) => success_response(id, value),
+                        Err(error) => domain_error_response(id, error, trace_id),
+                    };
+                    let _ = sender.send(response);
+                });
+                Dispatch::Continue(vec![])
+            }
+            (Err(error), _) => Dispatch::Continue(vec![domain_error_response(id, error, trace_id)]),
+            _ => Dispatch::Continue(vec![domain_error_response(
+                id,
+                DomainError::Validation("COMPUTER_PREVIEW_UNAVAILABLE".into()),
+                trace_id,
+            )]),
+        };
+    }
     // Keep the parent read loop responsive during a bounded network test.
     if request.method == "command.web_search.test" {
         if !request.params.as_object().is_some_and(|p| p.is_empty()) {

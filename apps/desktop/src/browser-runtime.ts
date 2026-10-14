@@ -382,6 +382,7 @@ export class BrowserRuntime {
       is_loading: active?.is_loading ?? false,
       error: active?.error ?? null,
       surface: this.surfaceState(),
+      ...(this.activePage?.agentViewport ? { fixed_viewport: { ...this.activePage.agentViewport } } : {}),
     };
   }
 
@@ -395,6 +396,24 @@ export class BrowserRuntime {
   hide(): BrowserPageState {
     this.requestedVisible = false;
     this.layout('hide');
+    return this.getState();
+  }
+
+  // A trusted user action returns this page from fixed test dimensions to
+  // ordinary responsive browsing. Clear the owning run's preference as well:
+  // a later navigation must not silently restore the old miniature preview.
+  fitToWindow(pageId: string): BrowserPageState {
+    const page = this.requirePage(pageId);
+    if (!page.agentViewport) return this.getState();
+    page.agentViewport = undefined;
+    page.appliedEmulation = undefined;
+    for (const [runId, binding] of this.agentPages) {
+      if (binding.pageId !== pageId) continue;
+      binding.viewport = undefined;
+      this.agentSnapshots.delete(runId);
+    }
+    if (page.view && !page.view.webContents.isDestroyed()) page.view.webContents.disableDeviceEmulation();
+    this.layout('fit-to-window');
     return this.getState();
   }
 

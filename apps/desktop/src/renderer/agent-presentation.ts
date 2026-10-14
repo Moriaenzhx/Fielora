@@ -78,6 +78,18 @@ export function stripTerminalHeading(content: string): string {
   return content.replace(/^\s{0,3}#{1,6}\s+[^\r\n]+\r?\n(?:\s*\r?\n)?/, '').trim();
 }
 
+/** Remove only a generic status heading followed by a real explanation.
+ * Keep authored headings, the body, links and the persisted message intact. */
+export function agentResultMarkdown(status: AgentTerminalStatus, content: string): string {
+  const headings: Record<AgentTerminalStatus, RegExp> = {
+    CANCELLED: /^\s{0,3}#{1,6}[ \t]+(?:已停止|任务已停止|这次工作已停止)[ \t]*\r?\n/,
+    FAILED: /^\s{0,3}#{1,6}[ \t]+(?:执行失败|任务失败|已中断|这次没有完成)[ \t]*\r?\n/,
+    COMPLETED: /^\s{0,3}#{1,6}[ \t]+(?:已完成|已经完成|任务已完成|本轮结果)[ \t]*\r?\n/,
+  };
+  const body = content.replace(headings[status], '').trim();
+  return body || content;
+}
+
 export function agentTerminalTitle(status: AgentTerminalStatus, presentation: AgentPresentation | null): string {
   if (status === 'FAILED') return presentation && presentation.changedFiles > 0 ? '只完成了部分修改' : '这次没有完成';
   if (status === 'CANCELLED') return '这次工作已停止';
@@ -752,7 +764,7 @@ export function agentPausePresentation(run: AgentRunView, events: readonly Agent
     PROVIDER_PROTOCOL_ERROR: '模型响应未能解析。旧运行只记录了通用错误，无法确定具体原因。可重试；新版会记录具体的响应失败类型。',
     PROVIDER_REQUEST_REJECTED: '模型服务拒绝了请求，具体原因尚未确认。进展已保存，可继续当前步骤；错误状态见执行记录。',
     PROVIDER_INVALID_MESSAGES: '模型服务拒绝了消息或工具调用的格式。进展已保存，请使用新版客户端继续；持续失败时检查服务兼容性。',
-    PROVIDER_IMAGE_REJECTED: '模型服务无法接收或解析这次图片。请检查图片格式和当前模型的图片能力；原任务与附件仍保留。',
+    PROVIDER_IMAGE_REJECTED: '当前模型服务拒绝或无法解析图片，尚不能据此判断画面。请检查模型的图片能力；任务记录仍保留，桌面操作继续时需要重新截图。',
     PROVIDER_CONTEXT_LIMIT: '模型服务报告上下文超出限制。进展已保存，请检查模型的上下文配置后继续。',
     AGENT_INPUT_UNAVAILABLE: '原任务的图片附件暂时无法读取，已暂停以避免丢失要求。请恢复附件后继续。',
     PROVIDER_UNAVAILABLE: '模型服务暂时不可用，进展已保存。服务恢复后可继续当前任务。',

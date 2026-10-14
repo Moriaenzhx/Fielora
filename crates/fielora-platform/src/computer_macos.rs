@@ -1,11 +1,165 @@
 //! Fixed macOS Accessibility / CoreGraphics adapter. Native handles never cross
 //! the tool boundary or survive an operation. No AppleScript or arbitrary code.
 use super::*;
+use base64::Engine;
 use std::ffi::{CStr, c_char, c_void};
 use std::ptr;
+#[path = "computer_visual_macos.rs"]
+mod visual_native;
+pub(super) use visual_native::{screenshot, screenshot_support, visual_input};
 
 type Ref = *const c_void;
 type Obj = *mut c_void;
+
+#[repr(C)]
+#[derive(Default)]
+struct NativePreviewImage {
+    bytes: *mut u8,
+    length: usize,
+    width: u32,
+    height: u32,
+    error: u32,
+}
+unsafe extern "C" {
+    fn fielora_computer_preview_icon(pid: i32, output: *mut NativePreviewImage);
+    fn fielora_computer_preview_capture(
+        pid: i32,
+        bounds: *const f64,
+        title: *const c_char,
+        output: *mut NativePreviewImage,
+    );
+    fn fielora_computer_preview_free(bytes: *mut u8);
+    fn fielora_computer_visual_available() -> bool;
+    fn fielora_computer_visual_priority(waiting: bool);
+    fn fielora_computer_visual_capture(
+        pid: i32,
+        bounds: *const f64,
+        title: *const c_char,
+        output: *mut NativePreviewImage,
+    );
+}
+impl NativePreviewImage {
+    fn data_url(&self, max_bytes: usize, max_width: u32, max_height: u32) -> Option<String> {
+        if self.error != 0
+            || self.bytes.is_null()
+            || self.length == 0
+            || self.length > max_bytes
+            || self.width == 0
+            || self.height == 0
+            || self.width > max_width
+            || self.height > max_height
+        {
+            return None;
+        }
+        let bytes = unsafe { std::slice::from_raw_parts(self.bytes, self.length) };
+        if !bytes.starts_with(b"\x89PNG\r\n\x1a\n") {
+            return None;
+        }
+        Some(format!(
+            "data:image/png;base64,{}",
+            base64::engine::general_purpose::STANDARD.encode(bytes)
+        ))
+    }
+    fn error_code(&self) -> &'static str {
+        match self.error {
+            1 => "COMPUTER_PREVIEW_OS_UNSUPPORTED",
+            2 => "COMPUTER_SCREEN_RECORDING_REQUIRED",
+            3 => "COMPUTER_PREVIEW_WINDOW_UNAVAILABLE",
+            4 => "COMPUTER_PREVIEW_WINDOW_AMBIGUOUS",
+            6 => "COMPUTER_PREVIEW_TIMEOUT",
+            7 => "COMPUTER_PREVIEW_TOO_LARGE",
+            8 => "COMPUTER_BUSY",
+            _ => "COMPUTER_PREVIEW_CAPTURE_FAILED",
+        }
+    }
+}
+impl Drop for NativePreviewImage {
+    fn drop(&mut self) {
+        if !self.bytes.is_null() {
+            unsafe {
+                fielora_computer_preview_free(self.bytes);
+            }
+        }
+    }
+}
+
+/// This entry point is deliberately separate from native observation and its
+/// model receipt. Pixels leave only through the trusted local UI query.
+pub fn local_preview(
+    target: &ComputerTarget,
+    window_token: u64,
+    snapshot_id: &str,
+    capture: bool,
+) -> Result<Value> {
+    let _pool = Pool::new();
+    let validate_window = || -> Result<Owned> {
+        preflight(target, false, &|| false)?;
+        let (_, window) = root(target, false, &|| false)?;
+        if token(window.0) != window_token {
+            return Err(ComputerError::known("COMPUTER_TARGET_CHANGED"));
+        }
+        if boolean(window.0, "AXMinimized", false) {
+            return Err(ComputerError::known("COMPUTER_PREVIEW_WINDOW_UNAVAILABLE"));
+        }
+        Ok(window)
+    };
+    let window = validate_window()?;
+    let mut icon = NativePreviewImage::default();
+    unsafe {
+        fielora_computer_preview_icon(target.pid, &mut icon);
+    }
+    let mut result = json!({"state":"AVAILABLE", "snapshot_id":snapshot_id,
+        "target":{"app_id":target.app_id,"name":target.name,"bundle_id":target.bundle_id}});
+    if let Some(data) = icon.data_url(65_536, 64, 64) {
+        result["icon_data_url"] = json!(data);
+    }
+    if capture {
+        let window_bounds = bounds(window.0)
+            .ok_or_else(|| ComputerError::known("COMPUTER_PREVIEW_WINDOW_UNAVAILABLE"))?;
+        let title = std::ffi::CString::new(text(window.0, "AXTitle", 512))
+            .map_err(|_| ComputerError::known("COMPUTER_PREVIEW_WINDOW_UNAVAILABLE"))?;
+        if title.as_bytes().is_empty() {
+            result["state"] = json!("UNAVAILABLE");
+            result["error_code"] = json!("COMPUTER_PREVIEW_WINDOW_UNAVAILABLE");
+            return Ok(result);
+        }
+        let mut image = NativePreviewImage::default();
+        unsafe {
+            fielora_computer_preview_capture(
+                target.pid,
+                window_bounds.as_ptr(),
+                title.as_ptr(),
+                &mut image,
+            );
+        }
+        let after = validate_window()?;
+        if image.error == 0 && !unsafe { CGPreflightScreenCaptureAccess() } {
+            return Err(ComputerError::known("COMPUTER_SCREEN_RECORDING_REQUIRED"));
+        }
+        if bounds(after.0) != Some(window_bounds)
+            || text(after.0, "AXTitle", 512).as_bytes() != title.as_bytes()
+        {
+            return Err(ComputerError::known("COMPUTER_TARGET_CHANGED"));
+        }
+        if let Some(data) = image.data_url(2_097_152, 960, 640) {
+            result["image_data_url"] = json!(data);
+            result["width"] = json!(image.width);
+            result["height"] = json!(image.height);
+            result["captured_at"] = json!(
+                std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap_or_default()
+                    .as_millis() as u64
+            );
+        } else {
+            result["state"] = json!("UNAVAILABLE");
+            result["error_code"] = json!(image.error_code());
+        }
+    } else {
+        validate_window()?;
+    }
+    Ok(result)
+}
 #[repr(C)]
 #[derive(Clone, Copy, Default)]
 struct Point {
@@ -91,7 +245,15 @@ unsafe extern "C" {
     fn CGEventKeyboardSetUnicodeString(event: Ref, length: usize, text: *const u16);
     fn CGEventSetFlags(event: Ref, flags: u64);
     fn CGEventSetLocation(event: Ref, position: Point);
-    fn CGEventCreateScrollWheelEvent(source: Ref, units: u32, wheels: u32, ...) -> Ref;
+    fn CGEventSetIntegerValueField(event: Ref, field: u32, value: i64);
+    fn CGEventCreateScrollWheelEvent2(
+        source: Ref,
+        units: u32,
+        wheels: u32,
+        wheel1: i32,
+        wheel2: i32,
+        wheel3: i32,
+    ) -> Ref;
     fn CGEventPost(tap: u32, event: Ref);
     fn CGGetActiveDisplayList(max: u32, displays: *mut u32, count: *mut u32) -> i32;
     fn CGDisplayBounds(display: u32) -> Rect;
@@ -315,7 +477,8 @@ pub fn status() -> Value {
         "accessibility":if ax { "GRANTED" } else { "REQUIRED" },
         "input_permission":if post { "GRANTED" } else { "REQUIRED" },
         "screen_recording":if unsafe { CGPreflightScreenCaptureAccess() } { "GRANTED" } else { "REQUIRED" },
-        "interactive_desktop":interactive_desktop(),"screenshots":"UNSUPPORTED",
+        "interactive_desktop":interactive_desktop(),"screenshots":screenshot_support(),
+        "screenshot_scope":"TARGET_FOCUSED_WINDOW","coordinate_space":"SCREENSHOT_PIXELS",
         "applications":apps,"application_limit":256,"content_observed":false,
         "guidance":"Application identities only. macOS Accessibility must be granted by the human to the actual packaged application. Product Full control cannot grant OS permission. Target content requires Harness approval for this task, application and model service."})
 }
@@ -837,7 +1000,7 @@ pub fn input(
     element: &Element,
     args: &Value,
     cancelled: &dyn Fn() -> bool,
-) -> Result<()> {
+) -> Result<Value> {
     let _pool = Pool::new();
     let action = args["action"].as_str().unwrap();
     let live = input_target(
@@ -864,9 +1027,29 @@ pub fn input(
             let up = event(unsafe {
                 CGEventCreateMouseEvent(ptr::null(), if right { 4 } else { 2 }, point, button)
             })?;
-            let live = input_target(target, current, element, false, cancelled)?;
-            hit_point(live.0, target, element.bounds.unwrap())?;
-            post_pair(&down, &up);
+            let count = args["click_count"].as_u64().unwrap_or(1);
+            for index in 1..=count {
+                let check = || -> Result<()> {
+                    let live = input_target(target, current, element, false, cancelled)?;
+                    hit_point(live.0, target, element.bounds.unwrap())?;
+                    Ok(())
+                };
+                check().map_err(|error| {
+                    if index > 1 {
+                        ComputerError::unknown(error.code())
+                    } else {
+                        error
+                    }
+                })?;
+                unsafe {
+                    CGEventSetIntegerValueField(down.0, 1, index as i64);
+                    CGEventSetIntegerValueField(up.0, 1, index as i64);
+                }
+                post_pair(&down, &up);
+                if index < count {
+                    std::thread::sleep(Duration::from_millis(50));
+                }
+            }
         }
         "press" => {
             let (key, flags) = parse_key(args["key"].as_str().unwrap())?;
@@ -934,9 +1117,7 @@ pub fn input(
                 "right" => -amount,
                 _ => 0,
             };
-            let wheel = event(unsafe {
-                CGEventCreateScrollWheelEvent(ptr::null(), 0, 2, vertical, horizontal)
-            })?;
+            let wheel = scroll_event(vertical, horizontal)?;
             unsafe {
                 CGEventSetLocation(wheel.0, point);
             }
@@ -951,7 +1132,21 @@ pub fn input(
     // Give the native event queue a short bounded settling interval. This is
     // observation latency, never a replay or a promise of semantic completion.
     std::thread::sleep(Duration::from_millis(80));
-    Ok(())
+    let mut feedback = json!({"action":action,"target":{"app_id":target.app_id,"name":target.name},
+        "window_bounds":current.elements.first().and_then(|e| e.bounds),"coordinate_space":"SCREEN_POINTS"});
+    if matches!(action, "click" | "scroll")
+        && let Some(bound) = element.bounds
+    {
+        feedback["x"] = json!(bound[0] + bound[2] / 2.);
+        feedback["y"] = json!(bound[1] + bound[3] / 2.);
+    }
+    Ok(feedback)
+}
+
+// The SDK's variadic predecessor has wheel1 as a fixed fourth parameter.
+// Using the non-variadic API avoids ARM64 register/stack argument mismatches.
+fn scroll_event(vertical: i32, horizontal: i32) -> Result<Owned> {
+    event(unsafe { CGEventCreateScrollWheelEvent2(ptr::null(), 0, 2, vertical, horizontal, 0) })
 }
 
 fn unicode_chunks(text: &str) -> Vec<Vec<u16>> {
@@ -1144,6 +1339,25 @@ mod tests {
     }
 
     #[test]
+    fn native_scroll_events_preserve_signed_pixel_axes_without_dispatch() {
+        unsafe extern "C" {
+            fn CGEventGetIntegerValueField(event: Ref, field: u32) -> i64;
+        }
+        // kCGScrollWheelEventPointDeltaAxis1/2, in pixels. Constructing and
+        // reading an event does not post it, move the cursor or read a window.
+        for (vertical, horizontal) in [(120, 0), (-120, 0), (0, 120), (0, -120)] {
+            let wheel = scroll_event(vertical, horizontal).unwrap();
+            assert_eq!(
+                unsafe { CGEventGetIntegerValueField(wheel.0, 96) },
+                i64::from(vertical)
+            );
+            assert_eq!(
+                unsafe { CGEventGetIntegerValueField(wheel.0, 97) },
+                i64::from(horizontal)
+            );
+        }
+    }
+    #[test]
     fn unicode_events_are_bounded_without_splitting_surrogate_pairs() {
         let text = "中文😀a".repeat(50);
         let chunks = unicode_chunks(&text);
@@ -1162,7 +1376,7 @@ mod tests {
             report["accessibility"], report["input_permission"], report["interactive_desktop"]
         );
         assert_eq!(report["content_observed"], false);
-        assert_eq!(report["screenshots"], "UNSUPPORTED");
+        assert_eq!(report["screenshots"], screenshot_support());
         assert!(report["applications"].is_array());
         assert!(!report.to_string().contains("AXValue"));
         assert!(prepare_target(&std::process::id().to_string()).is_err());

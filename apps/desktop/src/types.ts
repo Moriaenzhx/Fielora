@@ -1,4 +1,5 @@
 import type { UpdateModelRuntimeRequest } from '@fielora/contracts';
+import type { ComputerPreviewRequest, ComputerPreviewView } from './computer-preview-types';
 import type {
   ActivityCursor, ActivityView, ArchiveReferenceRequest, AttachReferenceSourceRequest,
   CreateFieldRequest,
@@ -185,6 +186,7 @@ export interface FieloraBridge {
     back(): Promise<BrowserPageState>;
     forward(): Promise<BrowserPageState>;
     reload(): Promise<BrowserPageState>;
+    fitToWindow(request: BrowserPageRequest): Promise<BrowserPageState>;
     getState(): Promise<BrowserPageState>;
     getContextCandidate(): Promise<BrowserContextCandidate>;
     captureScreenshot(): Promise<ScreenshotEvidenceView>;
@@ -231,6 +233,7 @@ export interface FieloraBridge {
     usage(request: ModelUsageReportRequest): Promise<ModelUsageReport>;
     events(request: ListAgentEventsRequest): Promise<AgentEventView[]>;
     toolCalls(request: AgentRunRequest): Promise<AgentToolCallView[]>;
+    computerPreview(request: ComputerPreviewRequest): Promise<ComputerPreviewView>;
     cancel(request: AgentRunRequest): Promise<AgentRunView>;
     pause(request: AgentRunRequest): Promise<AgentRunView>;
     resume(request: ResumeAgentRunRequest): Promise<AgentRunView>;

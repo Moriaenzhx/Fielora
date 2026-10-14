@@ -1,7 +1,15 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import type { AgentEventView, AgentRunView, AgentToolCallView } from '@fielora/contracts';
-import { agentActiveDurationMs, agentModelIsActive, agentPausePresentation, agentPendingChecks, agentCompletionTimeLabel, agentOpeningNarrative, agentRequestKind, agentTerminalBody, agentTerminalTitle, approvalActionLabel, buildAgentPresentation, buildAgentResultViewModel, stripTerminalHeading } from './agent-presentation.ts';
+import { agentActiveDurationMs, agentModelIsActive, agentPausePresentation, agentPendingChecks, agentCompletionTimeLabel, agentOpeningNarrative, agentRequestKind, agentResultMarkdown, agentTerminalBody, agentTerminalTitle, approvalActionLabel, buildAgentPresentation, buildAgentResultViewModel, stripTerminalHeading } from './agent-presentation.ts';
+
+test('result presentation removes only redundant matching status headings and preserves authored content', () => {
+  const body = '任务已经停止；修改仍保留。\n\n[查看文件](./report.md)\n\n## 尚待完成\n\n- 运行验证';
+  assert.equal(agentResultMarkdown('CANCELLED', `## 已停止\n\n${body}`), body);
+  assert.equal(agentResultMarkdown('COMPLETED', `## 选型结论\n\n${body}`), `## 选型结论\n\n${body}`);
+  assert.equal(agentResultMarkdown('FAILED', `## 已完成\n\n${body}`), `## 已完成\n\n${body}`, 'Do not hide a conflicting model claim');
+  assert.equal(agentResultMarkdown('CANCELLED', '## 已停止\n'), '## 已停止\n', 'Never turn a heading-only legacy result into empty content');
+});
 
 function run(status: AgentRunView['status'], errorCode: string | null = null): AgentRunView {
   return {

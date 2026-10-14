@@ -41,6 +41,50 @@ impl BrowserBridge {
             .is_some_and(|tx| tx.send(result.clone()).is_ok())
     }
 
+    /// Reuse only the host request transport. This is not a browser tool or
+    /// another execution authority: the trusted host must remove its own
+    /// feedback windows before native hit testing can begin.
+    pub async fn prepare_computer_feedback(
+        &self,
+        sender: &SyncSender<Value>,
+        run_id: &fielora_contracts::AgentRunId,
+        tool_call_id: &fielora_contracts::ToolCallId,
+        cancellation: &CommandCancellation,
+    ) -> Result<(), &'static str> {
+        if cancellation.is_cancelled() {
+            return Err("COMPUTER_FEEDBACK_CANCELLED");
+        }
+        let id = Uuid::now_v7().to_string();
+        let (tx, mut rx) = oneshot::channel();
+        self.pending.lock().unwrap().insert(id.clone(), tx);
+        let sent = sender.try_send(json!({"jsonrpc":"2.0","method":"host.computer.prepare","params":{"request_id":id,"run_id":run_id,"tool_call_id":tool_call_id}}));
+        let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(2);
+        let result = loop {
+            if cancellation.is_cancelled() {
+                break Err("COMPUTER_FEEDBACK_CANCELLED");
+            }
+            if sent.is_err() {
+                break Err("COMPUTER_FEEDBACK_UNAVAILABLE");
+            }
+            if tokio::time::Instant::now() >= deadline {
+                break Err("COMPUTER_FEEDBACK_TIMEOUT");
+            }
+            tokio::select! {
+                result = &mut rx => break match result {
+                    Ok(result) if result["kind"] == "COMPUTER_FEEDBACK" && result["hidden"] == true
+                        && !cancellation.is_cancelled() => Ok(()),
+                    Ok(_) if cancellation.is_cancelled() => Err("COMPUTER_FEEDBACK_CANCELLED"),
+                    Ok(_) => Err("COMPUTER_FEEDBACK_NOT_HIDDEN"),
+                    Err(_) => Err("COMPUTER_FEEDBACK_UNAVAILABLE"),
+                },
+                _ = tokio::time::sleep_until(deadline) => break Err("COMPUTER_FEEDBACK_TIMEOUT"),
+                _ = tokio::time::sleep(std::time::Duration::from_millis(50)) => {}
+            }
+        };
+        self.pending.lock().unwrap().remove(&id);
+        result
+    }
+
     pub async fn execute(
         &self,
         sender: &SyncSender<Value>,
@@ -1570,6 +1614,101 @@ pub fn fixture_call(
 mod tests {
     use super::*;
     use fielora_contracts::{AgentPermission, AgentPolicyDecision, AgentRunId, ToolCallId};
+
+    async fn feedback_request(receiver: &std::sync::mpsc::Receiver<Value>) -> Value {
+        tokio::time::timeout(std::time::Duration::from_secs(1), async {
+            loop {
+                if let Ok(request) = receiver.try_recv() {
+                    return request;
+                }
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .unwrap()
+    }
+
+    #[tokio::test]
+    async fn computer_feedback_requires_exact_hidden_ack_before_native_dispatch() {
+        for (ack, expected) in [
+            (json!({"kind":"COMPUTER_FEEDBACK","hidden":true}), Ok(())),
+            (
+                json!({"kind":"COMPUTER_FEEDBACK","hidden":false}),
+                Err("COMPUTER_FEEDBACK_NOT_HIDDEN"),
+            ),
+            (
+                json!({"kind":"BROWSER","hidden":true}),
+                Err("COMPUTER_FEEDBACK_NOT_HIDDEN"),
+            ),
+        ] {
+            let bridge = BrowserBridge::new(std::env::temp_dir());
+            let (sender, receiver) = std::sync::mpsc::sync_channel(2);
+            let cancellation = CommandCancellation::default();
+            let run = AgentRunId::new("run");
+            let tool = ToolCallId::new("tool");
+            let (result, ()) = tokio::join!(
+                bridge.prepare_computer_feedback(&sender, &run, &tool, &cancellation),
+                async {
+                    let request = feedback_request(&receiver).await;
+                    assert_eq!(request["method"], "host.computer.prepare");
+                    assert_eq!(request["params"]["run_id"], "run");
+                    assert_eq!(request["params"]["tool_call_id"], "tool");
+                    assert_eq!(request["params"].as_object().unwrap().len(), 3);
+                    assert_eq!(bridge.pending.lock().unwrap().len(), 1);
+                    assert!(!bridge.complete(&json!({"request_id":"foreign","result":ack})));
+                    assert!(bridge.complete(
+                        &json!({"request_id":request["params"]["request_id"],"result":ack})
+                    ));
+                }
+            );
+            assert_eq!(result, expected);
+            assert!(bridge.pending.lock().unwrap().is_empty());
+            if let Err(code) = result {
+                let receipt = crate::agent_computer::failure(code, false).receipt;
+                assert_eq!(receipt["input_state"], "NOT_DISPATCHED");
+                assert_eq!(receipt["outcome_unknown"], false);
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn computer_feedback_cancellation_timeout_and_backpressure_remove_pending_request() {
+        let bridge = BrowserBridge::new(std::env::temp_dir());
+        let (sender, receiver) = std::sync::mpsc::sync_channel(2);
+        let cancellation = CommandCancellation::default();
+        let run = AgentRunId::new("run");
+        let tool = ToolCallId::new("tool");
+        let (result, request) = tokio::join!(
+            bridge.prepare_computer_feedback(&sender, &run, &tool, &cancellation),
+            async {
+                let request = feedback_request(&receiver).await;
+                cancellation.cancel();
+                request
+            }
+        );
+        assert_eq!(result, Err("COMPUTER_FEEDBACK_CANCELLED"));
+        assert!(bridge.pending.lock().unwrap().is_empty());
+        assert!(!bridge.complete(&json!({"request_id":request["params"]["request_id"],"result":{"kind":"COMPUTER_FEEDBACK","hidden":true}})));
+        let cancellation = CommandCancellation::default();
+        let started = std::time::Instant::now();
+        assert_eq!(
+            bridge
+                .prepare_computer_feedback(&sender, &run, &tool, &cancellation)
+                .await,
+            Err("COMPUTER_FEEDBACK_TIMEOUT")
+        );
+        assert!(started.elapsed() < std::time::Duration::from_secs(3));
+        assert!(bridge.pending.lock().unwrap().is_empty());
+        let (full_sender, _receiver) = std::sync::mpsc::sync_channel(1);
+        full_sender.send(json!({})).unwrap();
+        assert_eq!(
+            bridge
+                .prepare_computer_feedback(&full_sender, &run, &tool, &cancellation)
+                .await,
+            Err("COMPUTER_FEEDBACK_UNAVAILABLE")
+        );
+        assert!(bridge.pending.lock().unwrap().is_empty());
+    }
 
     #[test]
     fn research_view_preserves_text_and_scope_without_sending_hundreds_of_controls() {

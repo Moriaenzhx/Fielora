@@ -63,6 +63,10 @@ import {
   Trash,
   Tray,
   WarningOctagon,
+  WarningCircle,
+  ShieldCheck,
+  ClockCounterClockwise,
+  HardDrives,
   X,
   type Icon,
   type IconProps,
@@ -77,7 +81,8 @@ export type AppIconName =
   | 'info' | 'environment' | 'branch' | 'commit' | 'changes' | 'openAction' | 'cloud' | 'source' | 'copy' | 'check'
   | 'sort' | 'plus' | 'edit' | 'search' | 'run' | 'pause' | 'delete' | 'chevronDown' | 'panelRight' | 'sidebar'
   | 'back' | 'forward' | 'arrowDown' | 'focus' | 'unfocus' | 'fileTree' | 'tools' | 'microphone' | 'send' | 'stop'
-  | 'permissionAsk' | 'permissionReview' | 'permissionFull' | 'application';
+  | 'permissionAsk' | 'permissionReview' | 'permissionFull' | 'application'
+  | 'warning' | 'verified' | 'history' | 'plan' | 'server';
 
 const ICONS: Record<AppIconName, Icon> = {
   usage: ChartBar,
@@ -150,6 +155,11 @@ const ICONS: Record<AppIconName, Icon> = {
   permissionReview: ChatCircleDots,
   permissionFull: WarningOctagon,
   application: AppWindow,
+  warning: WarningCircle,
+  verified: ShieldCheck,
+  history: ClockCounterClockwise,
+  plan: ListChecks,
+  server: HardDrives,
 };
 
 export interface FieloraIconProps extends Omit<IconProps, 'size' | 'weight'> {

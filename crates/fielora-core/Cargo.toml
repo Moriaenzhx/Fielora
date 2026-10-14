@@ -22,6 +22,7 @@ tokio-util.workspace = true
 futures-util.workspace = true
 sha2.workspace = true
 regex.workspace = true
+reqwest.workspace = true
 
 [dev-dependencies]
 office_oxide.workspace = true

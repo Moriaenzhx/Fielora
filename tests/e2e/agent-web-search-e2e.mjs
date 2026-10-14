@@ -23,7 +23,7 @@ const wait = expression => waitForExpression(cdp, expression, { output, timeoutM
 const click = selector => cdp.eval(`document.querySelector(${q(selector)}).click()`);
 async function launch() {
   const launched = await launchElectron({ root: path.join(root, 'apps/desktop'), dataRoot, output,
-    extraEnv: { FIELORA_WEB_SEARCH_FIXTURE: '1' },
+    extraEnv: { FIELORA_WEB_SEARCH_FIXTURE: '1', FIELORA_DATA_DIR: path.join(dataRoot, 'Fielora'), FIELORA_E2E_USER_DATA: path.join(dataRoot, 'electron-profile') },
     executablePath: process.env.FIELORA_PACKAGED_EXE ?? process.execPath,
     args: process.env.FIELORA_PACKAGED_EXE ? [] : [path.join(root, 'node_modules/@electron-forge/cli/dist/electron-forge.js'), 'start'] });
   child = launched.child;
@@ -127,7 +127,9 @@ try {
   await click(`[data-testid="conversation-${ids.conversation}"]`);
   await wait('document.querySelectorAll("[data-testid=web-research-activity]").length === 3');
   assert.equal(await cdp.eval('document.querySelectorAll("[data-testid=operation-group-toggle][aria-expanded=true]").length'),0);
-  assert.ok(await cdp.eval('document.querySelector("[data-testid=web-research-activity]").innerText.includes("SOURCE_DISCOVERY")'));
+  assert.equal(await cdp.eval('document.querySelectorAll("[data-testid=research-excerpt]").length'),0);
+  await click('[data-testid="web-research-activity"] [data-testid="research-excerpt-toggle"]');
+  assert.ok(await cdp.eval('document.querySelector("[data-testid=research-excerpt]").innerText.includes("SOURCE_DISCOVERY")'));
   assert.ok(await cdp.eval('document.querySelector("[data-testid=web-research-activity]").innerText.includes("已返回正文")'));
   assert.equal(await cdp.eval('document.querySelectorAll(".research-domain-badge").length'),3);
   await captureScreenshot(cdp,path.join(evidence,'visible-paused-sources.png'));
@@ -158,6 +160,7 @@ try {
   await click('[data-testid="agent-history-toggle"]');
   await wait('document.querySelector("[data-testid=web-research-activity] a")');
   assert.equal(await cdp.eval('document.querySelector("[data-testid=web-research-activity] a").href'),'https://example.com/workshop-tools');
+  await cdp.eval('for (const button of document.querySelectorAll("[data-testid=research-excerpt-toggle][aria-expanded=false]")) button.click()');
   assert.ok(await cdp.eval('document.querySelector("[data-testid=agent-execution-detail]").innerText.includes("SOURCE_EXPORT_BODY")'));
   assert.equal(await cdp.eval('document.querySelectorAll("[data-testid=operation-group-toggle][aria-expanded=true]").length'),0);
   await captureScreenshot(cdp,path.join(evidence,'sources.png'));

@@ -54,4 +54,5 @@ export interface BrowserPageState extends Omit<BrowserPage, 'id'> {
   active_page_id: string;
   pages: BrowserPage[];
   surface: BrowserSurfaceState;
+  fixed_viewport?: { width: number; height: number };
 }

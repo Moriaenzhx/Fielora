@@ -29,6 +29,7 @@ DesktopChrome
 ```
 
 - Conversation 与 Right Workspace Dock 是同一个连续 `Content` 背景上的两个工作视图，不建立两套页面底板。
+- Right Workspace Dock 展开占满工作区时，接替 Conversation 成为导航旁的 Content 外边缘，左上角复用 `--fl-radius-conversation-surface`；收回普通分栏后 Dock 内部接缝保持直角。圆角及子内容裁剪由既有 Dock 容器负责，沿用同一 Chrome 背景，不新增蒙层或改变网页视口。
 - Settings 与 Scheduled 的 Content pane 使用 `--fl-radius-work-surface` 左上接入 Chrome；Conversation 使用更克制的 `--fl-radius-conversation-surface`（Standard `16px`，Small/Large `12px / 20px`）。其外层 shell 只在既有圆角切口处露出同一 Brand Chrome canvas，保证弧度真实可见而不向正文着色。Conversation 右上角保持直角，不随 Brand Chrome 调整。
 - Window Chrome、Project Navigation 与 Settings Navigation 保持同一个连续 Chrome owner，并通过显式 `data-brand-chrome="top|navigation"` 消费可替换的 Brand Chrome token bundle。Light 使用一张跨整个 viewport 的低饱和近白薰衣草/雾粉画布，Navigation 以 `-44px` 纵向偏移续接顶栏；顶栏进入原生 Window Controls Overlay 前必须平滑收敛到当前 Sidebar solid/gradient 的右端色，并将同一 HEX 传给 native caption，主题切换和自定义色都不得产生竖向接缝。该作用域不得进入 Conversation、Settings Content、Right Workspace Dock、Right Dock Tab Strip、Utility Workspace 或 Overlay。
 - Settings 与 Scheduled 内容区复用同一 `Content` 背景；Scheduled 直接复用 Project 的 Primary Navigation，二者均通过共享 `WorkspaceSurface` 持有相同宽度偏好与 resizer。
@@ -307,6 +308,10 @@ Brand Chrome 是 `Chrome` 内的显式产品子主题，不是第六种 Surface�
 所有工作区正文区域使用同一个 `Content` 基础背景。材质变化不得增加 Pane 间实色割裂、重复标题栏、大面积状态色、装饰性 gradient card 或重阴影。
 
 Conversation Header 不常驻 Project 打开方式控件；Project 外部打开器只属于 File/Resource toolbar。Right Workspace Dock 中的工作对象与 Browser viewer 均使用标准白色 `Content` plane。嵌入 Right Workspace Dock 的 Browser Page 必须直接使用 Dock 顶部的共享 Tab Strip，不得在内容区重复绘制第二层 Page Strip；active Tab 只以中性 material shift 与文字状态表达，禁止在标签底部绘制蓝色或紫色 indicator。共享 Tab Strip 必须在 window-right controls 前结束并保留 `126px` clearance；标签超过可视宽度时只在该 bounded lane 内横向滚动，激活标签自动滚回可视区，且 Dock 宽度动画导致 lane 再次变化时必须由 ResizeObserver 重做 reveal，不能覆盖 Focus/Terminal/Panel 控件。其内部固定为 `Address Toolbar → Viewport` 两行，自上而下占满动态 Dock。独立 Browse Route 可以保留自己的 Page Strip。共享 Page Tab / Address Toolbar 分别为约 `32px / 44px`，地址框为 `34px`，导航与更多操作为 `30px`；空状态使用中性的 Browser glyph、`开始浏览` 与一行说明，不形成 Landing Page 式大标题。
+
+2026-10-13 Browser 工作区修正：共享 Tab 使用统一 `AppIcon(browse)` 网络图标，文件沿用 `FileTypeIcon`、文件目录/终端/审阅沿用各自功能图标；独立 Browse 的站点 favicon 保留，缺省图标也使用共享网络图标，删除手绘圆形 fallback。网页标题只在 Tab 展示，Address Toolbar 不重复占位，地址框伸展、右侧操作不挤压正文；背景继续使用中性 Content 与既有 token，工具栏底部仅一道弱分隔，不改写网页自身 CSS。
+
+普通浏览按 native viewport 的真实宽高以 100% 排版。Agent 显式请求的固定测试尺寸仍保持精确 CSS viewport 与输入坐标缩放，显示“适应窗口”入口；用户点击该入口或主动展开当前 Browser 工作区时，由既有 BrowserRuntime 清除该页及所属 Run 的临时尺寸偏好，保留当前文档，恢复随面板排版。清除旧 snapshot 后下一次 Agent 输入必须重新观察，不能把新布局当作旧测试尺寸的验证证据。没有 Schema、模型权限或网页 bridge 变化。原 Layout/Browser ownership 保持；验证包含三种固定尺寸的真实点击、恢复自适应后的展开/收回/导航和跨 Run 隔离，以及真实桌面标签、地址栏与面板几何检查。
 
 ## 7. Change Protocol（强制）
 
@@ -715,3 +720,29 @@ AGENT_EDIT_ALREADY_CURRENT的操作行与详情状态显示“内容已一致”
 ### 2026-10-12 — Search provider settings
 
 Capabilities & extensions → Web search uses one service selector and the selected service's fields, not equal-weight provider cards. Show the saved default separately from unsaved selection; save before testing, show independent key presence without revealing bytes, endpoint requirements for self-hosted JSON search, actual probe result/backend and explicit failure. Exa keyless access is identified as a third-party service with limits; Brave requires its own key; self-hosted SearXNG requires JSON output. No automatic fallback. Conversation research rows identify the receipt's actual backend, and previous source visibility/verification boundaries remain in force.
+
+### 2026-10-13 — 应用归属与临时窗口预览
+
+当前任务的原生应用操作沿既有执行记录显示实际应用名称和本地图标，归属来自 `computer` 回执；发现列表、模型叙述和工具参数不形成使用证明。失败/未知分别显示，不将同组文件或命令操作归给该应用。图标缺失使用公共 application 图标，不请求外部 URL。
+
+合格的当前应用回执在对话右上显示可收起、关闭、手动刷新的单窗口快照；新回执更新画面，标明捕获时间和“仅本机”，不显示为实时视频。收起仅保留应用入口，关闭后可从应用名称重新打开。切换对话、点击停止或进入暂停/终态时清除当前画面；缺权限、窗口不明确或不支持时显示就地原因。它是任务期间的临时辅助区域，不是常驻 Agent 面板，不改 Dock 或导航所有权。两个样式文件从 canonical styles/index.css 的 features 层接入，使用既有 token 和公共图标。
+
+### 2026-10-13 — 长对话信息层级与过程收拢
+
+用户授权在保留整体布局的前提下优化对话，并要求修改前备份。沿用现有920px阅读区、导航、Composer及Dock；标题采用小幅字号层级，正文加粗与文件名加强字重，字体和字号偏好继续生效。取消无条件加粗结果第一段，不从模型文本猜测已确认事实。图标沿Phosphor统一系统按操作语义选择，状态仍有文字，不只依赖颜色。
+
+超过14项的时间流默认保留最近8项，较早的连续片段可展开原顺序完整回看；审批、未完成操作、结果未知及未完成上下文整理保持可见。收拢区显示实际失败/拒绝/取消次数及最近失败原因，不删除叙述或事件，不改变模型上下文及重试。终态整体折叠继续保留，暂停提示单独显示阻塞与检查清单，已产生文件可就近审阅。任务状态、操作回执、检查证据和模型结果分别呈现，不由界面宣告业务验收完成。
+
+本条替代2026-10-12来源默认三条摘录的密度：默认两条紧凑来源（标题、域名、实际读取状态），其余来源和逐条原始摘录按需展开。搜索摘要与正文摘录明确区分，摘录以普通文本显示；时间紧邻操作。图标本地渲染，不请求远端favicon。失败、空正文、结果未知、缺少字数和已返回正文分别表达，同Run证据规则保留。新样式通过canonical index.css的overrides层接入，不新增常驻面板。
+
+### 2026-10-14 — 跨应用视觉操作反馈
+
+沿既有临时窗口预览增加操作摘要和短暂位置标记；图片按比例完整展示，标明本地快照时间。窗口截图已准备供模型观察与模型已接收/理解是不同事实，界面不得互换。本机预览不会自动上传；WINDOW_IMAGE审批明确说明画面、窗口文字与实际接收服务，文字观察授权保持独立。
+
+在其他应用前台时，两个临时、不抢焦点的宿主窗口分别显示半透明指针及“Fielora · 应用 · 已执行动作/未完成动作”状态和停止入口。指针只来自成功实际派发的坐标，拖动显示实际终点；键盘操作不猜指针。指针1.5秒、状态8秒自动消退；不冒充macOS系统控制标记。停止复用当前Run取消，失败显示可重试；暂停、任务结束和应用退出撤下。原生操作前先隐藏并确认，直到所有重叠操作结束才允许恢复显示，避免提示遮挡被操作界面。这是用户已授权的临时辅助反馈，不新增常驻Activity面板、导航或权限状态。
+
+### 2026-10-14 — 恢复简洁的终态结果排版
+
+按用户对照图修正终态阅读区：顶部仅左侧“用时＋箭头”，箭头紧邻耗时，整行下有细分割线；不显示右侧“查看过程”、状态图标或额外“本轮结果/停止时的结果”标题。耗时行仍能用鼠标和键盘展开完整过程，aria-label保留实际终态和展开动作。运行中/暂停/待审批的状态提示不受此项改变。
+
+正文首先呈现；只对与真实终态匹配且后有正文的通用Markdown状态标题去重，保留有内容的标题、相矛盾声明、链接、原始消息和复制内容。平台检查与可操作的失败原因移到正文后，技术结束码放入过程展开区，文件审阅和重试入口保留。取消/失败不改为完成，不丢检查证据；这是展示纠正，不改变Core结果、模型或权限。

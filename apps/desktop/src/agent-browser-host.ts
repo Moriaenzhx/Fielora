@@ -98,7 +98,9 @@ export class AgentBrowserHost {
     void work.catch(error => {
       if (process.env.FIELORA_E2E === '1') console.warn('[agent-browser-fixture]', input.name, error instanceof Error ? error.message : 'unknown');
       const code = error instanceof Error && /^BROWSER_[A-Z_]+$/.test(error.message) ? error.message : 'BROWSER_OPERATION_FAILED';
-      const guidance = code === 'BROWSER_INVALID_ARGUMENTS'
+      const guidance = code === 'BROWSER_UNSUPPORTED_ACTION'
+        ? `No page operation was dispatched. browser requires one of these actions: ${actions.join(', ')}. To observe the current page use browser(action=inspect). status belongs to browser_server for a managed local server, or computer for native desktop capabilities; it is not a browser action. Correct the tool/action before retrying; another snapshot or ref cannot make an unsupported action valid.`
+        : code === 'BROWSER_INVALID_ARGUMENTS'
         ? 'No input was dispatched. click/fill/select/scroll require an observed ref such as e12. scroll means reveal that element (scrollIntoView), not a direction: supply action=scroll, snapshot_id from the latest inspect, and ref. fill/select also require value.'
         : code === 'BROWSER_INVALID_CHECK'
           ? 'No page check was performed. browser_verify requires a declared case_id and 1–32 checks with property and string expected. text/value/visible/enabled/readonly/before require an observed ref such as e12; before also requires another observed ref in expected. Only contains/absent may omit ref and their expected text must be nonempty. Preserve the intended assertion; do not replace element text equality with a page substring check. Repeating inspect without supplying the required ref cannot fix missing arguments.'
@@ -107,7 +109,8 @@ export class AgentBrowserHost {
             : code === 'BROWSER_SERVER_ARGUMENTS'
               ? 'No process was started. Use program=node/npm/pnpm/yarn or a discovered python/python3 interpreter (an explicit interpreter path, including a project venv, is supported). argv must be literal arguments. For Python use -u and the project script or -m module; do not pass shell syntax or background the server through run_command.'
               : undefined;
-      return { kind: 'BROWSER', success: false, error_code: code, input_state: 'NOT_DISPATCHED', outcome_unknown: false, ...(guidance ? { guidance } : {}) };
+      return { kind: 'BROWSER', success: false, error_code: code, input_state: 'NOT_DISPATCHED', outcome_unknown: false,
+        ...(code === 'BROWSER_UNSUPPORTED_ACTION' ? { allowed_actions: [...actions] } : {}), ...(guidance ? { guidance } : {}) };
     })
       .then(result => this.request('host.browser.complete', { request_id: input.request_id, result }))
       .catch(() => undefined).finally(() => { clearTimeout(deadline); this.pending.delete(input.request_id); });
@@ -182,7 +185,8 @@ export class AgentBrowserHost {
     // Rehydrate ephemeral host state from the Core-owned, same-Run ledger.
     // This does not restore a page/snapshot or certify any assertion.
     if (verify && input.retained_plan) this.plans.set(input.run_id, checkedPlan(input.retained_plan));
-    if (!verify && (input.name !== 'browser' || !actions.includes(String(args.action)))) throw new Error('BROWSER_INVALID_ARGUMENTS');
+    if (!verify && input.name !== 'browser') throw new Error('BROWSER_INVALID_ARGUMENTS');
+    if (!verify && (typeof args.action !== 'string' || !actions.includes(args.action))) throw new Error('BROWSER_UNSUPPORTED_ACTION');
     const action = verify ? 'verify' : String(args.action);
     if (action === 'open') browserHttpUrl(args.url);
     if (action === 'resize' && (!Number.isInteger(args.width) || !Number.isInteger(args.height) || Number(args.width) < 640 || Number(args.width) > 2560 || Number(args.height) < 480 || Number(args.height) > 1600)) throw new Error('BROWSER_INVALID_VIEWPORT');
