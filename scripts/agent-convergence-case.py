@@ -313,8 +313,17 @@ if __name__ == '__main__':
     parser.add_argument('action', choices=['prepare', 'verify', 'verify-tests', 'self-test'])
     parser.add_argument('project', nargs='?', type=Path)
     parser.add_argument('--already-fixed', action='store_true', help='Prepare correct behavior with insufficient tests; interactive regression task')
-    parser.add_argument('--case', choices=['ledger', 'detector', 'task-export'], default='ledger')
+    parser.add_argument('--case', choices=['ledger', 'detector', 'task-export', 'large-files', 'http-protection', 'cold-recovery', 'midrun-correction'], default='ledger')
+    parser.add_argument('--control-evidence', type=Path, help='External controller receipts for lifecycle cases; never a file in the candidate project')
     args = parser.parse_args()
+    if args.control_evidence is not None and args.case not in ('cold-recovery', 'midrun-correction'):
+        parser.error('--control-evidence requires a lifecycle case')
+    if args.case in ('cold-recovery', 'midrun-correction'):
+        import agent_lifecycle_cases
+        sys.exit(agent_lifecycle_cases.main(args.action, args.project, args.case, args.control_evidence))
+    if args.case in ('large-files', 'http-protection'):
+        import agent_typescript_cases
+        sys.exit(agent_typescript_cases.main(args.action, args.project, args.case))
     if args.case == 'detector':
         import agent_detector_case
         sys.exit(agent_detector_case.main(args.action, args.project))

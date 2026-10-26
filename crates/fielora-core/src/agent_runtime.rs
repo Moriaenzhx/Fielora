@@ -161,6 +161,7 @@ struct ExecutionCancellation {
     model: CancellationToken,
     command: CommandCancellation,
     pause_requested: Arc<AtomicBool>,
+    user_pause_requested: Arc<AtomicBool>,
 }
 
 impl ExecutionCancellation {
@@ -175,6 +176,11 @@ impl ExecutionCancellation {
     }
 
     fn request_pause(&self) {
+        self.user_pause_requested.store(true, Ordering::SeqCst);
+        self.pause_requested.store(true, Ordering::SeqCst);
+    }
+
+    fn request_handoff(&self) {
         self.pause_requested.store(true, Ordering::SeqCst);
     }
 
@@ -1872,9 +1878,37 @@ impl AgentCoordinator {
     }
 
     pub fn complete_browser_request(&self, params: &Value) -> bool {
-        self.browser_bridge
-            .as_ref()
-            .is_some_and(|bridge| bridge.complete(params))
+        self.browser_bridge.as_ref().is_some_and(|bridge| {
+            bridge.complete_with(params, |input, event| {
+                self.record_browser_input_event(input, event)
+            })
+        })
+    }
+
+    pub fn browser_request_progress(&self, params: &Value) -> bool {
+        self.browser_bridge.as_ref().is_some_and(|bridge| {
+            bridge.progress(params, |input, event| {
+                self.record_browser_input_event(input, event)
+            })
+        })
+    }
+    fn record_browser_input_event(
+        &self,
+        input: &crate::agent_browser::PendingInput,
+        event: Value,
+    ) -> bool {
+        match self.storage.record_browser_input_event(
+            input.run_id.clone(),
+            input.tool_call_id.clone(),
+            event,
+            now_ms(),
+        ) {
+            Ok(commit) => {
+                emit_commit(&self.sender, &commit);
+                true
+            }
+            Err(_) => false,
+        }
     }
     pub fn new(
         storage: StorageHandle,
@@ -2927,7 +2961,7 @@ impl AgentCoordinator {
         } else if let Some(control) = self.cancellations.lock().unwrap().get(&run.id.0).cloned() {
             // Existing Tools are not interrupted. The current loop observes
             // this request only after the model/tool safe boundary.
-            control.request_pause();
+            control.request_handoff();
         } else {
             let current = self.storage.get_agent_run(run.id.clone())?;
             if current.status == AgentRunStatus::Paused {
@@ -3207,6 +3241,18 @@ impl AgentCoordinator {
         for commit in commits {
             emit_commit(&self.sender, &commit);
         }
+    }
+
+    fn read_run_history(
+        &self,
+        prepared: &PreparedRun,
+        arguments: &Value,
+    ) -> Result<ToolExecution, AgentError> {
+        let runtime = self.configure_tool_runtime(ToolRuntime::new(
+            &prepared.project_root,
+            &self.artifact_root,
+        )?);
+        crate::agent_turn_context::read(&self.storage, &prepared.run, arguments, &runtime)
     }
 
     pub fn list_file_artifact_reviews(
@@ -3523,6 +3569,7 @@ impl AgentCoordinator {
             model: CancellationToken::new(),
             command: CommandCancellation::default(),
             pause_requested: Arc::new(AtomicBool::new(false)),
+            user_pause_requested: Arc::new(AtomicBool::new(false)),
         };
         let runtime = self.runtime.clone();
         let disposition =
@@ -3671,6 +3718,7 @@ impl AgentCoordinator {
             model: CancellationToken::new(),
             command: CommandCancellation::default(),
             pause_requested: Arc::new(AtomicBool::new(false)),
+            user_pause_requested: Arc::new(AtomicBool::new(false)),
         };
         let runtime = self.runtime.clone();
         let disposition =
@@ -3891,6 +3939,13 @@ impl AgentCoordinator {
 
     pub fn pause(&self, run_id: AgentRunId) -> Result<AgentRunView, DomainError> {
         let run = self.storage.get_agent_run(run_id.clone())?;
+        if !run.status.is_terminal()
+            && let Some(control) = self.cancellations.lock().unwrap().get(&run_id.0).cloned()
+        {
+            // An explicit user pause wins over a pending capability handoff,
+            // including the short PAUSED -> old-loop-cleanup window.
+            control.request_pause();
+        }
         if run.status == AgentRunStatus::Paused || run.status.is_terminal() {
             self.invalidate_computer_snapshot(&run_id);
             return Ok(run);
@@ -4016,6 +4071,17 @@ impl AgentCoordinator {
         &self,
         request: ResumeAgentRunRequest,
     ) -> Result<AgentRunView, DomainError> {
+        if let Some(id) = request.direction_message_id {
+            if request.user_message_id.is_some()
+                || request.resource_budget.is_some()
+                || request.attachments.is_some()
+            {
+                return Err(DomainError::Validation(
+                    "AGENT_DIRECTION_INPUT_CONFLICT".into(),
+                ));
+            }
+            return self.resume_with_direction(request.run_id, id);
+        }
         if request
             .resource_budget
             .as_ref()
@@ -4077,6 +4143,51 @@ impl AgentCoordinator {
             }
         }
         self.resume_with_budget(request.run_id, request.resource_budget)
+    }
+
+    fn resume_with_direction(
+        &self,
+        run_id: AgentRunId,
+        message_id: MessageId,
+    ) -> Result<AgentRunView, DomainError> {
+        let run = self.storage.get_agent_run(run_id.clone())?;
+        // Retrying a lost acknowledgement must not launch a second execution.
+        if crate::agent_user_input::receipts(&self.storage, &run)?
+            .iter()
+            .any(|r| r["kind"] == "USER_DIRECTION_RECEIVED" && r["user_message_id"] == message_id.0)
+        {
+            return Ok(run);
+        }
+        if run.status != AgentRunStatus::Paused {
+            return Err(DomainError::InvalidStateTransition);
+        }
+        let prepared = self.prepare(run)?;
+        let recovery = self
+            .reconcile_for_resume(&prepared)
+            .map_err(|code| DomainError::Validation(code.into()))?;
+        let resumed =
+            self.storage
+                .resume_agent_run_with_direction(run_id.clone(), message_id, now_ms())?;
+        emit_commit(&self.sender, &resumed);
+        // Old provider continuations may still contain an unexecuted proposal.
+        // Rebuild context from durable receipts and the newly admitted message.
+        self.transcripts.lock().unwrap().remove(&run_id.0);
+        self.compiled_contexts.lock().unwrap().remove(&run_id.0);
+        self.invalidate_computer_snapshot(&run_id);
+        let result = resumed.run.clone();
+        let mut prepared = PreparedRun {
+            run: resumed.run,
+            ..prepared
+        };
+        prepared.run.task = crate::agent_user_input::directed_task(&self.storage, &prepared.run)?
+            .ok_or_else(|| {
+            DomainError::Validation("AGENT_DIRECTION_INPUT_UNAVAILABLE".into())
+        })?;
+        self.launch(prepared, Continuation {
+            user_note: Some("The user explicitly corrected this unfinished Run. Replan from the latest admitted direction and actual receipts. Previous unexecuted proposals were cancelled; do not repeat them without reconsidering the new request. No new permission or execution allowance was granted.".into()),
+            recovery: Some(recovery), ..Default::default()
+        });
+        Ok(result)
     }
 
     fn resume_with_budget(
@@ -4341,7 +4452,7 @@ impl AgentCoordinator {
             .map_err(|error| DomainError::Validation(error.user_code().into()))
     }
 
-    fn prepare(&self, run: AgentRunView) -> Result<PreparedRun, DomainError> {
+    fn prepare(&self, mut run: AgentRunView) -> Result<PreparedRun, DomainError> {
         let project = self.storage.get_project(run.field_id.clone())?;
         let provider = self
             .storage
@@ -4357,6 +4468,9 @@ impl AgentCoordinator {
         project_root
             .canonicalize()
             .map_err(|_| DomainError::Validation("AGENT_PROJECT_ROOT_UNAVAILABLE".into()))?;
+        if let Some(task) = crate::agent_user_input::directed_task(&self.storage, &run)? {
+            run.task = task;
+        }
         Ok(PreparedRun {
             run,
             endpoint: ProviderEndpoint {
@@ -4400,7 +4514,14 @@ impl AgentCoordinator {
         let mut facts = Vec::with_capacity(unknown.len());
         let mut blocked = None;
         for tool in unknown {
-            let reconciliation = if crate::agent_browser::readonly_recovery(&tool)
+            let reconciliation = if let Some(receipt) =
+                crate::agent_browser::recovered_delivery(&self.storage, &tool)?
+            {
+                fielora_agent::ToolReconciliation {
+                    status: ToolReconciliationStatus::Applied,
+                    evidence: json!({"reason":"NATIVE_INPUT_DELIVERY_ACKNOWLEDGED","durable_receipt":receipt}),
+                }
+            } else if crate::agent_browser::readonly_recovery(&tool)
                 || crate::agent_computer::readonly_recovery(&tool)
             {
                 fielora_agent::ToolReconciliation {
@@ -4655,11 +4776,15 @@ impl AgentCoordinator {
                         json!({"tool_call_id":tool.id,"name":tool.name,"recovered":true,"reconciliation_status":"APPLIED"}),
                         AgentProjectionUpdate::default(),
                     );
-                    assessment.confirmed_workspace_mutation = true;
-                    assessment.notes.push(format!(
-                        "{} is already reflected in the current workspace and requires fresh verification.",
-                        tool.name
-                    ));
+                    if reconciliation.evidence["reason"] == "NATIVE_INPUT_DELIVERY_ACKNOWLEDGED" {
+                        assessment.notes.push("The interrupted browser click has a durable native delivery acknowledgement. Do not repeat it. Its result is not verified; inspect the current page before further input.".into());
+                    } else {
+                        assessment.confirmed_workspace_mutation = true;
+                        assessment.notes.push(format!(
+                            "{} is already reflected in the current workspace and requires fresh verification.",
+                            tool.name
+                        ));
+                    }
                 }
                 ToolReconciliationStatus::NotApplied => {
                     self.storage
@@ -4769,6 +4894,10 @@ impl AgentCoordinator {
         control: &ExecutionCancellation,
         boundary: &str,
     ) -> bool {
+        if control.model.is_cancelled() {
+            cancel_run(&self.storage, &self.sender, run_id.clone());
+            return true;
+        }
         if !control.should_pause() {
             return false;
         }
@@ -4871,6 +5000,7 @@ impl AgentCoordinator {
             model: CancellationToken::new(),
             command: CommandCancellation::default(),
             pause_requested: Arc::new(AtomicBool::new(pause_for_requested_tool)),
+            user_pause_requested: Arc::new(AtomicBool::new(false)),
         };
         {
             let mut cancellations = self.cancellations.lock().unwrap();
@@ -4881,6 +5011,13 @@ impl AgentCoordinator {
                 .get_agent_run(prepared.run.id.clone())
                 .is_ok_and(|run| !run.status.is_terminal())
             {
+                return;
+            }
+            if cancellations
+                .get(&prepared.run.id.0)
+                .is_some_and(|old| old.model.is_cancelled())
+            {
+                cancel_run(&self.storage, &self.sender, prepared.run.id.clone());
                 return;
             }
             if continuation.recovery.is_some() {
@@ -4910,7 +5047,17 @@ impl AgentCoordinator {
             }
             cancellations.remove(id);
             let run_id = AgentRunId::new(id);
-            let current = self.storage.get_agent_run(run_id.clone()).ok();
+            let mut current = self.storage.get_agent_run(run_id.clone()).ok();
+            // Stop can arrive after PAUSED was published, just before this
+            // loop retires. Do not leave a cancelled token on a paused Run.
+            if cancellation.model.is_cancelled()
+                && current
+                    .as_ref()
+                    .is_some_and(|run| !run.status.is_terminal())
+            {
+                cancel_run(&self.storage, &self.sender, run_id.clone());
+                current = self.storage.get_agent_run(run_id.clone()).ok();
+            }
             let pending = self.pending_mcp_activation(&run_id);
             if current
                 .as_ref()
@@ -4935,7 +5082,9 @@ impl AgentCoordinator {
             (current, pending)
         };
         if let (Some(run), Some(tool)) = (current, pending) {
-            if run.status == AgentRunStatus::Paused {
+            if run.status == AgentRunStatus::Paused
+                && !cancellation.user_pause_requested.load(Ordering::SeqCst)
+            {
                 if self.launch_requested_tool(run, tool.clone()).is_ok() {
                     return;
                 }
@@ -4953,6 +5102,17 @@ impl AgentCoordinator {
         cancellation: ExecutionCancellation,
     ) {
         let run_id = prepared.run.id.clone();
+        let directed = match crate::agent_user_input::directed_task(&self.storage, &prepared.run) {
+            Ok(Some(task)) => {
+                prepared.run.task = task;
+                true
+            }
+            Ok(None) => false,
+            Err(_) => {
+                self.pause_general_work(&run_id, "AGENT_DIRECTION_INPUT_UNAVAILABLE");
+                return;
+            }
+        };
         if self.run_has_checkpoint(&run_id, "HISTORICAL_INPUTS_UNAVAILABLE")
             && !self
                 .load_run_inputs(&run_id)
@@ -5012,6 +5172,7 @@ impl AgentCoordinator {
         let behavior = coding_behavior_profile(&prepared.endpoint, &prepared.run.model_id);
         let harness_profile = CodingHarnessProfile::for_task(&prepared.run.task);
         let mut task_class = if self.access_question_task(&prepared.run).is_some()
+            || directed
             || !fielora_agent::reference::explicit_paths(
                 &reference_task(&self.storage, &prepared),
                 &prepared.project_root,
@@ -5556,6 +5717,7 @@ impl AgentCoordinator {
         let mut reviews = crate::agent_work_review::Reviews::default();
         let mut outcome_handoff = crate::agent_task_outcome::Handoff::default();
         let mut blocked_resume = crate::agent_task_outcome::BlockedResume::default();
+        let mut model_recovery = crate::agent_model_repair::RetainedRecovery::default();
         let mut review_cursor = 0;
         loop {
             let events = match self.storage.list_agent_events(ListAgentEventsRequest {
@@ -5847,7 +6009,12 @@ impl AgentCoordinator {
                 task_class,
             );
             if !access_question {
+                let history_definition = tools
+                    .iter()
+                    .find(|t| t.name == crate::agent_turn_context::TOOL)
+                    .cloned();
                 tools = crate::agent_coding_loop::select_tools(tools, &review_facts);
+                turn_context.expose_history_tool(&mut tools, history_definition);
             }
             if access_question {
                 tools.retain(|t| {
@@ -5977,6 +6144,11 @@ impl AgentCoordinator {
             };
             request.max_output_tokens = settings.max_output_tokens;
             crate::agent_model_repair::apply_retained_constraints(&mut request);
+            if model_recovery.refresh(&self.storage, &run_id).is_err() {
+                self.pause_general_work(&run_id, "AGENT_WORK_STATE_READ_FAILED");
+                return;
+            }
+            model_recovery.apply(&mut request);
             let mut budget =
                 crate::agent_coding_loop::compile_context(&mut request, context_checkpoint);
             if budget["reduced"] == true
@@ -6041,6 +6213,9 @@ impl AgentCoordinator {
             prompt_shape["budget"] = budget;
             prompt_shape["context"] = turn_context.manifest(&prepared.run);
             prompt_shape["user_input"] = reply_manifest;
+            prompt_shape["tool_call_recovery"] = json!({
+                "large_argument_source_sequence":model_recovery.large_argument_source_sequence
+            });
             let model_started = Instant::now();
             let invoked = match self
                 .invoke_turn(&prepared, request, cancellation.model.clone(), step)
@@ -6158,6 +6333,7 @@ impl AgentCoordinator {
                     continue;
                 }
                 Err(detail) => {
+                    outcome_handoff.record_rejection();
                     if !turn.tool_calls.is_empty() {
                         messages.push(AgentModelMessage::Assistant {
                             continuation: turn.continuation.clone(),
@@ -6730,7 +6906,6 @@ impl AgentCoordinator {
         wrote: bool,
     ) -> Result<(), DomainError> {
         let run_id = &prepared.run.id;
-        let run = self.storage.get_agent_run(run_id.clone())?;
         let current = crate::agent_work_state::CurrentWork::refreshed(
             facts,
             &prepared.project_root,
@@ -6746,12 +6921,12 @@ impl AgentCoordinator {
         let mut checkpoint = progress.checkpoint(facts, step, wrote, verified);
         checkpoint["work_plan"] = json!(current.plan);
         checkpoint["current_work"] = current.acceptance();
-        let intent = crate::agent_request_intent::latest(run_id, &run.task, facts);
+        let intent = crate::agent_request_intent::latest(run_id, &prepared.run.task, facts);
         let (action, change) = crate::agent_request_intent::requirements(
             intent,
             facts,
-            task_requests_action(&run.task),
-            task_requests_workspace_change(&run.task),
+            task_requests_action(&prepared.run.task),
+            task_requests_workspace_change(&prepared.run.task),
         );
         checkpoint["request_interpretation"] = json!(intent);
         checkpoint["request_interpretation_status"] = json!(if intent.is_some() {
@@ -6762,7 +6937,7 @@ impl AgentCoordinator {
         checkpoint["completion_protocol"] = json!("EXPLICIT_TASK_OUTCOME_V1");
         checkpoint["unclassified_request_is_answer_only"] = json!(false);
         checkpoint["goal"] = current.goal(crate::agent_work_state::goal_progress(
-            &run.task,
+            &prepared.run.task,
             facts,
             wrote,
             verified,
@@ -6899,7 +7074,12 @@ impl AgentCoordinator {
             };
             let proposal = &receipt["proposal"];
             let completed = proposal["outcome"] == "completed";
-            let summary = proposal["summary"].as_str().unwrap_or_default();
+            // Render from the revalidated receipts so delivery cannot reuse a
+            // stale check label recorded before the terminal boundary.
+            let summary = checked.receipt["delivery"]
+                .as_str()
+                .or_else(|| proposal["summary"].as_str())
+                .unwrap_or_default();
             let raw_content = if completed {
                 summary.to_owned()
             } else {
@@ -8889,7 +9069,7 @@ impl AgentCoordinator {
         let result = if name == "mcp.list_connections" {
             self.execute_mcp_connection_list(&tool.run_id)
         } else if name == crate::agent_turn_context::TOOL {
-            crate::agent_turn_context::read(&self.storage, &prepared.run, &arguments)
+            self.read_run_history(prepared, &arguments)
         } else if name == crate::agent_request_intent::TOOL {
             crate::agent_request_intent::record(&prepared.run.id, &prepared.run.task, &arguments)
         } else if name == crate::agent_task_outcome::TOOL {
@@ -9119,6 +9299,20 @@ impl AgentCoordinator {
             && prepared.run.model_id.starts_with("__fielora_agent_fixture")
             && !repair_fixture
         {
+            if prepared.run.model_id == "__fielora_agent_fixture_intervention__" {
+                tokio::select! {
+                    _ = cancellation.cancelled() => return Err(ModelError::InvocationCancelled),
+                    _ = tokio::time::sleep(Duration::from_millis(800)) => {}
+                }
+                let facts = self
+                    .storage
+                    .list_agent_tool_calls(prepared.run.id.clone())
+                    .map_err(|_| ModelError::ProviderProtocolError)?;
+                return Ok(invoked_fixture_turn(
+                    crate::agent_intervention_fixture::turn(&request, &facts, step),
+                    invocation_started,
+                ));
+            }
             if prepared.run.model_id == "__fielora_agent_fixture_preview__" {
                 let facts = self
                     .storage
@@ -9216,13 +9410,16 @@ impl AgentCoordinator {
                     | "__fielora_agent_fixture_browser_cases__"
                     | "__fielora_agent_fixture_browser_download__"
                     | "__fielora_agent_fixture_browser_scope__"
+                    | "__fielora_agent_fixture_browser_dialog__"
             ) {
                 let facts = self
                     .storage
                     .list_agent_tool_calls(prepared.run.id.clone())
                     .map_err(|_| ModelError::ProviderUnavailable)?;
                 return Ok(invoked_fixture_turn(
-                    if prepared.run.model_id == "__fielora_agent_fixture_browser_scope__" {
+                    if prepared.run.model_id == "__fielora_agent_fixture_browser_dialog__" {
+                        crate::agent_browser::dialog_fixture(&request, &facts)?
+                    } else if prepared.run.model_id == "__fielora_agent_fixture_browser_scope__" {
                         crate::agent_browser_scope_fixture::model(&request, &facts)?
                     } else if prepared.run.model_id == "__fielora_agent_fixture_browser_download__"
                     {
@@ -11187,6 +11384,13 @@ impl AgentCoordinator {
     }
 
     fn access_question_task(&self, run: &AgentRunView) -> Option<String> {
+        if crate::agent_user_input::directed_task(&self.storage, run)
+            .ok()
+            .flatten()
+            .is_some()
+        {
+            return None;
+        }
         let task = crate::agent_turn_context::origin(&self.storage, run)
             .ok()
             .flatten()
@@ -11845,7 +12049,7 @@ impl AgentCoordinator {
         let ui_task = crate::agent_browser::is_ui_task(&prepared.run.task, &[]);
         let mut native_image = None;
         let result = if name == crate::agent_turn_context::TOOL {
-            crate::agent_turn_context::read(&self.storage, &prepared.run, &arguments)
+            self.read_run_history(prepared, &arguments)
         } else if name == crate::agent_request_intent::TOOL {
             crate::agent_request_intent::record(&prepared.run.id, &prepared.run.task, &arguments)
         } else if name == crate::agent_task_outcome::TOOL {
@@ -12159,7 +12363,7 @@ impl AgentCoordinator {
                     &self.sender,
                     tool.run_id,
                     AgentEventKind::ToolCompleted,
-                    json!({"tool_call_id":tool.id,"name":tool.name,"receipt_kind":receipt_kind,"duration_ms":tool_started.elapsed().as_millis(),"observation_bytes":execution.observation.len(),"execution_source":execution_source.receipt_envelope()}),
+                    json!({"tool_call_id":tool.id,"name":tool.name,"receipt_kind":receipt_kind,"duration_ms":tool_started.elapsed().as_millis(),"human_wait_ms":if tool.name == "browser" { receipt["human_wait_ms"].as_u64().unwrap_or(0) } else { 0 },"observation_bytes":execution.observation.len(),"execution_source":execution_source.receipt_envelope()}),
                     AgentProjectionUpdate::default(),
                 );
                 // A conservative risk effect is not evidence that an external
@@ -13126,6 +13330,25 @@ fn references_previous_images(task: &str) -> bool {
 
 fn classify_task(task: &str) -> AgentTaskClass {
     let lower = task.to_ascii_lowercase();
+    // Edit strategies are optimizations, not request interpretation. A request
+    // that negates changes or discusses an earlier edit needs the ordinary
+    // loop, where the model can answer or interpret mixed clauses explicitly.
+    // GENERAL does not grant or remove any execution authority.
+    if !task_requests_workspace_change(task)
+        || [
+            "只读",
+            "复核",
+            "解释",
+            "说明",
+            "read-only",
+            "review",
+            "explain",
+        ]
+        .iter()
+        .any(|marker| lower.contains(marker))
+    {
+        return AgentTaskClass::General;
+    }
     let bounded_action = [
         "fix",
         "change",
@@ -15340,6 +15563,7 @@ mod tests {
             model: CancellationToken::new(),
             command: CommandCancellation::default(),
             pause_requested: Arc::new(AtomicBool::new(false)),
+            user_pause_requested: Arc::new(AtomicBool::new(false)),
         }
     }
 
@@ -15545,6 +15769,91 @@ mod tests {
         assert_eq!(
             coordinator.transcripts.lock().unwrap()[&run.id.0],
             vec![original]
+        );
+        drop(coordinator);
+        worker.shutdown();
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn stop_wins_before_and_after_the_pause_boundary() {
+        for stop_before_boundary in [true, false] {
+            let (root, worker, coordinator, run, _events) = stop_race_fixture();
+            let prepared = coordinator.prepare(run.clone()).unwrap();
+            let control = test_cancellation();
+            coordinator
+                .cancellations
+                .lock()
+                .unwrap()
+                .insert(run.id.0.clone(), control.clone());
+            control.request_pause();
+            if stop_before_boundary {
+                control.cancel();
+            }
+            assert!(coordinator.pause_at_boundary(&run.id, &control, "TEST_BOUNDARY"));
+            control.cancel();
+            if !stop_before_boundary {
+                // Even a racing continuation cannot replace the cancelled token.
+                coordinator.launch(prepared, Continuation::default());
+            }
+            coordinator.finish_execution(&run.id.0, &control);
+            assert_eq!(
+                coordinator.storage.get_agent_run(run.id).unwrap().status,
+                AgentRunStatus::Cancelled
+            );
+            drop(coordinator);
+            worker.shutdown();
+            std::fs::remove_dir_all(root).unwrap();
+        }
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn explicit_pause_prevents_pending_capability_handoff_from_restarting_the_run() {
+        let (root, worker, coordinator, run, _events) = stop_race_fixture();
+        let control = test_cancellation();
+        coordinator
+            .cancellations
+            .lock()
+            .unwrap()
+            .insert(run.id.0.clone(), control.clone());
+        let tool = coordinator
+            .storage
+            .create_agent_tool_call(
+                run.id.clone(),
+                "mcp.activate_connection".into(),
+                AgentToolEffect::Network,
+                AgentPolicyDecision::Allow,
+                json!({"connection_id":"unstarted"}),
+                10,
+            )
+            .unwrap();
+        control.request_handoff();
+        assert!(coordinator.pause_at_boundary(&run.id, &control, "TEST_RECEIPT_BOUNDARY"));
+        // User input can arrive after PAUSED is published but before cleanup.
+        assert_eq!(
+            coordinator.pause(run.id.clone()).unwrap().status,
+            AgentRunStatus::Paused
+        );
+        control.request_handoff(); // A late capability request cannot undo it.
+        coordinator.finish_execution(&run.id.0, &control);
+        assert_eq!(
+            coordinator
+                .storage
+                .get_agent_run(run.id.clone())
+                .unwrap()
+                .status,
+            AgentRunStatus::Paused
+        );
+        assert_eq!(
+            coordinator.pending_mcp_activation(&run.id).unwrap().id,
+            tool.id
+        );
+        assert!(
+            !coordinator
+                .cancellations
+                .lock()
+                .unwrap()
+                .contains_key(&run.id.0)
         );
         drop(coordinator);
         worker.shutdown();
@@ -16450,6 +16759,242 @@ mod tests {
                 .try_iter()
                 .any(|m| m["method"] == "host.browser.execute")
         );
+        drop(restored);
+        drop(storage);
+        worker.shutdown();
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn browser_late_audit_preserves_terminal_projection_and_rejects_other_events() {
+        let (root, worker, coordinator, run, _receiver) = stop_race_fixture();
+        let storage = worker.handle();
+        let tool = storage
+            .create_agent_tool_call(
+                run.id.clone(),
+                "browser".into(),
+                AgentToolEffect::Process,
+                AgentPolicyDecision::Allow,
+                json!({"action":"click"}),
+                now_ms(),
+            )
+            .unwrap();
+        let event = json!({"kind":"BROWSER_DIALOG_WAIT","tool_call_id":tool.id,"request_id":"fixture-request","page_id":"fixture-page","state":"CLOSED"});
+        assert!(
+            storage
+                .record_browser_input_event(
+                    run.id.clone(),
+                    tool.id.clone(),
+                    event.clone(),
+                    now_ms()
+                )
+                .is_err(),
+            "proposed input is not execution evidence"
+        );
+        storage
+            .update_agent_tool_call(
+                tool.id.clone(),
+                AgentToolStatus::Unknown,
+                None,
+                Some("UNKNOWN".into()),
+                now_ms(),
+            )
+            .unwrap();
+        storage
+            .append_agent_event(
+                run.id.clone(),
+                AgentEventKind::RunCancelled,
+                json!({}),
+                AgentProjectionUpdate {
+                    status: Some(AgentRunStatus::Cancelled),
+                    error_code: Some("AGENT_CANCELLED".into()),
+                    ..Default::default()
+                },
+                now_ms(),
+            )
+            .unwrap();
+        let before = storage.get_agent_run(run.id.clone()).unwrap();
+        let recorded = storage
+            .record_browser_input_event(run.id.clone(), tool.id.clone(), event, now_ms() + 10000)
+            .unwrap();
+        assert_eq!(recorded.run.status, before.status);
+        assert_eq!(recorded.run.error_code, before.error_code);
+        assert_eq!(recorded.run.finished_at, before.finished_at);
+        assert_eq!(recorded.run.updated_at, before.updated_at);
+        assert_eq!(recorded.run.current_step, before.current_step);
+        assert_eq!(recorded.run.max_steps, before.max_steps);
+        assert_eq!(recorded.run.next_sequence, before.next_sequence + 1);
+        assert!(
+            storage
+                .append_agent_event(
+                    run.id.clone(),
+                    AgentEventKind::RunStarted,
+                    json!({}),
+                    AgentProjectionUpdate::default(),
+                    now_ms()
+                )
+                .is_err(),
+            "generic terminal writes stay denied"
+        );
+        assert!(storage.record_browser_input_event(run.id.clone(), tool.id.clone(), json!({"kind":"RUN_RESUMED","tool_call_id":tool.id,"request_id":"fixture-request"}), now_ms()).is_err());
+        assert!(storage.record_browser_input_event(run.id.clone(), tool.id.clone(), json!({"kind":"BROWSER_DIALOG_WAIT","tool_call_id":"foreign","request_id":"fixture-request","state":"OPEN"}), now_ms()).is_err());
+        drop(coordinator);
+        drop(storage);
+        worker.shutdown();
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn browser_dialog_late_ack_survives_cold_recovery_without_replay() {
+        let (root, worker, coordinator, run, receiver) = stop_race_fixture();
+        let coordinator = coordinator.with_browser_bridge();
+        let storage = worker.handle();
+        let tool = storage
+            .create_agent_tool_call(
+                run.id.clone(),
+                "browser".into(),
+                AgentToolEffect::Process,
+                AgentPolicyDecision::Allow,
+                json!({"action":"click","snapshot_id":"fixture","ref":"e1"}),
+                now_ms(),
+            )
+            .unwrap();
+        storage
+            .update_agent_tool_call(
+                tool.id.clone(),
+                AgentToolStatus::Running,
+                None,
+                None,
+                now_ms(),
+            )
+            .unwrap();
+        let cancellation = CommandCancellation::default();
+        let bridge = coordinator.browser_bridge.as_ref().unwrap();
+        let project_root = root.join("workspace");
+        let (result, request) = tokio::join!(
+            bridge.execute(
+                &coordinator.sender,
+                &run,
+                &project_root,
+                &tool,
+                None,
+                &cancellation
+            ),
+            async {
+                let request = loop {
+                    if let Ok(m) = receiver.try_recv()
+                        && m["method"] == "host.browser.execute"
+                    {
+                        break m["params"].clone();
+                    }
+                    tokio::time::sleep(Duration::from_millis(5)).await;
+                };
+                assert!(!coordinator.browser_request_progress(
+                    &json!({"request_id":"foreign","page_id":"page","state":"OPEN"})
+                ));
+                assert!(coordinator.browser_request_progress(&json!({"request_id":request["request_id"],"page_id":"page","state":"OPEN","dialog_type":"confirm","message":"must not be persisted"})));
+                assert!(!coordinator.browser_request_progress(
+                    &json!({"request_id":request["request_id"],"page_id":"other","state":"CLOSED"})
+                ));
+                cancellation.cancel();
+                request
+            }
+        );
+        assert!(matches!(
+            result,
+            Err(AgentError::ToolProviderOutcomeUnknown)
+        ));
+        storage
+            .update_agent_tool_call(
+                tool.id.clone(),
+                AgentToolStatus::Unknown,
+                Some(json!({"kind":"TOOL_EXECUTION_UNKNOWN"})),
+                Some("AGENT_TOOL_PROVIDER_OUTCOME_UNKNOWN".into()),
+                now_ms(),
+            )
+            .unwrap();
+        coordinator.pause_general_work(&run.id, "AGENT_RECOVERY_REQUIRED");
+        assert!(
+            coordinator
+                .reconcile_for_resume(&coordinator.prepare(run.clone()).unwrap())
+                .is_err(),
+            "dialog opening is not a delivery receipt"
+        );
+        assert!(coordinator.browser_request_progress(&json!({"request_id":request["request_id"],"page_id":"page","state":"CLOSED","accepted":false,"userInput":"must not be persisted"})));
+        let ack = json!({"kind":"BROWSER","action":"click","page_id":"page","input_state":"DISPATCHED","outcome_unknown":false,"success":true});
+        assert!(
+            !coordinator.complete_browser_request(&json!({"request_id":"foreign","result":ack}))
+        );
+        assert!(coordinator.complete_browser_request(
+            &json!({"request_id":request["request_id"],"result":ack,"final":true})
+        ));
+        assert!(
+            !coordinator.complete_browser_request(
+                &json!({"request_id":request["request_id"],"result":ack,"final":true})
+            ),
+            "receipt consumed once"
+        );
+        assert_eq!(
+            storage.get_agent_run(run.id.clone()).unwrap().status,
+            AgentRunStatus::Paused,
+            "late ack never resumes the Run"
+        );
+        let paths = PlatformPaths::from_root(root.join("profile")).unwrap();
+        let credentials = Arc::clone(&coordinator.credentials);
+        drop(coordinator);
+        drop(storage);
+        worker.shutdown();
+        let device = DeviceIdentity::load_or_create(&paths.device_identity).unwrap();
+        let worker = StorageWorker::start(&paths.database, device, now_ms()).unwrap();
+        let storage = worker.handle();
+        let (sender, receiver) = mpsc::sync_channel(512);
+        let restored = AgentCoordinator::new(
+            storage.clone(),
+            credentials,
+            sender,
+            root.join("artifacts"),
+            Handle::current(),
+        )
+        .with_browser_bridge();
+        let assessment = restored
+            .reconcile_for_resume(
+                &restored
+                    .prepare(storage.get_agent_run(run.id.clone()).unwrap())
+                    .unwrap(),
+            )
+            .unwrap();
+        assert!(!assessment.confirmed_workspace_mutation);
+        assert!(assessment.notes.iter().any(|n| n.contains("Do not repeat")));
+        let calls = storage.list_agent_tool_calls(run.id.clone()).unwrap();
+        assert_eq!(calls.len(), 1);
+        assert_eq!(calls[0].id, tool.id);
+        assert_eq!(calls[0].status, AgentToolStatus::Completed);
+        let receipt = calls[0].receipt.as_ref().unwrap();
+        assert_eq!(receipt["input_state"], "DISPATCHED");
+        assert_eq!(receipt["success"], false);
+        assert_eq!(receipt["verification_eligible"], false);
+        assert_eq!(receipt["observation_required"], true);
+        assert!(
+            !receiver
+                .try_iter()
+                .any(|m| m["method"] == "host.browser.execute")
+        );
+        let events = storage
+            .list_agent_events(ListAgentEventsRequest {
+                run_id: run.id,
+                after_sequence: None,
+                limit: Some(500),
+            })
+            .unwrap();
+        assert!(
+            !serde_json::to_string(&events)
+                .unwrap()
+                .contains("must not be persisted")
+        );
+        assert!(!events.iter().any(|e| matches!(
+            e.kind,
+            AgentEventKind::ModelStarted | AgentEventKind::VerificationRecorded
+        )));
         drop(restored);
         drop(storage);
         worker.shutdown();
@@ -22323,6 +22868,26 @@ mod tests {
         let general = CodingHarnessProfile::for_task("解释一下这个仓库");
         assert_eq!(general.id(), "CODING_V0.1");
         assert_eq!(general.strategy_id(), "GOAL_DRIVEN_AGENT_LOOP_V4");
+    }
+
+    #[test]
+    fn edit_wording_in_readonly_or_mixed_questions_uses_general_strategy() {
+        for task in [
+            "请只做一次只读复核：核对刚才 src/App.vue 的实际改动，准确说明删除提示原来读错了哪个字段、现在改成什么；再检查 tests/core-logic.test.js 是否执行真正的 App.vue。不要修改文件、运行命令、重新构建或重新测试页面。",
+            "解释一下之前删除字段的原因，不做修改。",
+            "Review the change to the delete button label; do not modify files.",
+            "Remove the old label and explain the change.",
+        ] {
+            assert_eq!(classify_task(task), AgentTaskClass::General, "{task}");
+        }
+        // Mixed requests remain actions; a broader strategy is not a waiver.
+        assert!(task_requests_workspace_change(
+            "Remove the old label and explain the change."
+        ));
+        assert_eq!(
+            classify_task("Remove the old label"),
+            AgentTaskClass::FastEdit
+        );
     }
 
     #[test]

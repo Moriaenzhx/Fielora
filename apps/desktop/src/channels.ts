@@ -88,6 +88,7 @@ export const channels = {
   coreQuit: 'fielora:core:quit',
   coreEvent: 'fielora:core:event',
   testKillCore: 'fielora:test:kill-core',
+  testDismissContextMenu: 'fielora:test:dismiss-context-menu',
   testResizeWindow: 'fielora:test:resize-window',
   testCreateProject: 'fielora:test:create-project',
 } as const;

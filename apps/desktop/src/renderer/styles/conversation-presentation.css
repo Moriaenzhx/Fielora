@@ -5,7 +5,7 @@
   font-size: var(--fl-font-size-meta); text-align: left;
 }
 .message-list .agent-run-state { display: inline-flex; align-items: center; gap: 7px; color: var(--fl-color-text); font-weight: var(--fl-font-weight-medium); }
-.message-list .agent-run-state > .app-icon { width: 17px; height: 17px; transform: none; }
+.message-list .agent-run-state > .app-icon { width: var(--fl-icon-md); height: var(--fl-icon-md); transform: none; }
 .message-list .agent-run-state[data-status="FAILED"] { color: var(--fl-color-text-danger); }
 .message-list .agent-run-state[data-status="PAUSED"],
 .message-list .agent-run-state[data-status="WAITING_APPROVAL"] { color: var(--fl-color-text-warning); }
@@ -23,9 +23,14 @@
 .message-list .conversation-narrative { padding-block: 5px; }
 .message-list .conversation-activity-stream { gap: 12px; }
 .message-list .operation-group { font-size: var(--fl-font-size-meta); line-height: 1.6; }
-.message-list .operation-summary { min-height: 34px; height: auto; gap: 9px; }
+.message-list .operation-summary { min-height: 34px; height: auto; gap: 8px; }
 .message-list .operation-summary > .app-icon:first-child,
-.message-list .operation-row-content > .app-icon:first-child { color: var(--fl-color-text); width: 18px; height: 18px; flex-basis: 18px; }
+.message-list .operation-row-content > .app-icon:first-child,
+.message-list .operation-detail-title > .app-icon {
+  color: var(--fl-color-icon); width: var(--fl-icon-md); height: var(--fl-icon-md); flex: 0 0 var(--fl-icon-md);
+}
+.message-list .operation-summary > .app-icon[data-icon="chevronDown"],
+.message-list .operation-disclosure > .app-icon { width: var(--fl-icon-sm); height: var(--fl-icon-sm); flex-basis: var(--fl-icon-sm); color: inherit; }
 .message-list .operation-label { max-width: 100%; }
 .message-list .operation-file-link { color: var(--fl-color-link); font-weight: var(--fl-font-weight-medium); text-decoration: none; }
 .message-list .operation-file-link:hover { text-decoration: underline; }
@@ -34,7 +39,9 @@
 .message-list .operation-row-content[data-operation-status="UNKNOWN"],
 .message-list .operation-row-content[data-operation-status="WAITING_APPROVAL"] { color: var(--fl-color-text-warning); }
 .message-list .operation-row-content[data-operation-status="FAILED"] .app-icon:first-child,
-.message-list .operation-row-content[data-operation-status="UNKNOWN"] .app-icon:first-child { color: inherit; }
+.message-list .operation-row-content[data-operation-status="DENIED"] .app-icon:first-child,
+.message-list .operation-row-content[data-operation-status="UNKNOWN"] .app-icon:first-child,
+.message-list .operation-row-content[data-operation-status="WAITING_APPROVAL"] .app-icon:first-child { color: inherit; }
 .message-list .operation-issue { flex-shrink: 0; font-size: .92em; }
 .message-list .operation-list { margin: 2px 0 4px 8px; padding-left: 16px; border-left: 1px solid var(--fl-color-border-soft); }
 .message-list .operation-detail { font-size: var(--fl-font-size-meta); }
@@ -51,7 +58,7 @@
 }
 .message-list .activity-history-toggle:hover { color: var(--fl-color-text); background: transparent; }
 .message-list .activity-history-toggle strong { min-width: 0; font-weight: var(--fl-font-weight-medium); overflow-wrap: anywhere; }
-.message-list .activity-history-toggle > .app-icon:first-child { width: 18px; height: 18px; flex: 0 0 18px; }
+.message-list .activity-history-toggle > .app-icon:first-child { width: var(--fl-icon-md); height: var(--fl-icon-md); flex: 0 0 var(--fl-icon-md); }
 .message-list .activity-history-action { margin-left: auto; flex-shrink: 0; font-weight: var(--fl-font-weight-regular); }
 .message-list .activity-history-toggle > .app-icon:last-child { transform: rotate(-90deg); }
 .message-list .activity-history-toggle[aria-expanded="true"] > .app-icon:last-child { transform: none; }
@@ -73,7 +80,7 @@
 .message-list .agent-pause-notice { padding: 14px 0 14px 16px; border-left: 2px solid var(--fl-color-text-warning); border-radius: 0; background: transparent; }
 .message-list .agent-pause-heading { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; font-size: var(--fl-font-size-meta); color: var(--fl-color-text); }
 .message-list .agent-pause-heading > .app-icon { color: var(--fl-color-text-warning); }
-.message-list .agent-pause-heading > .app-icon { width: 18px; height: 18px; flex: 0 0 18px; }
+.message-list .agent-pause-heading > .app-icon { width: var(--fl-icon-md); height: var(--fl-icon-md); flex: 0 0 var(--fl-icon-md); }
 .message-list .agent-pause-heading strong { font-weight: var(--fl-font-weight-semibold); }
 .message-list .agent-pending-list { font-size: var(--fl-font-size-meta); }
 .message-list .agent-pending-list > strong { font-weight: var(--fl-font-weight-medium); }

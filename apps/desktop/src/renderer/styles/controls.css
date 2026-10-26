@@ -145,6 +145,7 @@
   :root:not([data-reduce-motion="false"]) .compact-activity-row.is-working > summary .compact-activity-label { animation: none; }
 }
 .app-icon {
+  display: block;
   width: var(--fl-icon-md);
   height: var(--fl-icon-md);
   flex: 0 0 auto;

@@ -12,6 +12,18 @@ export function agentModelIsActive(events: readonly AgentEventView[], tools: rea
   return active;
 }
 
+export function agentBrowserDialogWaiting(events: readonly AgentEventView[], tools: readonly AgentToolCallView[]): boolean {
+  const running = new Set(tools.filter(t => t.name === 'browser' && t.status === 'RUNNING').map(t => t.id));
+  const states = new Map<string, string>();
+  for (const event of [...events].sort((a, b) => a.sequence - b.sequence)) {
+    const p = event.payload as Record<string, unknown>;
+    if (event.kind === 'CHECKPOINT_CREATED' && p.kind === 'BROWSER_DIALOG_WAIT' && typeof p.tool_call_id === 'string' && running.has(p.tool_call_id)) {
+      states.set(p.tool_call_id, String(p.state));
+    }
+  }
+  return [...states.values()].includes('OPEN');
+}
+
 export type AgentWorkPhaseState = 'completed' | 'active' | 'pending' | 'failed' | 'blocked' | 'skipped';
 
 export interface AgentWorkPhase {
@@ -564,7 +576,7 @@ function canonicalNarrative(payload: CanonicalPhasePayload, run: AgentRunView, c
 // gives the same result as watching it live.
 export function agentActiveDurationMs(run: AgentRunView, events: readonly AgentEventView[], now = Date.now()): number {
   const end = Math.max(run.created_at, run.finished_at ?? (['COMPLETED', 'FAILED', 'CANCELLED', 'PAUSED', 'WAITING_APPROVAL'].includes(run.status) ? run.updated_at : now));
-  const waits = new Set<'pause' | 'approval'>();
+  const waits = new Set<string>();
   let waitingAt: number | null = null;
   let waitingMs = 0;
   for (const event of [...events].sort((a, b) => a.sequence - b.sequence)) {
@@ -572,8 +584,22 @@ export function agentActiveDurationMs(run: AgentRunView, events: readonly AgentE
     const at = Math.max(run.created_at, event.created_at);
     if (event.kind === 'RUN_PAUSED') waits.add('pause');
     else if (event.kind === 'APPROVAL_REQUESTED') waits.add('approval');
-    else if (event.kind === 'RUN_RESUMED') waits.delete('pause');
+    else if (event.kind === 'RUN_RESUMED') {
+      waits.delete('pause');
+      // Direction can cancel an unexecuted approval without resolving it.
+      waits.delete('approval');
+      for (const key of waits) if (key.startsWith('dialog:')) waits.delete(key);
+    }
     else if (event.kind === 'APPROVAL_RESOLVED') waits.delete('approval');
+    else if (event.kind === 'CHECKPOINT_CREATED' && (event.payload as Record<string, unknown>).kind === 'BROWSER_DIALOG_WAIT') {
+      const p = event.payload as Record<string, unknown>;
+      const key = `dialog:${String(p.tool_call_id)}`;
+      if (p.state === 'OPEN') waits.add(key);
+      else if (p.state === 'CLOSED') waits.delete(key);
+    }
+    else if (['RUN_CANCELLED', 'RUN_COMPLETED', 'RUN_FAILED'].includes(event.kind)) {
+      for (const key of waits) if (key.startsWith('dialog:')) waits.delete(key);
+    }
     else continue;
     if (waits.size > 0 && waitingAt === null) waitingAt = at;
     if (waits.size === 0 && waitingAt !== null) {

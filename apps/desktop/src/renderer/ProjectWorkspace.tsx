@@ -418,6 +418,27 @@ function queuedFollowUpKey(conversationId: string): string {
   return `fielora:queued-follow-ups:${conversationId}`;
 }
 
+function queuedFollowUpsPausedKey(conversationId: string): string {
+  return `fielora:queued-follow-ups-paused:${conversationId}`;
+}
+
+const pausedFollowUpQueues = new Set<string>();
+function readQueuedFollowUpsPaused(conversationId: string): boolean {
+  if (!conversationId) return false;
+  if (pausedFollowUpQueues.has(conversationId)) return true;
+  try { return window.localStorage.getItem(queuedFollowUpsPausedKey(conversationId)) === 'true'; }
+  catch { return true; }
+}
+
+function persistQueuedFollowUpsPaused(conversationId: string, paused: boolean) {
+  if (paused) pausedFollowUpQueues.add(conversationId);
+  if (paused) window.localStorage.setItem(queuedFollowUpsPausedKey(conversationId), 'true');
+  else {
+    window.localStorage.removeItem(queuedFollowUpsPausedKey(conversationId));
+    pausedFollowUpQueues.delete(conversationId);
+  }
+}
+
 function readQueuedFollowUps(conversationId: string): QueuedFollowUp[] {
   if (!conversationId) return [];
   try {
@@ -735,6 +756,10 @@ export function ProjectWorkspace({ onNow, onBrowse, onFields, onSettings, newCon
   const [streamingStep, setStreamingStep] = useState(0);
   const [agentRun, setAgentRun] = useState<AgentRunView | null>(null);
   const [agentStopping, setAgentStopping] = useState(false);
+  const stoppingAgentRunsRef = useRef(new Set<string>());
+  const stopEpochsRef = useRef(new Map<string, number>());
+  const [queuedFollowUpsPaused, setQueuedFollowUpsPaused] = useState(false);
+  const [steeringQueueId, setSteeringQueueId] = useState('');
   const [agentEvents, setAgentEvents] = useState<AgentEventView[]>([]);
   const [agentTools, setAgentTools] = useState<AgentToolCallView[]>([]);
   const [agentFileRevisions, setAgentFileRevisions] = useState<FileArtifactRevisionReviewView[]>([]);
@@ -944,6 +969,7 @@ export function ProjectWorkspace({ onNow, onBrowse, onFields, onSettings, newCon
   const agentRunIsCurrent = agentRun?.conversation_id === conversationId;
   const agentRunIsTerminal = agentRunIsCurrent && agentRun ? ['COMPLETED', 'FAILED', 'CANCELLED'].includes(agentRun.status) : false;
   const agentExecuting = agentRunIsCurrent && (agentRun?.status === 'RUNNING' || agentRun?.status === 'QUEUED');
+  const showComposerStop = agentExecuting || agentRunIsCurrent && agentRun?.status === 'WAITING_APPROVAL';
   const awaitingAgentAnswer = agentRunIsCurrent && agentRun?.status === 'PAUSED' && agentRun.error_code === 'AGENT_USER_INPUT_REQUIRED';
   const clarificationSubmissionRef = useRef<{ runId: string; text: string; messageId: string } | null>(null);
   const sortedProjects = useMemo(() => {
@@ -1247,6 +1273,8 @@ export function ProjectWorkspace({ onNow, onBrowse, onFields, onSettings, newCon
     agentFileRevisionsRef.current = fileReviewList.revisions;
     processArtifactToolReceipts(tools);
     agentRunIdRef.current = run.id;
+    if (['COMPLETED', 'FAILED', 'CANCELLED'].includes(run.status)) stoppingAgentRunsRef.current.delete(run.id);
+    setAgentStopping(stoppingAgentRunsRef.current.has(run.id));
     setAgentRun(run); setAgentEvents(events); setAgentTools(tools); setAgentFileRevisions(fileReviewList.revisions); setMcpRuntime(nextMcpRuntime); setAgentProjectionNotice('');
     performance.clearMeasures('fielora.agent.projection');
     performance.measure('fielora.agent.projection', { start: projectionStarted });
@@ -1322,6 +1350,8 @@ export function ProjectWorkspace({ onNow, onBrowse, onFields, onSettings, newCon
     setStreamingOutput('');
     setStreamingStep(0);
     setQueuedFollowUps(readQueuedFollowUps(conversationId));
+    setQueuedFollowUpsPaused(readQueuedFollowUpsPaused(conversationId));
+    setSteeringQueueId('');
     setHistoricalReview(null); setAgentReviewPath('');
     const conversationOverride = conversationId ? localStorage.getItem(`fielora:conversation-permission:${conversationId}`) : null;
     const projectDefault = projectId ? localStorage.getItem(`fielora:project-permission:${projectId}`) : null;
@@ -1703,12 +1733,21 @@ export function ProjectWorkspace({ onNow, onBrowse, onFields, onSettings, newCon
   }
 
   async function cancelAgent() {
-    if (!agentRun || !agentRunIsCurrent || sendingRef.current) return;
+    if (!agentRun || !agentRunIsCurrent || agentRunIsTerminal || stoppingAgentRunsRef.current.has(agentRun.id)) return;
     const selection = agentSelectionRef.current;
-    sendingRef.current = true; setBusy(true); setError(''); setAgentStopping(true);
+    // Stop has its own ownership: an in-flight send/resume must not swallow it
+    // or have its busy flag cleared by a different operation's finally block.
+    stoppingAgentRunsRef.current.add(agentRun.id);
+    stopEpochsRef.current.set(agentRun.conversation_id, (stopEpochsRef.current.get(agentRun.conversation_id) ?? 0) + 1);
+    setError(''); setAgentStopping(true);
+    setQueuedFollowUpsPaused(true);
+    try { persistQueuedFollowUpsPaused(agentRun.conversation_id, true); }
+    catch { setError('本次追加队列已暂停，但未能保存暂停状态。请保留此窗口并重试。'); }
     try { const next = await window.fielora.agent.cancel({ run_id: agentRun.id }); if (sameAgentSelection(agentSelectionRef.current, selection)) await loadAgentRun(next); }
-    catch (reason) { if (sameAgentSelection(agentSelectionRef.current, selection)) setError(reasonMessage(reason)); }
-    finally { if (sameAgentSelection(agentSelectionRef.current, selection)) { sendingRef.current = false; setBusy(false); setAgentStopping(false); } }
+    catch (reason) {
+      stoppingAgentRunsRef.current.delete(agentRun.id);
+      if (sameAgentSelection(agentSelectionRef.current, selection)) { setError(reasonMessage(reason)); setAgentStopping(false); }
+    }
   }
 
   async function retryAgent() {
@@ -1870,6 +1909,10 @@ export function ProjectWorkspace({ onNow, onBrowse, onFields, onSettings, newCon
     const next = readQueuedFollowUps(conversation.id).filter((item) => item.id !== id);
     persistQueuedFollowUps(conversation.id, next);
     setQueuedFollowUps(next);
+    if (next.length === 0) {
+      persistQueuedFollowUpsPaused(conversation.id, false);
+      setQueuedFollowUpsPaused(false);
+    }
   }
 
   function editQueuedFollowUp(item: QueuedFollowUp) {
@@ -1913,6 +1956,10 @@ export function ProjectWorkspace({ onNow, onBrowse, onFields, onSettings, newCon
   async function startQueuedFollowUp(item: QueuedFollowUp) {
     if (!project || !conversation || agentForConversation(activeAgentRef.current, conversationId) || !agentRunIsTerminal) return;
     const selection = agentSelectionRef.current;
+    const stillQueued = () => readQueuedFollowUps(conversation.id).some(queued => queued.id === item.id);
+    const canDispatch = () => stillQueued() && !readQueuedFollowUpsPaused(conversation.id)
+      && sameAgentSelection(agentSelectionRef.current, selection);
+    if (await reconcileQueuedFollowUp(item, selection)) return;
     const workSurface = selectedActiveArtifactContext();
     const provider = effectiveConversationProvider;
     if (!provider || !provider.credential_present) throw new Error('追加任务对应的模型服务当前不可用，请在设置中检查。');
@@ -1920,9 +1967,10 @@ export function ProjectWorkspace({ onNow, onBrowse, onFields, onSettings, newCon
     // another conversation's run. Never turn that reference into execution.
     const previous = await window.fielora.agent.get({ run_id: item.afterRunId });
     if (previous.conversation_id !== conversation.id) throw new Error('这条追加消息属于另一段对话，请移除后重新发送。');
-    if (!sameAgentSelection(agentSelectionRef.current, selection)) return;
+    if (!['COMPLETED', 'CANCELLED', 'FAILED'].includes(previous.status)) throw new Error('前一条任务尚未结束，追加消息已保留。');
+    if (!canDispatch()) return;
     await prepareProviderSend(provider.id, provider.default_model);
-    if (!sameAgentSelection(agentSelectionRef.current, selection)) return;
+    if (!canDispatch()) return;
     let messageId = item.messageId;
     if (!messageId) {
       const message = await window.fielora.conversation.createMessage({
@@ -1932,14 +1980,14 @@ export function ProjectWorkspace({ onNow, onBrowse, onFields, onSettings, newCon
       messageId = message.id;
       const next = readQueuedFollowUps(conversation.id).map((queued) => queued.id === item.id ? { ...queued, messageId } : queued);
       persistQueuedFollowUps(conversation.id, next);
-      if (!sameAgentSelection(agentSelectionRef.current, selection)) return;
+      if (!canDispatch()) return;
       setQueuedFollowUps(next);
       await refreshMessages(conversation.id);
     }
     const selectedHint = item.selectedFilePath ? `\n\nThe currently selected project file is: ${item.selectedFilePath}` : '';
     const images = await historicalInputImages(item.content, conversation.id);
-    if (!sameAgentSelection(agentSelectionRef.current, selection)) return;
-    const started = await window.fielora.agent.start({
+    if (!canDispatch()) return;
+    let started = await window.fielora.agent.start({
         resource_budget: readAppPreferences(window.localStorage).agentResourceBudget,
       field_id: project.field_id, conversation_id: conversation.id,
       user_message_id: messageId,
@@ -1948,7 +1996,15 @@ export function ProjectWorkspace({ onNow, onBrowse, onFields, onSettings, newCon
       attachments: agentImageInputs(images),
       active_work_surface: workSurface,
     });
-    const next = readQueuedFollowUps(conversation.id).filter((queued) => queued.id !== item.id);
+    // A deletion or Stop may arrive after dispatch, before its acknowledgement.
+    // Reconcile that real Run instead of letting it escape the user's control.
+    const held = readQueuedFollowUpsPaused(conversation.id);
+    const removed = !stillQueued();
+    let cancellationFailure: unknown;
+    try { if (held || removed) started = await window.fielora.agent.cancel({ run_id: started.id }); }
+    catch (reason) { cancellationFailure = reason; }
+    const next = readQueuedFollowUps(conversation.id).flatMap((queued) => queued.id !== item.id ? [queued]
+      : held ? [{ ...queued, messageId: null, afterRunId: started.id }] : []);
     persistQueuedFollowUps(conversation.id, next);
     if (!sameAgentSelection(agentSelectionRef.current, selection)) return;
     setQueuedFollowUps(next);
@@ -1957,7 +2013,123 @@ export function ProjectWorkspace({ onNow, onBrowse, onFields, onSettings, newCon
     agentRunIdRef.current = started.id; agentEventsRef.current = []; agentToolsRef.current = []; agentFileRevisionsRef.current = [];
     setAgentRun(started); setAgentEvents([]); setAgentTools([]); setAgentFileRevisions([]); setMcpRuntime(null); setStreamingOutput(''); setStreamingStep(0);
     await loadAgentRun(await window.fielora.agent.get({ run_id: started.id }), true, selection);
+    if (cancellationFailure) throw cancellationFailure;
     if (sameAgentSelection(agentSelectionRef.current, selection)) scrollToLatestAnswer();
+  }
+
+  async function runQueuedFollowUp(item: QueuedFollowUp, explicit = false) {
+    if (sendingRef.current || queuedFollowUpStartingRef.current.has(item.id)) return;
+    const selection = agentSelectionRef.current;
+    queuedFollowUpStartingRef.current.add(item.id);
+    sendingRef.current = true;
+    setBusy(true); setError('');
+    try {
+      if (explicit) {
+        persistQueuedFollowUpsPaused(selection.conversationId, false);
+        setQueuedFollowUpsPaused(false);
+      }
+      await startQueuedFollowUp(item);
+    } catch (reason) {
+      // A failed/lost acknowledgement must require reconciliation on the next
+      // explicit attempt, not a busy-state render loop that resends the item.
+      try { persistQueuedFollowUpsPaused(selection.conversationId, true); } catch { /* in-memory hold remains */ }
+      if (sameAgentSelection(agentSelectionRef.current, selection)) { setQueuedFollowUpsPaused(true); setError(reasonMessage(reason)); }
+    }
+    finally {
+      queuedFollowUpStartingRef.current.delete(item.id);
+      if (sameAgentSelection(agentSelectionRef.current, selection)) { sendingRef.current = false; setBusy(false); }
+      else if (agentSelectionRef.current.projectId === selection.projectId && agentSelectionRef.current.conversationId === selection.conversationId) {
+        setQueuedFollowUps(readQueuedFollowUps(selection.conversationId));
+        setQueuedFollowUpsPaused(readQueuedFollowUpsPaused(selection.conversationId));
+      }
+    }
+  }
+
+  async function reconcileQueuedFollowUp(item: QueuedFollowUp, selection: typeof agentSelectionRef.current): Promise<boolean> {
+    if (!item.messageId) return false;
+    const runs = await window.fielora.agent.list({ conversation_id: selection.conversationId });
+    for (const run of runs) {
+      let cursor = 0;
+      for (;;) {
+        const events = await window.fielora.agent.events({ run_id: run.id, after_sequence: cursor, limit: 500 });
+        const consumed = events.some(event => {
+          const payload = event.payload as Record<string, unknown> | null;
+          return payload?.user_message_id === item.messageId
+            && (event.kind === 'RUN_CREATED' || event.kind === 'RUN_RESUMED' && payload?.kind === 'USER_DIRECTION_RECEIVED');
+        });
+        if (consumed) {
+          const queue = readQueuedFollowUps(selection.conversationId).filter(queued => queued.id !== item.id);
+          persistQueuedFollowUps(selection.conversationId, queue);
+          if (sameAgentSelection(agentSelectionRef.current, selection)) {
+            setQueuedFollowUps(queue);
+            await refreshMessages(selection.conversationId);
+            await loadAgentRun(runs[0] ?? run, true, selection);
+          }
+          return true;
+        }
+        if (events.length < 500) break;
+        cursor = events.at(-1)!.sequence;
+      }
+    }
+    return false;
+  }
+
+  async function steerQueuedFollowUp(item: QueuedFollowUp) {
+    if (sendingRef.current || !agentRun || !agentRunIsCurrent || agentRunIsTerminal || agentStopping) return;
+    const selection = agentSelectionRef.current;
+    const runId = agentRun.id;
+    const stopEpoch = stopEpochsRef.current.get(selection.conversationId) ?? 0;
+    const wasHeld = readQueuedFollowUpsPaused(selection.conversationId);
+    const stillWanted = () => sameAgentSelection(agentSelectionRef.current, selection)
+      && !stoppingAgentRunsRef.current.has(runId)
+      && (stopEpochsRef.current.get(selection.conversationId) ?? 0) === stopEpoch
+      && readQueuedFollowUps(selection.conversationId).some(queued => queued.id === item.id);
+    sendingRef.current = true; setBusy(true); setSteeringQueueId(item.id); setError('');
+    try {
+      if (await reconcileQueuedFollowUp(item, selection)) return;
+      if (!stillWanted()) return;
+      // If completion wins the pause race, this message must remain visible for
+      // an explicit next action, never silently become a new Run.
+      persistQueuedFollowUpsPaused(selection.conversationId, true);
+      setQueuedFollowUpsPaused(true);
+      let run = await window.fielora.agent.pause({ run_id: runId });
+      const deadline = Date.now() + 120000;
+      while (['QUEUED', 'RUNNING', 'WAITING_APPROVAL'].includes(run.status)) {
+        if (!stillWanted()) return;
+        if (Date.now() >= deadline) throw new Error('当前动作仍在收敛，纠正尚未应用。消息已保留，可以稍后重试或停止任务。');
+        await new Promise(resolve => setTimeout(resolve, 200));
+        run = await window.fielora.agent.get({ run_id: runId });
+      }
+      if (!stillWanted()) return;
+      if (run.status !== 'PAUSED') throw new Error('当前任务已经结束，纠正尚未应用。消息已保留，可作为下一条任务发送。');
+      let messageId = item.messageId;
+      if (!messageId) {
+        const message = await window.fielora.conversation.createMessage({ conversation_id: selection.conversationId,
+          role: 'USER', content: item.content, status: 'COMPLETED', provider_config_id: null, model_id: null, invocation_id: null, references: [] });
+        messageId = message.id;
+        const queue = readQueuedFollowUps(selection.conversationId).map(queued => queued.id === item.id ? { ...queued, messageId } : queued);
+        persistQueuedFollowUps(selection.conversationId, queue);
+        if (sameAgentSelection(agentSelectionRef.current, selection)) setQueuedFollowUps(queue);
+      }
+      if (!stillWanted()) return;
+      let resumed = await window.fielora.agent.resume({ run_id: runId, direction_message_id: messageId });
+      const removedAfterDispatch = !readQueuedFollowUps(selection.conversationId).some(queued => queued.id === item.id);
+      let cancellationFailure: unknown;
+      if (removedAfterDispatch) {
+        persistQueuedFollowUpsPaused(selection.conversationId, true);
+        try { resumed = await window.fielora.agent.cancel({ run_id: runId }); }
+        catch (reason) { cancellationFailure = reason; }
+      }
+      const queue = readQueuedFollowUps(selection.conversationId).filter(queued => queued.id !== item.id);
+      persistQueuedFollowUps(selection.conversationId, queue);
+      if (!wasHeld && !removedAfterDispatch && (stopEpochsRef.current.get(selection.conversationId) ?? 0) === stopEpoch) persistQueuedFollowUpsPaused(selection.conversationId, false);
+      if (!sameAgentSelection(agentSelectionRef.current, selection)) return;
+      setQueuedFollowUps(queue); setQueuedFollowUpsPaused(readQueuedFollowUpsPaused(selection.conversationId));
+      await refreshMessages(selection.conversationId);
+      await loadAgentRun(resumed);
+      if (cancellationFailure) throw cancellationFailure;
+    } catch (reason) { if (sameAgentSelection(agentSelectionRef.current, selection)) setError(reasonMessage(reason)); }
+    finally { if (sameAgentSelection(agentSelectionRef.current, selection)) { sendingRef.current = false; setBusy(false); setSteeringQueueId(''); } }
   }
 
   async function answerAgentQuestion(content: string, run: AgentRunView) {
@@ -2048,6 +2220,10 @@ export function ProjectWorkspace({ onNow, onBrowse, onFields, onSettings, newCon
         activeConversation = synced;
         if (sameAgentSelection(agentSelectionRef.current, selection)) setConversations((items) => items.map((item) => item.id === synced.id ? synced : item));
       }
+      if (readQueuedFollowUps(targetConversationId).length === 0) {
+        persistQueuedFollowUpsPaused(targetConversationId, false);
+        if (sameAgentSelection(agentSelectionRef.current, selection)) setQueuedFollowUpsPaused(false);
+      }
       const runImages = readyImageAttachments.length ? readyImageAttachments : await historicalInputImages(userText, targetConversationId);
       const visibleMessage = readyTextAttachments.length > 0 ? `${userText}\n\n附件：${readyTextAttachments.map((item) => item.name).join('、')}` : userText;
       const userMessage = await window.fielora.conversation.createMessage({
@@ -2104,20 +2280,10 @@ export function ProjectWorkspace({ onNow, onBrowse, onFields, onSettings, newCon
 
   useEffect(() => {
     const next = queuedFollowUps[0];
-    if (!next || !agentRunIsTerminal || agentForConversation(activeAgentRef.current, conversationId) || queuedFollowUpStartingRef.current.has(next.id)) return;
-    const selection = agentSelectionRef.current;
-    queuedFollowUpStartingRef.current.add(next.id);
-    setBusy(true);
-    void startQueuedFollowUp(next)
-      .catch((reason) => { if (sameAgentSelection(agentSelectionRef.current, selection)) setError(reasonMessage(reason)); })
-      .finally(() => {
-        queuedFollowUpStartingRef.current.delete(next.id);
-        if (sameAgentSelection(agentSelectionRef.current, selection)) setBusy(false);
-        // A return to the source page may have skipped this still-in-flight
-        // item. Re-read only that page's durable queue after releasing it.
-        else if (agentSelectionRef.current.projectId === selection.projectId && agentSelectionRef.current.conversationId === selection.conversationId) setQueuedFollowUps(readQueuedFollowUps(selection.conversationId));
-      });
-  }, [agentRun?.id, agentRun?.status, conversationId, queuedFollowUps]);
+    if (!next || !agentRunIsCurrent || agentRun?.status !== 'COMPLETED' || queuedFollowUpsPaused
+      || readQueuedFollowUpsPaused(conversationId) || agentForConversation(activeAgentRef.current, conversationId)) return;
+    void runQueuedFollowUp(next);
+  }, [agentRun?.id, agentRun?.status, conversationId, queuedFollowUps, queuedFollowUpsPaused, busy]);
 
   function selectedActiveArtifactContext() {
     const tab = dockTabsRef.current.find((candidate) => candidate.id === activeDockTabId);
@@ -2966,9 +3132,9 @@ export function ProjectWorkspace({ onNow, onBrowse, onFields, onSettings, newCon
           {queuedFollowUps.length > 0 && <section className="queued-follow-up-stack" aria-label="排队中的追加消息" data-testid="queued-follow-up-stack">
             {queuedFollowUps.map((item, index) => <article className="queued-follow-up-card" key={item.id} data-testid="queued-follow-up-card">
               <div className="queued-follow-up-main"><span className="queued-follow-up-index" aria-hidden="true">{index + 1}</span><strong title={item.content}>{item.content}</strong></div>
-              <p className="queued-follow-up-status" data-testid="queued-follow-up-status" data-after-run-id={item.afterRunId}><span aria-hidden="true"/>{agentRun?.status === 'PAUSED' ? '当前任务已暂停；继续或停止后处理这条消息' : '将在当前任务结束后继续处理'}</p>
+              <p className="queued-follow-up-status" data-testid="queued-follow-up-status" data-after-run-id={item.afterRunId}><span aria-hidden="true"/>{steeringQueueId === item.id ? '正在等待当前动作结束，再应用纠正…' : queuedFollowUpsPaused || agentRunIsTerminal && agentRun?.status !== 'COMPLETED' ? '消息已保留，等待你继续处理' : agentRun?.status === 'PAUSED' ? '当前任务已暂停；可用这条消息调整方向' : '将在当前任务完成后继续处理'}</p>
               <div className="queued-follow-up-actions">
-                <button type="button" className="queued-follow-up-adjust" onClick={() => editQueuedFollowUp(item)}><AppIcon name="forward"/><span>调整方向</span></button>
+                <button type="button" className="queued-follow-up-adjust" disabled={busy || agentStopping} onClick={() => void (agentRunIsTerminal ? runQueuedFollowUp(item, true) : steerQueuedFollowUp(item))} data-testid="queued-follow-up-apply"><AppIcon name="forward"/><span>{agentRunIsTerminal ? '继续处理' : '调整方向'}</span></button>
                 <button type="button" aria-label="删除排队消息" title="删除排队消息" onClick={() => removeQueuedFollowUp(item.id)}><AppIcon name="delete"/></button>
                 <button type="button" className={queuedFollowUpMenuId === item.id ? 'active' : ''} aria-label="更多排队操作" aria-expanded={queuedFollowUpMenuId === item.id} onClick={() => setQueuedFollowUpMenuId((current) => current === item.id ? '' : item.id)}><AppIcon name="more"/></button>
               </div>
@@ -3006,10 +3172,10 @@ export function ProjectWorkspace({ onNow, onBrowse, onFields, onSettings, newCon
                 {activeProviders.length > 1 ? <SelectMenu className="composer-menu-picker configured-model-picker" value={effectiveConversationProvider?.id ?? ''} ariaLabel="模型" testId="conversation-model" placement="top" options={[{ value: '', label: '选择模型' }, ...activeProviders.map((provider) => ({ value: provider.id, label: provider.default_model, description: `${provider.display_name}${provider.credential_present ? '' : ' · 需要凭据'}`, disabled: !provider.credential_present }))]} onChange={(value) => void updateConversationSelection(value)} /> : effectiveConversationProvider && <span className="composer-model-label" title={effectiveConversationProvider.display_name}>{effectiveConversationProvider.default_model}</span>}
                 <TooltipButton type="button" className={`composer-icon-button voice-button ${listening ? 'active' : ''}`} tooltip={listening ? '停止语音输入' : '语音输入'} placement="top" variant="default" onClick={toggleVoiceInput} aria-label={listening ? '停止语音输入' : '开始语音输入'} data-testid="composer-voice"><AppIcon name="microphone"/></TooltipButton>
                 {foregroundAgent && !awaitingAgentAnswer && prompt.trim() ? <>
-                  {agentExecuting && <TooltipButton type="button" className="composer-icon-button composer-running-stop" tooltip="停止当前任务" placement="top" variant="default" aria-label="停止 Agent" onClick={() => void cancelAgent()} data-testid="stop-agent-secondary"><AppIcon name="stop"/></TooltipButton>}
+                  {showComposerStop && <TooltipButton type="button" className="composer-icon-button composer-running-stop" disabled={agentStopping} tooltip={agentStopping ? '正在停止' : '停止当前任务'} placement="top" variant="default" aria-label="停止 Agent" onClick={() => void cancelAgent()} data-testid="stop-agent-secondary"><AppIcon name="stop"/></TooltipButton>}
                   <TooltipButton className="composer-submit" type="submit" tooltip="当前任务完成后继续处理" placement="top" variant="default" disabled={busy} aria-label="追加到当前任务" data-testid="send-steering"><AppIcon name="send" weight="bold"/></TooltipButton>
-                </> : agentExecuting
-                  ? <button type="button" className="composer-submit stop" aria-label="停止 Agent" onClick={() => void cancelAgent()} data-testid="stop-agent"><AppIcon name="stop"/></button>
+                </> : showComposerStop
+                  ? <button type="button" className="composer-submit stop" disabled={agentStopping} aria-label={agentStopping ? '正在停止 Agent' : '停止 Agent'} onClick={() => void cancelAgent()} data-testid="stop-agent"><AppIcon name="stop"/></button>
                   : <button className="composer-submit" type="submit" disabled={busy || (!prompt.trim() && !composerAttachments.some((item) => item.status === 'READY'))} aria-label={awaitingAgentAnswer ? "回答并继续" : "发送"} data-testid="send-message"><AppIcon name="send" weight="bold"/></button>}
               </div>
             </div>

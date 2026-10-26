@@ -17,7 +17,14 @@ app.whenReady().then(async () => {
   try {
     server = http.createServer((req, res) => {
       if (req.url === '/hang') return;
-      if (req.url === '/errors') {
+      if (req.url.startsWith('/missing.')) {
+        res.writeHead(404); res.end();
+      } else if (req.url.startsWith('/disconnected.js')) {
+        req.socket.destroy();
+      } else if (req.url === '/resource-errors') {
+        res.setHeader('Content-Type', 'text/html');
+        res.end('<!doctype html><link rel="stylesheet" href="/missing.css?private=never-retain"><main>Resource failures</main><script src="/missing.js?token=never-retain"></script><script src="/disconnected.js?secret=never-retain"></script>');
+      } else if (req.url === '/errors') {
         res.setHeader('Content-Type', 'text/html');
         res.end('<!doctype html><button onclick="throw new Error(\'click-diagnostic\')">Broken click</button><script>throw new ReferenceError("cIdx is not defined")</script>');
       } else if (req.url === '/long') {
@@ -120,8 +127,16 @@ app.whenReady().then(async () => {
     assert.equal(broken.success, true, 'Input delivery is separate from a JavaScript exception');
     assert.ok(broken.page_errors.some(e => e.message.includes('click-diagnostic')));
     results.runtime_errors = broken.page_errors;
+    page = await call({ action: 'open', url: base + '/resource-errors' });
+    assert.equal(page.page_loaded, true);
+    assert.ok(page.resource_errors.some(e => e.url === base + '/missing.js' && e.status_code === 404 && e.resource_type === 'script'));
+    assert.ok(page.resource_errors.some(e => e.url === base + '/missing.css' && e.status_code === 404));
+    assert.ok(page.resource_errors.some(e => e.url === base + '/disconnected.js' && /^net::ERR_/.test(e.network_error)));
+    assert.ok(!JSON.stringify(page.resource_errors).includes('never-retain'));
+    results.resource_failures = page.resource_errors;
     page = await call({ action: 'open', url: base });
     assert.deepEqual(page.page_errors, [], 'A new document does not inherit old errors');
+    assert.deepEqual(page.resource_errors, [], 'A new document does not inherit old resource failures');
     page = await call({ action: 'reload' }); assert.deepEqual(page.page_errors, []);
     // A short DOM tree with long text used to claim partial=false at 24k chars.
     page = await call({ action: 'open', url: base + '/long' });

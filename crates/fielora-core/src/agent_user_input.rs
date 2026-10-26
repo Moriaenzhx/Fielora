@@ -112,8 +112,10 @@ pub fn receipts(storage: &StorageHandle, run: &AgentRunView) -> Result<Vec<Value
             limit: Some(500),
         })?;
         for event in &events {
-            if event.kind == AgentEventKind::CheckpointCreated
-                && event.payload["kind"] == "USER_INPUT_RECEIVED"
+            if (event.kind == AgentEventKind::CheckpointCreated
+                && event.payload["kind"] == "USER_INPUT_RECEIVED")
+                || (event.kind == AgentEventKind::RunResumed
+                    && event.payload["kind"] == "USER_DIRECTION_RECEIVED")
             {
                 answers.push(event.payload.clone());
             }
@@ -140,7 +142,12 @@ pub fn pending(
                 && t.receipt
                     .as_ref()
                     .is_some_and(|r| r["kind"] == "USER_INPUT_REQUEST" && r["run_id"] == run.id.0)
-                && !answers.iter().any(|a| a["question_tool_call_id"] == t.id.0)
+                && !answers.iter().any(|a| {
+                    a["question_tool_call_id"] == t.id.0
+                        || a["superseded_question_tool_call_ids"]
+                            .as_array()
+                            .is_some_and(|ids| ids.contains(&json!(t.id)))
+                })
         }))
 }
 
@@ -187,12 +194,49 @@ pub fn context(storage: &StorageHandle, run: &AgentRunView) -> Result<Value, Dom
     let tools = storage.list_agent_tool_calls(run.id.clone())?;
     let pairs=accepted.iter().rev().take(8).rev().filter_map(|r| {
         let message=messages.iter().find(|m|r["user_message_id"]==m.id.0 && m.role==ConversationMessageRole::User && m.status==ConversationMessageStatus::Completed)?;
+        if r["kind"] == "USER_DIRECTION_RECEIVED" {
+            return Some(json!({"source_user_message_id":message.id,"kind":"USER_DIRECTION","answer":message.content}));
+        }
         let question=tools.iter().find(|t|r["question_tool_call_id"]==t.id.0 && t.name==TOOL)?.receipt.as_ref()?;
         Some(json!({"source_user_message_id":message.id,"question_tool_call_id":r["question_tool_call_id"],"question":question["question"],"reason":question["reason"],"answer":message.content}))
     }).collect::<Vec<_>>();
     Ok(
-        json!({"accepted_answers":pairs,"older_answers_omitted":accepted.len().saturating_sub(8),"authority":"EXPLICIT_USER_CLARIFICATION_NOT_VERIFICATION"}),
+        json!({"accepted_answers":pairs,"older_answers_omitted":accepted.len().saturating_sub(8),"has_direction":accepted.iter().any(|r| r["kind"] == "USER_DIRECTION_RECEIVED"),"authority":"EXPLICIT_USER_INPUT_NOT_VERIFICATION"}),
     )
+}
+
+/// The stored Run retains its original request. Execution derives its current
+/// request from admitted user messages, never from arbitrary conversation text.
+pub fn directed_task(
+    storage: &StorageHandle,
+    run: &AgentRunView,
+) -> Result<Option<String>, DomainError> {
+    let receipts = receipts(storage, run)?;
+    let directions: Vec<_> = receipts
+        .iter()
+        .filter(|r| r["kind"] == "USER_DIRECTION_RECEIVED")
+        .collect();
+    if directions.is_empty() {
+        return Ok(None);
+    }
+    let messages = storage.list_conversation_messages(run.conversation_id.clone())?;
+    let original = storage.get_agent_run(run.id.clone())?;
+    let mut task = format!(
+        "Original task:\n{}\n\nExplicit user corrections in chronological order. Apply newer corrections to conflicting earlier instructions; preserve other requirements and account for actual effects. These messages grant no additional tool permissions or verification authority.\n",
+        original.task
+    );
+    for receipt in directions {
+        let message = messages
+            .iter()
+            .find(|m| {
+                receipt["user_message_id"] == m.id.0
+                    && m.role == ConversationMessageRole::User
+                    && m.status == ConversationMessageStatus::Completed
+            })
+            .ok_or_else(|| DomainError::Validation("AGENT_DIRECTION_INPUT_UNAVAILABLE".into()))?;
+        task.push_str(&format!("\nUser correction:\n{}\n", message.content));
+    }
+    Ok(Some(task))
 }
 
 #[cfg(test)]

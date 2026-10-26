@@ -74,6 +74,20 @@ export class BrowserStaticPreview {
       closure: 'HOST_STATIC_RESPONSES_NATIVE_PAGE_REQUESTS', scope: 'RECORDED_ASSERTION_INPUTS_ONLY' };
   }
 
+  /** Only the owning native page may resolve root-relative resources into its mount. */
+  redirectSubresource(value: string, method: string, resourceType: string, documentUrl: string): string | undefined {
+    try {
+      const target = new URL(value), document = new URL(documentUrl), base = new URL(this.url);
+      if (method !== 'GET' || ['mainFrame', 'subFrame'].includes(resourceType)
+        || target.username || target.password || document.username || document.password
+        || document.origin !== base.origin || !document.pathname.startsWith(this.prefix)
+        || target.origin !== base.origin || target.pathname.startsWith(this.prefix)
+        || this.isBuiltinEmptyIcon(value, method)) return undefined;
+      target.pathname = this.prefix + target.pathname.slice(1);
+      return target.href;
+    } catch { return undefined; }
+  }
+
   isBuiltinEmptyIcon(url: string, method: string): boolean {
     try { const requested = new URL(url); return method === 'GET' && requested.origin === new URL(this.url).origin && requested.pathname === '/favicon.ico'; }
     catch { return false; }

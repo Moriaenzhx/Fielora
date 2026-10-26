@@ -57,6 +57,7 @@ try {
 
   const conversation = await create('失败后追问原因');
   const failed = await settled(await start(conversation, '修复失败样例'));
+  await writeFile(path.join(evidence,'failed-attempt.json'),JSON.stringify(failed,null,2));
   assert.equal(failed.run.status,'PAUSED');
   assert.ok(failed.tools.some(t=>t.name==='replace_text'&&t.status==='FAILED'&&t.error_code==='AGENT_TEXT_MATCH_FAILED'));
   assert.ok(!failed.tools.some(t=>t.effect==='WORKSPACE_WRITE'&&t.status==='COMPLETED'));
@@ -103,6 +104,7 @@ try {
   await cdp.eval(`window.fielora.conversation.createMessage({conversation_id:${JSON.stringify(conversation.id)},role:'ASSISTANT',content:'旧的错误解读：红线表示勾选后应保留。',status:'COMPLETED',provider_config_id:null,model_id:null,invocation_id:null,references:[]})`);
   const exact='对啊 为什么你之前做的检查不是被红色划线标记（应隐藏/删除）这部分';
   const checkpointed=await settled(await start(conversation,exact,attachments,2));
+  await writeFile(path.join(evidence,'intent-checkpoint.json'),JSON.stringify(checkpointed,null,2));
   assert.equal(checkpointed.run.status,'PAUSED');
   assert.equal(checkpointed.run.error_code,'AGENT_BUDGET_EXHAUSTED');
   assert.equal(checkpointed.tools.length,2);
@@ -190,6 +192,49 @@ try {
   assert.ok(repair.tools.some(t=>t.name==='replace_text'&&t.status==='COMPLETED'));
   assert.ok(repair.tools.some(t=>t.name==='run_command'&&t.receipt.success===true));
   assert.ok((await readFile(path.join(projectRoot,'settings.js'),'utf8')).includes("value = 'right'"));
+  // Follow-up must read the actual intermediate immutable repair after restart,
+  // even when the current disk and Git baseline describe different states.
+  await writeFile(path.join(projectRoot,'settings.js'), "exports.value = 'later';\n");
+  await restartApp();
+  const pendingReport=await settled(await start(conversation,'只读说明刚才的逐次修改',[],1));
+  assert.equal(pendingReport.run.status,'PAUSED');
+  assert.equal(pendingReport.run.error_code,'AGENT_BUDGET_EXHAUSTED');
+  assert.equal(pendingReport.events.filter(e=>e.kind==='RUN_COMPLETED').length,0);
+  assert.deepEqual(pendingReport.tools.map(t=>t.name),['read_run_history']);
+  await writeFile(path.join(evidence,'pending-report.json'),JSON.stringify(pendingReport,null,2));
+  await restartApp();
+  await cdp.eval(`window.fielora.agent.resume({run_id:${JSON.stringify(pendingReport.run.id)}})`);
+  const changeReview=await settled(pendingReport.run);
+  await writeFile(path.join(evidence,'historical-change-review.json'),JSON.stringify(changeReview,null,2));
+  assert.equal(changeReview.run.status,'COMPLETED');
+  assert.deepEqual(changeReview.tools.map(t=>t.name),['read_run_history','read_run_history','finish_task']);
+  assert.equal(changeReview.events.filter(e=>e.kind==='MODEL_COMPLETED' && e.payload.prompt.request_phase==='REPORT_REVIEW').length,0);
+  assert.equal(changeReview.events.filter(e=>e.kind==='RUN_COMPLETED').length,1);
+  const historical=changeReview.tools[0].receipt.history.file_change;
+  assert.equal(historical.run_id,repair.run.id);
+  assert.equal(historical.current_matches_after,false);
+  assert.match(historical.before_excerpt.source.text,/value = 'wrong'/);
+  assert.match(historical.after_excerpt.source.text,/value = 'right'/);
+  assert.equal(changeReview.events.find(e=>e.kind==='RUN_COMPLETED').payload.verification_passed,false);
+  const report=changeReview.tools.at(-1).receipt;
+  assert.equal(report.report_evidence[0].receipts[0].basis,'history');
+  assert.equal(report.report_evidence[0].semantic_claims_verified,false);
+  assert.equal(report.proposal.report_review,undefined);
+  assert.equal(changeReview.events.filter(e=>e.kind==='MODEL_COMPLETED').length,3);
+  assert.match(report.delivery,/历史记录，非本轮验证/);
+  assert.match(report.delivery,/当前文件已是 later/);
+  await show(conversation);
+  await wait("document.body.innerText.includes('历史记录，非本轮验证') && document.body.innerText.includes('当前文件已是 later')");
+  await captureScreenshot(cdp,path.join(evidence,'scoped-delivery.png'));
+  await restartApp();
+  await show(conversation);
+  await wait("document.body.innerText.includes('历史记录，非本轮验证') && document.body.innerText.includes('当前文件已是 later')");
+  const restoredReport=await settled(changeReview.run);
+  assert.equal(restoredReport.run.next_sequence,changeReview.run.next_sequence);
+  assert.deepEqual(restoredReport.tools,changeReview.tools);
+  assert.equal(await readFile(path.join(projectRoot,'settings.js'),'utf8'),"exports.value = 'later';\n");
+  const unchangedRepair=await cdp.eval(`window.fielora.agent.get({run_id:${JSON.stringify(repair.run.id)}})`);
+  assert.equal(unchangedRepair.next_sequence,repair.run.next_sequence);
   await writeFile(path.join(evidence,'summary.json'),JSON.stringify({status:'PASS',model:'deterministic fixture; no real provider',failed:failed.run.id,explanation:explanation.run.id,access:access.run.id,accessWrites:0,deniedEffects:3,accessModelCalls:1,repair:repair.run.id,explanationTools:explanation.tools.length,explanationWrites:0,coreRestart:true,requestIntent:{exact:answered.run.id,restored:true,paraphrases:3,mixedGuard:mixed.run.id,unverifiedWriteGuard:unverified.run.id,visualSemantics:'NOT_TESTED; fixture asserts prompt inputs, not model understanding'}},null,2));
   console.log('AGENT_TURN_CONTEXT_E2E=PASS');
 

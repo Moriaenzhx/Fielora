@@ -125,9 +125,17 @@ pub fn requirements(
         Some(Intent::WorkspaceChange) => (true, true),
         None => (action_hint, change_hint),
     };
-    let attempted_action = tools.iter().any(|t| t.effect != AgentToolEffect::Observe);
+    let superseded = |t: &&AgentToolCallView| {
+        t.status == AgentToolStatus::Cancelled
+            && t.error_code.as_deref() == Some("USER_DIRECTION_SUPERSEDED")
+    };
+    let attempted_action = tools
+        .iter()
+        .filter(|t| !superseded(t))
+        .any(|t| t.effect != AgentToolEffect::Observe);
     let attempted_write = tools
         .iter()
+        .filter(|t| !superseded(t))
         .any(|t| t.effect == AgentToolEffect::WorkspaceWrite);
     (action || attempted_action, change || attempted_write)
 }
@@ -135,6 +143,31 @@ pub fn requirements(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn superseded_unexecuted_proposals_do_not_force_unwanted_writes() {
+        let mut proposal = tool("Explain only", "answer_only");
+        proposal.name = "create_file".into();
+        proposal.effect = AgentToolEffect::WorkspaceWrite;
+        proposal.status = AgentToolStatus::Cancelled;
+        proposal.error_code = Some("USER_DIRECTION_SUPERSEDED".into());
+        assert_eq!(
+            requirements(Some(Intent::AnswerOnly), &[proposal.clone()], true, true),
+            (false, false)
+        );
+        // Ordinary cancellation may have interrupted an already-started effect.
+        proposal.error_code = Some("USER_CANCELLED".into());
+        assert_eq!(
+            requirements(Some(Intent::AnswerOnly), &[proposal.clone()], false, false),
+            (true, true)
+        );
+        proposal.status = AgentToolStatus::Completed;
+        proposal.error_code = None;
+        assert_eq!(
+            requirements(Some(Intent::AnswerOnly), &[proposal], false, false),
+            (true, true)
+        );
+    }
 
     #[test]
     fn typographic_quotes_preserve_the_original_source_without_accepting_paraphrases() {

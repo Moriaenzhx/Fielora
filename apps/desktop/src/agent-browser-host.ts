@@ -3,6 +3,7 @@ import type { WorkspaceRuntime } from './workspace-runtime';
 import { browserServerAddress, probeBrowserServer } from './agent-browser-health.ts';
 import { setTimeout as delay } from 'node:timers/promises';
 import { BrowserStaticPreview } from './browser-static-preview.ts';
+import { BrowserOperationDeadline, type BrowserInputReporter } from './browser-input-lifecycle.ts';
 
 type Request = { request_id: string; run_id: string; conversation_id: string; tool_call_id: string; name: string; arguments: Record<string, unknown>; project_root?: string; download_root?: string; field_id?: string; retained_plan?: Record<string, unknown> };
 const actions = ['open', 'inspect', 'reload', 'click', 'fill', 'select', 'scroll', 'screenshot', 'resize', 'request_login', 'download'];
@@ -92,8 +93,17 @@ export class AgentBrowserHost {
     if (!bounded(input.request_id, 100) || !bounded(input.run_id, 100) || !bounded(input.tool_call_id, 100)) return;
     const controller = new AbortController();
     this.pending.set(input.request_id, controller);
-    const deadline = setTimeout(() => controller.abort(), 25_000);
-    const work = this.queue.then(() => this.execute(input, controller.signal));
+    const deadline = new BrowserOperationDeadline(() => controller.abort());
+    // Preserve message order: progress must reach Core before its completion.
+    let updates = Promise.resolve();
+    const send = (method: string, params: unknown) => {
+      updates = updates.then(() => this.request(method, params)).then(() => undefined).catch(() => undefined);
+    };
+    const reporter: BrowserInputReporter = {
+      dialog: progress => { deadline.dialog(progress.state); send('host.browser.progress', { request_id: input.request_id, ...progress }); },
+      late: result => send('host.browser.complete', { request_id: input.request_id, result, final: true }),
+    };
+    const work = this.queue.then(() => this.execute(input, controller.signal, reporter));
     this.queue = work.catch(() => undefined);
     void work.catch(error => {
       if (process.env.FIELORA_E2E === '1') console.warn('[agent-browser-fixture]', input.name, error instanceof Error ? error.message : 'unknown');
@@ -112,11 +122,11 @@ export class AgentBrowserHost {
       return { kind: 'BROWSER', success: false, error_code: code, input_state: 'NOT_DISPATCHED', outcome_unknown: false,
         ...(code === 'BROWSER_UNSUPPORTED_ACTION' ? { allowed_actions: [...actions] } : {}), ...(guidance ? { guidance } : {}) };
     })
-      .then(result => this.request('host.browser.complete', { request_id: input.request_id, result }))
-      .catch(() => undefined).finally(() => { clearTimeout(deadline); this.pending.delete(input.request_id); });
+      .then(result => { send('host.browser.complete', { request_id: input.request_id, result }); return updates; })
+      .catch(() => undefined).finally(() => { deadline.clear(); this.pending.delete(input.request_id); });
   }
 
-  private async execute(input: Request, signal: AbortSignal): Promise<Record<string, unknown>> {
+  private async execute(input: Request, signal: AbortSignal, reporter?: BrowserInputReporter): Promise<Record<string, unknown>> {
     if (signal.aborted) throw new Error('BROWSER_CANCELLED');
     const args = input.arguments;
     if (!args || typeof args !== 'object' || Array.isArray(args)) throw new Error('BROWSER_INVALID_ARGUMENTS');
@@ -209,7 +219,7 @@ export class AgentBrowserHost {
     }
     const result = await runtime.executeAgent(input.run_id, { action, url: args.url as string | undefined, width: args.width as number | undefined, height: args.height as number | undefined,
       snapshot_id: args.snapshot_id as string | undefined, next_snapshot_id: '', ref: args.ref as string | undefined,
-      value: args.value as string | undefined, checks: args.checks as { ref?: string; property: string; expected: string }[] | undefined }, signal);
+      value: args.value as string | undefined, checks: args.checks as { ref?: string; property: string; expected: string }[] | undefined }, signal, reporter);
     if (result.success === false && result.error_code) return { kind: 'BROWSER', action, ...result, case_id: args.case_id, plan_url: plan?.url };
     if (verify && browserHttpUrl(result.url) !== browserHttpUrl(plan!.url)) {
       // The read already advanced the snapshot. Preserve that observation;
@@ -234,6 +244,7 @@ export class AgentBrowserHost {
     }
     const scope = verify && this.staticServers.has(input.run_id) && typeof result.url === 'string'
       && (!Array.isArray(result.page_errors) || result.page_errors.length === 0)
+      && (!Array.isArray(result.resource_errors) || result.resource_errors.length === 0)
       ? runtime.staticVerificationScope(input.run_id, result.url) : undefined;
     return { kind: 'BROWSER', action, ...result, ...(verify ? { case_id: args.case_id, plan_url: plan!.url, requirement: plan!.cases.find(c => c.id === args.case_id)!.requirement, ...(scope ? { verification_scope: scope } : {}) } : {}), ...(screenshot ? { screenshot } : {}) };
   }

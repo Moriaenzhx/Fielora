@@ -160,7 +160,7 @@ test('foreground identity is released on selection and checked by send, queue an
   assert.match(workspace, /loadAgentRun\(await window\.fielora\.agent\.get\(\{ run_id: started\.id \}\), true, selection\)/);
   assert.doesNotMatch(workspace, /loadAgentRun\(await window\.fielora\.agent\.get\(\{ run_id: started\.id \}\), true\)/);
   assert.match(workspace, /clearComposerDraft\(composerDraftKey\(project\.field_id, targetConversationId\), composerDraftSnapshot\)/);
-  assert.match(workspace, /queuedFollowUpStartingRef\.current\.has\(next\.id\)/);
+  assert.match(workspace, /queuedFollowUpStartingRef\.current\.has\(item\.id\)/);
   assert.doesNotMatch(selectionEffect, /queuedFollowUpStartingRef\.current\s*=/);
 });
 

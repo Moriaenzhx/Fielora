@@ -425,7 +425,7 @@ try {
   await appCdp.send('Input.dispatchMouseEvent', { type: 'mouseReleased', x: addressPoint.x, y: addressPoint.y, button: 'right', clickCount: 1 });
   for (let attempt = 0; attempt < 40 && !output.join('').slice(addressContextLogStart).includes('[trusted-context-menu]'); attempt += 1) await new Promise((resolve) => setTimeout(resolve, 50));
   assert.match(output.join('').slice(addressContextLogStart), /\[trusted-context-menu\] editable=true .*items=\d+/);
-  await pressKey(appCdp, 'Escape', 'Escape', 27);
+  assert.equal(await appCdp.evaluate('window.fieloraTest.dismissContextMenu()'), true);
 
   const activePageIdForMenu = await appCdp.evaluate(`window.fielora.browser.getState().then(state=>state.active_page_id)`);
   const pageContextLogStart = output.join('').length;
@@ -434,7 +434,7 @@ try {
   await appCdp.send('Input.dispatchMouseEvent', { type: 'mouseReleased', x: pagePoint.x, y: pagePoint.y, button: 'right', clickCount: 1 });
   for (let attempt = 0; attempt < 40 && !output.join('').slice(pageContextLogStart).includes('[browse-page-context-menu]'); attempt += 1) await new Promise((resolve) => setTimeout(resolve, 50));
   assert.match(output.join('').slice(pageContextLogStart), /\[browse-page-context-menu\].*loaded=true.*items=3/);
-  await pressKey(appCdp, 'Escape', 'Escape', 27);
+  assert.equal(await appCdp.evaluate('window.fieloraTest.dismissContextMenu()'), true);
   checkpoint('trusted-shell-context-menus');
   checkpoint('native-surface-visible');
 
@@ -583,7 +583,7 @@ try {
     await new Promise((resolve) => setTimeout(resolve, 50));
   }
   assert.match(output.join('').slice(contextMenuLogStart), /\[browse-context-menu\].*link=true.*inspect=true.*items=\d+/);
-  await pressKey(webCdp, 'Escape', 'Escape', 27);
+  assert.equal(await appCdp.evaluate('window.fieloraTest.dismissContextMenu()'), true);
   checkpoint('native-context-menu');
 
   await appCdp.evaluate(`(()=>{const input=document.querySelector('[data-testid="browser-address"]');const setter=Object.getOwnPropertyDescriptor(HTMLInputElement.prototype,'value').set;setter.call(input,${JSON.stringify(slowUrl)});input.dispatchEvent(new Event('input',{bubbles:true}));input.form.requestSubmit();return true;})()`);
@@ -834,6 +834,7 @@ try {
   }
   console.log(`Phase 03 Browse Desktop E2E (Slices 01-05, ${mode}): PASS`);
 } finally {
+  await writeFile(path.join(evidenceDir, `${mode}-browser-host.log`), output.join(''));
   appCdp?.close();
   webCdp?.close();
   localCdp?.close();

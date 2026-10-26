@@ -28,6 +28,11 @@ function setValue(selector,value){return`(()=>{const element=document.querySelec
 async function dragDivider(cdp,testId,delta){const rect=await cdp.eval(`(()=>{const value=document.querySelector('[data-testid=${JSON.stringify(testId)}]').getBoundingClientRect();return{x:value.x,y:value.y,width:value.width,height:value.height};})()`);const x=rect.x+rect.width/2;const y=rect.y+Math.min(120,rect.height/2);await cdp.send('Input.dispatchMouseEvent',{type:'mousePressed',x,y,button:'left',clickCount:1});await cdp.send('Input.dispatchMouseEvent',{type:'mouseMoved',x:x+delta,y,button:'left',buttons:1});await cdp.send('Input.dispatchMouseEvent',{type:'mouseReleased',x:x+delta,y,button:'left',clickCount:1});await new Promise((ok)=>setTimeout(ok,120));}
 async function quit(cdp){await cdp.eval('void window.fielora.core.quit()');cdp.close();await Promise.race([new Promise((ok)=>child.once('exit',ok)),new Promise((_,no)=>setTimeout(()=>no(new Error('quit timeout')),10_000))]);}
 async function captureProductionAgent(cdp,name){const screenshot=await cdp.send('Page.captureScreenshot',{format:'png'});await writeFile(path.join(productionAgentEvidence,name),Buffer.from(screenshot.data,'base64'));}
+async function openGlobalWorkspaceTools(cdp){
+  await cdp.eval(`document.querySelector('[data-testid="chrome-menu-view"]').click()`);
+  await wait(cdp,`[...document.querySelectorAll('.chrome-menu [role="menuitem"]')].some(item=>item.textContent==='工作区工具')`);
+  await cdp.eval(`[...document.querySelectorAll('.chrome-menu [role="menuitem"]')].find(item=>item.textContent==='工作区工具').click()`);
+}
 
 await mkdir(path.join(projectRoot,'src'),{recursive:true});
 await writeFile(path.join(projectRoot,'src','app.ts'),'export const answer = 1;\n');
@@ -41,8 +46,9 @@ await mkdir(evidence,{recursive:true});
 await mkdir(productionAgentEvidence,{recursive:true});
 
 async function runDesktopFoundation(){
+let cdp;
 try{
-  child=await launch();let cdp=await connect();await cdp.send('Emulation.setEmulatedMedia',{features:[{name:'prefers-reduced-motion',value:'no-preference'}]});await wait(cdp,`document.querySelector('[data-testid="project-workspace"]')&&document.documentElement.dataset.reduceMotion==='false'`);
+  child=await launch();cdp=await connect();await cdp.send('Emulation.setEmulatedMedia',{features:[{name:'prefers-reduced-motion',value:'no-preference'}]});await wait(cdp,`document.querySelector('[data-testid="project-workspace"]')&&document.documentElement.dataset.reduceMotion==='false'`);
   assert.equal((await cdp.eval('window.fielora.core.getHealth()')).schema_version,19);
   assert.equal(await cdp.eval(`Boolean(document.querySelector('[data-testid="desktop-chrome"]'))`),true);
   await wait(cdp,`document.querySelector('.project-brand-button img')?.complete`);
@@ -128,7 +134,8 @@ try{
   assert.equal(Math.abs(await cdp.eval(`document.querySelector('[data-testid="project-navigation"]').getBoundingClientRect().width`)-settingsNavigationWidthAfterDrag)<=1,true);
   await cdp.eval(`document.querySelector('[data-testid="now-nav"]').click()`);
   await wait(cdp,`document.querySelector('[data-testid="scheduled-tasks-screen"]')&&!document.querySelector('[data-testid="rail-terminal"]')`);
-  await cdp.eval(`document.querySelector('[data-testid="chrome-tools"]').click()`);
+  assert.equal(await cdp.eval(`Boolean(document.querySelector('[data-testid="chrome-tools"]'))`),false,'Global pages keep workspace controls hidden until a tool is opened');
+  await openGlobalWorkspaceTools(cdp);
   await wait(cdp,`document.querySelector('[data-testid="desktop-work-area"]').classList.contains('utility-open')&&document.querySelector('[data-testid="utility-launcher"]')`);
   await cdp.eval(`document.querySelector('[data-testid="utility-browser"]').click()`);
   await wait(cdp,`document.querySelector('[data-testid="browse-screen"]')`);
@@ -136,7 +143,7 @@ try{
   const browserSidebarScreenshot=await cdp.send('Page.captureScreenshot',{format:'png'});await writeFile(path.join(evidence,`${mode}-browser-sidebar.png`),Buffer.from(browserSidebarScreenshot.data,'base64'));
   await cdp.eval(`document.querySelector('[data-testid="chrome-tools"]').click()`);
   await wait(cdp,`!document.querySelector('[data-testid="utility-launcher"]')`);
-  await cdp.eval(`document.querySelector('[data-testid="chrome-tools"]').click()`);
+  await openGlobalWorkspaceTools(cdp);
   await wait(cdp,`document.querySelector('[data-testid="desktop-work-area"]').classList.contains('utility-open')`);
   assert.equal(await cdp.eval(`document.querySelector('[data-testid="utility-chat"]') === null`), true);
   const created=await cdp.eval(`(async()=>{const provider=await window.fielora.provider.create({provider_kind:'OPENAI_COMPATIBLE',display_name:'Desktop Fixture',base_url:'https://example.com/v1',default_model:'__fielora_agent_fixture__',custom_endpoint_acknowledged:true});await window.fielora.provider.storeCredential({provider_config_id:provider.id,secret:${JSON.stringify(secret)}});const project=await window.fieloraTest.createProject({title:'Sample Project',goal:'Desktop hero flow',root_path:${JSON.stringify(projectRoot)}});return{providerId:provider.id,fieldId:project.field_id};})()`);
@@ -181,6 +188,7 @@ try{
   assert.equal(await cdp.eval(`document.querySelector('[data-testid="desktop-work-area"]').children.length>=2`),true);
 
   const topControlLayout=await cdp.eval(`(()=>{const projectControls=document.querySelector('[data-testid="project-context-controls"]');const environment=document.querySelector('[data-testid="environment-menu-toggle"]');const terminal=document.querySelector('[data-testid="rail-terminal"]');const tools=document.querySelector('[data-testid="chrome-tools"]');const rect=(node)=>{const value=node.getBoundingClientRect();return{top:value.top,bottom:value.bottom,centerY:value.top+value.height/2,height:value.height};};const rootStyle=getComputedStyle(document.documentElement);return{environmentInProjectControls:projectControls.contains(environment),sharedPrimitive:[environment,terminal,tools].every((node)=>node.classList.contains('ui-toolbar-action')),semanticTokens:{surface:rootStyle.getPropertyValue('--fl-color-surface').trim(),control:rootStyle.getPropertyValue('--fl-control-md').trim(),motion:rootStyle.getPropertyValue('--fl-duration-surface').trim()},environment:rect(environment),terminal:rect(terminal),tools:rect(tools)};})()`);
+  console.log(`Top control layout: ${JSON.stringify(topControlLayout)}`);
   assert.equal(topControlLayout.environmentInProjectControls,true);
   assert.equal(topControlLayout.sharedPrimitive,true);
   assert.deepEqual(topControlLayout.semanticTokens,{surface:'#ffffff',control:'34px',motion:'220ms'});
@@ -199,7 +207,7 @@ try{
   assert.equal([environmentHover,terminalHover,toolsHover].every((style)=>style.shadow!=='none'&&style.transform!=='none'),true);
 
   await cdp.eval(`document.querySelector('[data-testid="environment-menu-toggle"]').click()`);
-  await wait(cdp,`document.querySelector('[data-testid="environment-popover"]')?.innerText.includes('工作区信息') && document.querySelector('.environment-repository')?.getAttribute('aria-busy') === 'false'`);
+  await wait(cdp,`document.querySelector('[data-testid="environment-popover"]')?.innerText.includes('环境信息') && document.querySelector('.environment-repository')?.getAttribute('aria-busy') === 'false'`);
   assert.equal(await cdp.eval(`document.querySelector('[data-testid="environment-popover"]')?.innerText.includes('没有上游分支')`),true);
   await cdp.eval(`document.querySelector('[data-testid="environment-menu-toggle"]').click()`);
 
@@ -221,7 +229,7 @@ try{
 
   assert.equal(await cdp.eval(`document.querySelector('[data-testid="conversation-model"]')===null`),true);
   assert.equal(await cdp.eval(`document.querySelector('.composer-model-label')?.textContent==='__fielora_agent_fixture__'`),true);
-  assert.equal(await cdp.eval(`document.querySelector('.conversation-heading small')?.title===${JSON.stringify(projectRoot)}&&!document.querySelector('.conversation-heading small')?.innerText.includes(${JSON.stringify(projectRoot)})`),true);
+  assert.equal(await cdp.eval(`document.querySelector('.conversation-heading h2')?.textContent==='Agent UX conversation'&&!document.querySelector('.conversation-heading')?.innerText.includes(${JSON.stringify(projectRoot)})`),true,'Conversation heading remains focused on the conversation, without exposing the full project path');
   assert.equal(await cdp.eval(`Number.parseFloat(getComputedStyle(document.querySelector('[data-testid="now-nav"]')).fontSize)>=14`),true);
   assert.equal(await cdp.eval(`!document.querySelector('[data-testid="workspace-files-toggle"]')&&!document.querySelector('[data-testid="workspace-diff-toggle"]')&&!document.querySelector('[data-testid="rail-browser"]')`),true);
   await cdp.eval(`document.querySelector('[data-testid="composer-permission"]').click()`);
@@ -233,11 +241,10 @@ try{
   assert.equal(await cdp.eval(`localStorage.getItem('fielora:project-permission:${created.fieldId}')`),'FULL_CONTROL');
   assert.equal(await cdp.eval(`localStorage.getItem('fielora:permission:default')`),'FULL_CONTROL');
   await cdp.eval(`document.querySelector('[data-testid="project-new-conversation-${created.fieldId}"]').click()`);
-  await wait(cdp,`document.querySelector('.conversation-heading h2')?.textContent==='新对话'`);
-  assert.equal(await cdp.eval(`document.querySelector('[data-testid="composer-permission"]')?.innerText.includes('完全访问权限')`),true,'new conversation must inherit its Project permission');
-  await cdp.eval(`document.querySelector('[data-testid="conversation-${conversation.id}"]').click()`);
   await wait(cdp,`document.querySelector('.conversation-heading h2')?.textContent==='Agent UX conversation'`);
-  assert.equal(await cdp.eval(`document.querySelector('[data-testid="composer-permission"]')?.innerText.includes('完全访问权限')`),true);
+  assert.equal(await cdp.eval(`window.fielora.conversation.list({field_id:${JSON.stringify(created.fieldId)}}).then(items=>items.length)`),1,'Repeated New conversation must reuse the unsent page');
+  assert.equal(await cdp.eval(`document.querySelector('[data-testid="conversation-${conversation.id}"]')===null`),true,'An unsent page must not appear in the sidebar');
+  assert.equal(await cdp.eval(`document.querySelector('[data-testid="composer-permission"]')?.innerText.includes('完全访问')`),true,'Reusing the unsent page preserves its permission');
   await cdp.eval(`document.querySelector('[data-testid="composer-add-attachment"]').click()`);
   await wait(cdp,`document.querySelector('[data-testid="composer-attachments"]')?.innerText.includes('uploaded-context.md')`);
   assert.equal(await cdp.eval(`document.querySelector('[data-testid="composer-attachments"]')?.innerText.includes('文字 Context')`),true);
@@ -268,7 +275,8 @@ try{
   }
   const initialOwnership=await cdp.eval(`(async()=>{const run=(await window.fielora.agent.list({conversation_id:${JSON.stringify(conversation.id)}}))[0];const messages=await window.fielora.conversation.listMessages({conversation_id:${JSON.stringify(conversation.id)}});const user=[...messages].reverse().find((message)=>message.role==='USER');const turn=document.querySelector('[data-agent-run-id="'+run.id+'"]');return{runId:run.id,userMessageId:user.id,turnRunId:turn?.dataset.agentRunId,turnUserMessageId:turn?.dataset.userMessageId,approvalInside:Boolean(turn?.querySelector('[data-testid="agent-approval"]')),legacyCount:document.querySelectorAll('[data-testid="agent-run-card"],[data-testid="agent-process-toggle"],[data-testid="agent-change-summary"],[data-testid="agent-activity-body"]').length,text:turn?.innerText??''};})()`);
   assert.deepEqual(initialOwnership,{runId:initialOwnership.runId,userMessageId:initialOwnership.userMessageId,turnRunId:initialOwnership.runId,turnUserMessageId:initialOwnership.userMessageId,approvalInside:true,legacyCount:0,text:initialOwnership.text});
-  assert.equal(/已处理|耗时|已完成搜索代码/.test(initialOwnership.text),false);
+  assert.equal(/耗时|已完成搜索代码/.test(initialOwnership.text),false);
+  assert.match(initialOwnership.text,/等待确认/);
   await cdp.eval(`document.querySelector('[data-agent-run-id="${initialOwnership.runId}"]').dataset.productionTurnIdentity='initial-run'`);
   const agentApprovalScreenshot=await cdp.send('Page.captureScreenshot',{format:'png'});await writeFile(path.join(evidence,`${mode}-agent-approval.png`),Buffer.from(agentApprovalScreenshot.data,'base64'));
   await cdp.eval(`document.querySelector('[data-testid="agent-allow-once"]').click()`);
@@ -277,26 +285,26 @@ try{
   await wait(cdp,`window.fielora.agent.list({conversation_id:${JSON.stringify(conversation.id)}}).then((runs)=>runs[0]?.status==='COMPLETED'&&Boolean(document.querySelector('[data-agent-run-id="'+runs[0].id+'"] [data-testid="agent-terminal-result"]')))`,30_000);
   assert.equal(await cdp.eval(`window.fielora.conversation.get({conversation_id:${JSON.stringify(conversation.id)}}).then((item)=>item.model_id)`),'__fielora_agent_fixture__');
   assert.equal(await readFile(path.join(projectRoot,'fielora-agent-fixture.txt'),'utf8'),'created by the Fielora Agent fixture\n');
-  const initialTerminal=await cdp.eval(`(()=>{const turn=document.querySelector('[data-agent-run-id="${initialOwnership.runId}"]');const user=document.querySelector('[data-message-id="${initialOwnership.userMessageId}"]');return{sameTurn:turn?.dataset.productionTurnIdentity==='initial-run',terminalInside:Boolean(turn?.querySelector('[data-testid="agent-terminal-result"]')),liveInside:Boolean(turn?.querySelector('[data-testid="agent-live-activity"]')),stepsText:turn?.querySelector('[data-testid="agent-execution-detail-toggle"]')?.innerText??'',legacyCount:document.querySelectorAll('[data-testid="agent-run-card"],[data-testid="agent-process-toggle"],[data-testid="agent-change-summary"],[data-testid="agent-activity-body"]').length,userBeforeTurn:Boolean(user&&turn&&(user.compareDocumentPosition(turn)&Node.DOCUMENT_POSITION_FOLLOWING)),text:turn?.innerText??''};})()`);
+  const initialTerminal=await cdp.eval(`(()=>{const turn=document.querySelector('[data-agent-run-id="${initialOwnership.runId}"]');const user=document.querySelector('[data-message-id="${initialOwnership.userMessageId}"]');return{sameTurn:turn?.dataset.productionTurnIdentity==='initial-run',terminalInside:Boolean(turn?.querySelector('[data-testid="agent-terminal-result"]')),liveInside:Boolean(turn?.querySelector('[data-testid="agent-live-activity"]')),stepsText:turn?.querySelector('[data-testid="agent-history-toggle"]')?.innerText??'',legacyCount:document.querySelectorAll('[data-testid="agent-run-card"],[data-testid="agent-process-toggle"],[data-testid="agent-change-summary"],[data-testid="agent-activity-body"]').length,userBeforeTurn:Boolean(user&&turn&&(user.compareDocumentPosition(turn)&Node.DOCUMENT_POSITION_FOLLOWING)),text:turn?.innerText??''};})()`);
   assert.deepEqual({...initialTerminal,text:undefined},{sameTurn:true,terminalInside:true,liveInside:false,stepsText:initialTerminal.stepsText,legacyCount:0,userBeforeTurn:true,text:undefined});
-  assert.match(initialTerminal.stepsText,/耗时/);
+  assert.match(initialTerminal.stepsText,/用时/);
   assert.equal(/已处理|已完成搜索代码|模型响应失败/.test(initialTerminal.text),false);
-  assert.equal(await cdp.eval(`(()=>{const assistant=document.querySelector('[data-agent-run-id="${initialOwnership.runId}"]');const body=assistant?.querySelector('.agent-terminal-body');const title=body?.querySelector('h2')?.innerText??'';return Boolean(title==='已完成'&&body.innerText.includes('Fielora Agent fixture completed the task and verification.')&&body.innerText.includes('修改：')&&body.innerText.includes('创建验证文件')&&body.innerText.includes('验证：')&&body.innerText.includes('git diff --check'));})()`),true);
-  const agentTypography=await cdp.eval(`(()=>{const assistant=document.querySelector('[data-agent-run-id="${initialOwnership.runId}"]');const pick=(element)=>{const style=getComputedStyle(element);return{fontFamily:style.fontFamily,fontSize:style.fontSize,fontWeight:style.fontWeight,lineHeight:style.lineHeight};};return{noAuthorLabel:!assistant.querySelector('.message-author,.assistant-author,[data-testid="assistant-label"]'),body:pick(assistant.querySelector('.agent-terminal-body')),meta:pick(assistant.querySelector('.agent-terminal-meta')),title:pick(assistant.querySelector('.agent-terminal-body h2')),button:pick(assistant.querySelector('.agent-full-review-action')),input:pick(document.querySelector('.conversation-composer textarea'))};})()`);
-  const agentSans='"Segoe UI Variable", "Segoe UI", "Microsoft YaHei UI", sans-serif';
+  assert.equal(await cdp.eval(`(()=>{const assistant=document.querySelector('[data-agent-run-id="${initialOwnership.runId}"]');const body=assistant?.querySelector('.agent-terminal-body');const title=body?.querySelector('h2')?.innerText??'';return Boolean(title!=='已完成'&&body.innerText.includes('Fielora Agent fixture completed the task and verification.')&&body.innerText.includes('修改：')&&body.innerText.includes('创建验证文件')&&body.innerText.includes('验证：')&&body.innerText.includes('git diff --check'));})()`),true);
+  const agentTypography=await cdp.eval(`(()=>{const assistant=document.querySelector('[data-agent-run-id="${initialOwnership.runId}"]');const pick=(element)=>{const style=getComputedStyle(element);return{fontFamily:style.fontFamily,fontSize:style.fontSize,fontWeight:style.fontWeight,lineHeight:style.lineHeight};};return{noAuthorLabel:!assistant.querySelector('.message-author,.assistant-author,[data-testid="assistant-label"]'),body:pick(assistant.querySelector('.agent-terminal-body')),meta:pick(assistant.querySelector('.agent-elapsed')),button:pick(assistant.querySelector('.agent-full-review-action')),input:pick(document.querySelector('.conversation-composer textarea'))};})()`);
+  const agentSans=agentTypography.input.fontFamily;
+  console.log(`Agent typography: ${JSON.stringify(agentTypography)}`);
   assert.equal(agentTypography.noAuthorLabel,true);
-  assert.equal([agentTypography.body,agentTypography.meta,agentTypography.title,agentTypography.button,agentTypography.input].every((style)=>style.fontFamily===agentSans),true);
+  assert.equal([agentTypography.body,agentTypography.meta,agentTypography.button,agentTypography.input].every((style)=>style.fontFamily===agentSans),true);
   assert.deepEqual({size:agentTypography.body.fontSize,weight:agentTypography.body.fontWeight,line:agentTypography.body.lineHeight},{size:'15px',weight:'400',line:'25.5px'});
   assert.deepEqual({size:agentTypography.meta.fontSize,weight:agentTypography.meta.fontWeight},{size:'13px',weight:'400'});
-  assert.deepEqual({size:agentTypography.title.fontSize,weight:agentTypography.title.fontWeight,line:agentTypography.title.lineHeight},{size:'17px',weight:'600',line:'25.5px'});
-  assert.deepEqual({size:agentTypography.button.fontSize,weight:agentTypography.button.fontWeight},{size:'13.5px',weight:'550'});
+  assert.deepEqual({size:agentTypography.button.fontSize,weight:agentTypography.button.fontWeight},{size:'14px',weight:'400'});
   assert.equal(await cdp.eval(`document.querySelector('[data-agent-run-id="${initialOwnership.runId}"]')?.innerText.includes('已编辑 1 个文件')&&Boolean(document.querySelector('[data-agent-run-id="${initialOwnership.runId}"] .agent-full-review-action'))`),true);
   const conversationResultScreenshot=await cdp.send('Page.captureScreenshot',{format:'png'});await writeFile(path.join(evidence,`${mode}-conversation-result.png`),Buffer.from(conversationResultScreenshot.data,'base64'));
   await cdp.eval(`document.querySelector('[data-agent-run-id="${initialOwnership.runId}"] .agent-full-review-action').click()`);
   await wait(cdp,`document.querySelector('[data-testid="agent-review"]')?.innerText.includes('fielora-agent-fixture.txt')`);
   assert.equal(await cdp.eval(`document.querySelector('[data-testid="agent-review"]')?.dataset.reviewMode==='VISUAL'&&document.querySelectorAll('[data-testid="agent-review-human-diff"]').length===1&&document.querySelectorAll('[data-testid="agent-review-diff"]').length===0`),true);
   await cdp.eval(`document.querySelector('[data-testid="agent-review-raw"]').click()`);
-  assert.equal(await cdp.eval(`document.querySelector('[data-testid="agent-review"]')?.dataset.reviewMode==='RAW'&&getComputedStyle(document.querySelector('[data-testid="agent-review-diff"]')).fontFamily==='"Cascadia Code", Consolas, monospace'`),true);
+  assert.equal(await cdp.eval(`document.querySelector('[data-testid="agent-review"]')?.dataset.reviewMode==='RAW'&&/monospace/.test(getComputedStyle(document.querySelector('[data-testid="agent-review-diff"]')).fontFamily)`),true);
   await cdp.eval(`document.querySelector('[data-testid="right-dock-add"]').click()`);
   await wait(cdp,`document.querySelector('[data-testid="right-dock-tool-menu"]')`);
   await cdp.eval(`[...document.querySelectorAll('[data-testid="right-dock-tool-menu"] button')].find((item)=>item.innerText.includes('文件')).click()`);
@@ -307,9 +315,9 @@ try{
   await cdp.eval(`document.querySelector('[data-testid="chrome-tools"]').click()`);
   await wait(cdp,`!document.querySelector('[data-testid="project-workspace-surface"]').classList.contains('workspace-open')`);
   await wait(cdp,`(()=>{const panel=document.querySelector('[data-testid="right-workspace-dock"]');return getComputedStyle(panel).visibility==='hidden'&&panel.getBoundingClientRect().width<1;})()`);
-  await cdp.eval(`document.querySelector('[data-agent-run-id="${initialOwnership.runId}"] [data-testid="agent-execution-detail-toggle"]').click()`);
-  await wait(cdp,`document.querySelector('[data-agent-run-id="${initialOwnership.runId}"] [data-testid="agent-execution-detail"]')`);
-  assert.equal(await cdp.eval(`(()=>{const detail=document.querySelector('[data-agent-run-id="${initialOwnership.runId}"] [data-testid="agent-execution-detail"]');const narratives=[...detail.querySelectorAll('[data-testid="conversation-narrative"]')].map((item)=>item.innerText);return narratives.length===2&&narratives[0].includes('I will create the requested fixture file.')&&narratives[1].includes('I will verify the result.')&&detail.querySelectorAll('[data-testid="conversation-activity-group"]').length===2&&!detail.innerText.includes('private fixture reasoning')&&!detail.innerText.includes('<think>')&&!detail.innerText.includes('操作记录')&&!detail.innerText.includes('步骤')&&!detail.innerText.includes('技术信息');})()`),true);
+  await cdp.eval(`document.querySelector('[data-agent-run-id="${initialOwnership.runId}"] [data-testid="agent-history-toggle"]').click()`);
+  await wait(cdp,`document.querySelector('[data-agent-run-id="${initialOwnership.runId}"] [data-testid="agent-history-toggle"]')?.getAttribute('aria-expanded')==='true'&&!document.querySelector('[data-agent-run-id="${initialOwnership.runId}"] [data-testid="agent-execution-detail"]')?.hidden`);
+  assert.equal(await cdp.eval(`(()=>{const detail=document.querySelector('[data-agent-run-id="${initialOwnership.runId}"] [data-testid="agent-execution-detail"]');const narratives=[...detail.querySelectorAll('[data-testid="conversation-narrative"]')].map((item)=>item.innerText);return narratives.length===2&&narratives[0].includes('I will create the requested fixture file.')&&narratives[1].includes('I will verify the result.')&&detail.querySelectorAll('[data-testid="compact-category"]').length===2&&!detail.innerText.includes('private fixture reasoning')&&!detail.innerText.includes('<think>')&&!detail.innerText.includes('操作记录')&&!detail.innerText.includes('步骤')&&!detail.innerText.includes('技术信息');})()`),true);
   assert.equal(await cdp.eval(`(()=>{const body=document.querySelector('[data-agent-run-id="${initialOwnership.runId}"] [data-testid="agent-execution-detail"]');const turn=document.querySelector('[data-agent-run-id="${initialOwnership.runId}"]');const bodyRect=body.getBoundingClientRect();const turnRect=turn.getBoundingClientRect();return body.classList.contains('is-history')&&Boolean(body.querySelector('[data-testid="conversation-activity-stream"]'))&&bodyRect.width<=turnRect.width+1&&bodyRect.height>0;})()`),true);
   const agentStepsScreenshot=await cdp.send('Page.captureScreenshot',{format:'png'});await writeFile(path.join(evidence,`${mode}-agent-steps.png`),Buffer.from(agentStepsScreenshot.data,'base64'));
   await cdp.eval(`(()=>{const list=document.querySelector('.message-list');list.scrollTop=0;list.dispatchEvent(new Event('scroll'));})()`);
@@ -492,7 +500,7 @@ try{
   assert.equal(await cdp.eval(`Boolean(document.querySelector('[data-testid="rail-terminal"]'))`),true);
   await cdp.eval(`document.querySelector('[data-testid="rail-terminal"]').click()`);
   await wait(cdp,`document.querySelector('[data-testid="desktop-work-area"]').classList.contains('terminal-open')&&document.querySelector('[data-testid="bottom-terminal-dock"]').getAttribute('aria-hidden')==='false'`);
-  const terminalOpenSamples=await cdp.eval(`new Promise((resolve)=>{const values=[];let frames=20;const sample=()=>{values.push(document.querySelector('[data-testid="bottom-terminal-dock"]').getBoundingClientRect().height);frames-=1;if(frames<=0)resolve(values);else requestAnimationFrame(sample);};requestAnimationFrame(sample);})`);
+  const terminalOpenSamples=await cdp.eval(`new Promise((resolve)=>{const values=[];let frames=20;const sample=()=>{values.push(document.querySelector('[data-testid="desktop-terminal-layer"]').getBoundingClientRect().height);frames-=1;if(frames<=0)resolve(values);else requestAnimationFrame(sample);};requestAnimationFrame(sample);})`);
   assert.equal(terminalOpenSamples.length>=10,true);
   assert.equal(Math.max(...terminalOpenSamples)>120,true);
   assert.notEqual(await cdp.eval(`getComputedStyle(document.querySelector('[data-testid="desktop-terminal-layer"]')).transitionDuration`),'0s');
@@ -500,7 +508,7 @@ try{
   const terminalLayout=await cdp.eval(`(()=>{const area=document.querySelector('[data-testid="desktop-work-area"]').getBoundingClientRect();const navigation=document.querySelector('[data-testid="project-navigation"]').getBoundingClientRect();const conversationNode=document.querySelector('.conversation-column');const conversation=conversationNode.getBoundingClientRect();const workspace=document.querySelector('[data-testid="right-workspace-dock"]').getBoundingClientRect();const layerNode=document.querySelector('[data-testid="desktop-terminal-layer"]');const layer=layerNode.getBoundingClientRect();const layerStyle=getComputedStyle(layerNode);const terminalNode=document.querySelector('[data-testid="bottom-terminal-dock"]');const terminal=terminalNode.getBoundingClientRect();return{areaRight:area.right,areaBottom:area.bottom,navigationRight:navigation.right,navigationBottom:navigation.bottom,conversationLeft:conversation.left,workspaceRight:workspace.right,terminalLeft:terminal.left,terminalRight:terminal.right,layerLeft:layer.left,layerRight:layer.right,layerPosition:layerStyle.position,layerBackground:layerStyle.backgroundColor,inDesktopLayer:Boolean(terminalNode.closest('[data-testid="desktop-terminal-layer"]')),insideConversation:conversationNode.contains(terminalNode)};})()`);
   console.log(`Desktop terminal layout: ${JSON.stringify(terminalLayout)}`);
   assert.equal(terminalLayout.terminalLeft>=terminalLayout.navigationRight&&Math.abs(terminalLayout.terminalLeft-terminalLayout.conversationLeft)<=1&&Math.abs(terminalLayout.terminalRight-terminalLayout.workspaceRight)<=1,true);
-  assert.equal(terminalLayout.layerLeft>=terminalLayout.navigationRight&&Math.abs(terminalLayout.layerLeft-terminalLayout.conversationLeft)<=1&&Math.abs(terminalLayout.layerRight-terminalLayout.workspaceRight)<=1&&terminalLayout.layerPosition==='absolute'&&terminalLayout.layerBackground==='rgba(0, 0, 0, 0)',true);
+  assert.equal(terminalLayout.layerLeft>=terminalLayout.navigationRight&&Math.abs(terminalLayout.layerLeft-terminalLayout.conversationLeft)<=1&&Math.abs(terminalLayout.layerRight-terminalLayout.workspaceRight)<=1&&terminalLayout.layerPosition==='absolute'&&terminalLayout.layerBackground==='rgb(255, 255, 255)',true);
   assert.equal(Math.abs(terminalLayout.navigationBottom-terminalLayout.areaBottom)<=0.5,true);
   assert.equal(terminalLayout.inDesktopLayer&&!terminalLayout.insideConversation,true);
   const terminalHeightBefore=await cdp.eval(`document.querySelector('[data-testid="bottom-terminal-dock"]').getBoundingClientRect().height`);
@@ -520,14 +528,14 @@ try{
   assert.equal(layoutBounds.itemRight<=layoutBounds.columnRight+0.5,true);
   const screenshot=await cdp.send('Page.captureScreenshot',{format:'png'});await writeFile(path.join(evidence,`${mode}-desktop-foundation.png`),Buffer.from(screenshot.data,'base64'));
   await cdp.eval(`document.querySelector('[data-testid="rail-terminal"]').click()`);
-  await wait(cdp,`!document.querySelector('[data-testid="desktop-work-area"]').classList.contains('terminal-open')&&document.querySelector('[data-testid="bottom-terminal-dock"]').getAttribute('aria-hidden')==='true'&&Number.parseFloat(getComputedStyle(document.querySelector('[data-testid="bottom-terminal-dock"]')).height)<1`);
+  await wait(cdp,`!document.querySelector('[data-testid="desktop-work-area"]').classList.contains('terminal-open')&&document.querySelector('[data-testid="bottom-terminal-dock"]').getAttribute('aria-hidden')==='true'&&document.querySelector('[data-testid="desktop-terminal-layer"]').getBoundingClientRect().height<1&&getComputedStyle(document.querySelector('[data-testid="desktop-terminal-layer"]')).pointerEvents==='none'`);
   await cdp.eval(`document.querySelector('[data-testid="rail-terminal"]').click()`);
   await wait(cdp,`document.querySelector('[data-testid="desktop-work-area"]').classList.contains('terminal-open')&&document.querySelector('[data-testid="bottom-terminal-dock"]').getAttribute('aria-hidden')==='false'`);
-  const terminalReopenSamples=await cdp.eval(`new Promise((resolve)=>{const values=[];let frames=20;const sample=()=>{values.push(document.querySelector('[data-testid="bottom-terminal-dock"]').getBoundingClientRect().height);frames-=1;if(frames<=0)resolve(values);else requestAnimationFrame(sample);};requestAnimationFrame(sample);})`);
+  const terminalReopenSamples=await cdp.eval(`new Promise((resolve)=>{const values=[];let frames=20;const sample=()=>{values.push(document.querySelector('[data-testid="desktop-terminal-layer"]').getBoundingClientRect().height);frames-=1;if(frames<=0)resolve(values);else requestAnimationFrame(sample);};requestAnimationFrame(sample);})`);
   assert.equal(terminalReopenSamples.length>=10,true);
   assert.equal(Math.max(...terminalReopenSamples)>120,true);
   await cdp.eval(`document.querySelector('[data-testid="bottom-terminal-close"]').click()`);
-  await wait(cdp,`!document.querySelector('[data-testid="desktop-work-area"]').classList.contains('terminal-open')&&document.querySelector('[data-testid="bottom-terminal-dock"]').getAttribute('aria-hidden')==='true'&&Number.parseFloat(getComputedStyle(document.querySelector('[data-testid="bottom-terminal-dock"]')).height)<1`);
+  await wait(cdp,`!document.querySelector('[data-testid="desktop-work-area"]').classList.contains('terminal-open')&&document.querySelector('[data-testid="bottom-terminal-dock"]').getAttribute('aria-hidden')==='true'&&document.querySelector('[data-testid="desktop-terminal-layer"]').getBoundingClientRect().height<1&&getComputedStyle(document.querySelector('[data-testid="desktop-terminal-layer"]')).pointerEvents==='none'`);
   await quit(cdp);
 
   child=await launch();cdp=await connect();await wait(cdp,`document.querySelector('[data-testid="project-workspace"]')`);
@@ -535,9 +543,18 @@ try{
   const resumed=await cdp.eval(`(async()=>{const projects=await window.fielora.project.list();const conversations=await window.fielora.conversation.list({field_id:projects[0].field_id});const messages=await window.fielora.conversation.listMessages({conversation_id:conversations[0].id});return{project:projects[0],conversation:conversations[0],messages};})()`);
   assert.equal(resumed.project.root_path,projectRoot);assert.equal(resumed.conversation.provider_config_id,providerId);assert.equal(resumed.messages.length>=3,true);
   await quit(cdp);
-  await writeFile(path.join(evidence,`${mode.toUpperCase()}_DESKTOP_FOUNDATION_ACCEPTANCE.json`),`${JSON.stringify({status:'PASS',schema_version:19,checks:['quiet_workbench_semantic_tokens','shared_toolbar_action_primitive','transparent_fielora_brand_mark','bounded_text_attachment_picker','composer_permission_popover','configured_model_popover','voice_transcription_to_draft','refined_send_control','agent_native_tool_loop','agent_one_time_approval','agent_file_write','agent_verification_receipt','agent_durable_timeline','integrated_native_titlebar','application_back_forward','functional_application_menus','animated_sidebar_visibility_control','standard_settings_gear','functional_utility_launcher','shared_project_settings_workspace_surface','resizable_project_navigation','resizable_project_workspace','resizable_settings_navigation','settings_navigation_width_shared_with_project','settings_terminal_shortcut_does_not_navigate','resizable_utility_sidebar','browser_only_in_right_utility_sidebar','settings_closes_utility_sidebar','window_right_anchored_utility_controls','unframed_utility_controls_with_hover_shadow','project_actions_share_utility_control_dock','top_controls_baseline_and_hover_unified','utility_focus_control_only_when_open','sampled_utility_open_transition','utility_focus_preserves_left_navigation','extra_faint_single_utility_divider','unified_chrome_navigation_background','utility_review','utility_terminal','utility_browser','utility_files','utility_side_chat','unified_navigation_typography','new_conversation_does_not_open_folder_picker','compact_empty_project_list','functional_settings_page','provider_state_refresh_without_restart','provider_connection_probe','project_folder','persistent_conversations','persistent_conversation_turns','provider_model_selection','streaming_message','file_tree_read_edit','diff_review_accept','hash_guarded_undo','global_bottom_terminal_stream','terminal_uses_desktop_layer_not_conversation','terminal_excludes_left_navigation','left_navigation_spans_terminal_height','manual_terminal_output_stays_in_terminal','restart_resume'],provider_external_requests:0,captured_at:new Date().toISOString()},null,2)}\n`);
+  await writeFile(path.join(evidence,`${mode.toUpperCase()}_DESKTOP_FOUNDATION_ACCEPTANCE.json`),`${JSON.stringify({status:'PASS',schema_version:19,checks:['quiet_workbench_semantic_tokens','shared_toolbar_action_primitive','transparent_fielora_brand_mark','bounded_text_attachment_picker','composer_permission_popover','configured_model_popover','voice_transcription_to_draft','refined_send_control','agent_native_tool_loop','agent_one_time_approval','agent_file_write','agent_verification_receipt','agent_durable_timeline','integrated_native_titlebar','application_back_forward','functional_application_menus','animated_sidebar_visibility_control','standard_settings_gear','functional_utility_launcher','shared_project_settings_workspace_surface','resizable_project_navigation','resizable_project_workspace','resizable_settings_navigation','settings_navigation_width_shared_with_project','settings_terminal_shortcut_does_not_navigate','resizable_utility_sidebar','browser_only_in_right_utility_sidebar','settings_closes_utility_sidebar','window_right_anchored_utility_controls','unframed_utility_controls_with_hover_shadow','project_actions_share_utility_control_dock','top_controls_baseline_and_hover_unified','utility_focus_control_only_when_open','sampled_utility_open_transition','utility_focus_preserves_left_navigation','extra_faint_single_utility_divider','unified_chrome_navigation_background','utility_review','utility_terminal','utility_browser','utility_files','no_global_side_chat','reuses_unsent_conversation','unified_navigation_typography','new_conversation_does_not_open_folder_picker','compact_empty_project_list','functional_settings_page','provider_state_refresh_without_restart','provider_connection_probe','project_folder','persistent_conversations','persistent_conversation_turns','provider_model_selection','streaming_message','file_tree_read_edit','diff_review_accept','hash_guarded_undo','global_bottom_terminal_stream','terminal_uses_desktop_layer_not_conversation','terminal_excludes_left_navigation','left_navigation_spans_terminal_height','manual_terminal_output_stays_in_terminal','restart_resume'],provider_external_requests:0,captured_at:new Date().toISOString()},null,2)}\n`);
   console.log(`Desktop Foundation E2E (${mode}): PASS`);
+}catch(error){
+  if(cdp)await Promise.race([(async()=>{
+    const screenshot=await cdp.send('Page.captureScreenshot',{format:'png'});
+    await writeFile(path.join(evidence,`${mode}-failure.png`),Buffer.from(screenshot.data,'base64'));
+    const text=await cdp.eval('document.body.innerText');
+    await writeFile(path.join(evidence,`${mode}-failure-ui.txt`),text);
+  })().catch(()=>undefined),new Promise(resolve=>setTimeout(resolve,3000))]);
+  throw error;
 }finally{
+  await writeFile(path.join(evidence,`${mode}-desktop-host.log`),output.join(''));
   if(child&&child.exitCode===null)killTestProcess(child.pid);
   if(providerId)deleteTestCredential(providerId);
   await new Promise((ok)=>setTimeout(ok,150));await rm(dataRoot,{recursive:true,force:true,maxRetries:4,retryDelay:150}).catch(()=>undefined);

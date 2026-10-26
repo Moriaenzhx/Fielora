@@ -13,11 +13,12 @@ const evidence=process.env.FIELORA_E2E_EVIDENCE_DIR ?? path.join(dataRoot,'evide
 const q=JSON.stringify, output=[];
 const fallback=process.env.FIELORA_BROWSER_SCOPE_FALLBACK ?? '';
 const finishAfterNotes=process.env.FIELORA_BROWSER_SCOPE_FINISH_AFTER_NOTES==='1';
+const rootAssets=process.env.FIELORA_BROWSER_ROOT_ASSETS==='1';
 let externalRequests=0;
 const external=createServer((_req,res)=>{externalRequests++;res.end('console.log(\"external\")');});
 await new Promise(resolve=>external.listen(0,'127.0.0.1',resolve));
 const externalUrl=`http://127.0.0.1:${external.address().port}/untracked.js`;
-const html='<!doctype html><meta charset="utf-8"><link rel="stylesheet" href="style.css"><main id="result">Loading</main><script src="app.js"></script>'+ (fallback==='worker' ? '<script>try { new Worker("worker.js") } catch(e) {}</script>' : fallback==='external' ? `<script src="${externalUrl}"></script>` : '');
+const html=`<!doctype html><meta charset="utf-8"><link rel="stylesheet" href="${rootAssets?'/':''}style.css"><main id="result">Loading</main><script type="module" src="${rootAssets?'/':''}app.js"></script>`+ (fallback==='worker' ? '<script>try { new Worker("worker.js") } catch(e) {}</script>' : fallback==='external' ? `<script src="${externalUrl}"></script>` : '');
 let child,cdp;
 async function launch(){
   const app=await launchElectron({root:path.join(root,'apps/desktop'),dataRoot,output,
@@ -34,7 +35,8 @@ async function stop(){
 try{
   await mkdir(project);await mkdir(evidence,{recursive:true});
   await writeFile(path.join(project,'index.html'),html);
-  await writeFile(path.join(project,'app.js'),"fetch('data.md').then(r=>r.text()).then(t=>document.getElementById('result').textContent=t)");
+  await writeFile(path.join(project,'app.js'),rootAssets ? "import('./chunk.js')" : "fetch('data.md').then(r=>r.text()).then(t=>document.getElementById('result').textContent=t)");
+  if(rootAssets) await writeFile(path.join(project,'chunk.js'),"fetch('/data.md').then(r=>r.text()).then(t=>document.getElementById('result').textContent=t)");
   await writeFile(path.join(project,'data.md'),'Local data ready');
   await writeFile(path.join(project,'style.css'),'main { color: green }');
   await writeFile(path.join(project,'README.md'),'Original notes');
@@ -77,7 +79,8 @@ try{
     if(fallback==='worker') assert.ok(checked.receipt.page_errors.some(e=>/worker/i.test(e.message)));
   } else {
   assert.equal(scope.version,'STATIC_PREVIEW_HTTP_V1');
-  assert.deepEqual(scope.files.map(f=>f.path),['app.js','data.md','index.html','style.css']);
+  assert.deepEqual(scope.files.map(f=>f.path),rootAssets?['app.js','chunk.js','data.md','index.html','style.css']:['app.js','data.md','index.html','style.css']);
+  assert.deepEqual(checked.receipt.resource_errors,[]);
   assert.equal(await readFile(path.join(project,'README.md'),'utf8'),'Updated delivery notes');
   assert.equal(await readFile(path.join(project,'style.css'),'utf8'),finishAfterNotes?'main { color: green }':'main { color: blue }');
   for(const f of scope.files.filter(f=>f.path!=='style.css')) assert.equal(createHash('sha256').update(await readFile(path.join(project,f.path))).digest('hex'),f.sha256);
@@ -89,7 +92,7 @@ try{
   assert.deepEqual(restored.find(t=>t.name==='browser_verify').receipt.verification_scope,scope);
   await writeFile(path.join(evidence,'validation.json'),q({status:'PASS',scope:finishAfterNotes
     ? 'Deterministic model through actual Core/Electron. A real browser check is submitted as required_evidence to finish_task after an unrelated README mutation; the Run completes. Cold restore preserves receipts without replay.'
-    : 'Deterministic model through actual Core/Electron. Native static HTML/JS/CSS/Markdown resources bind the check; compiled context preserves PASS after unrelated README mutation and becomes STALE after a real CSS mutation. Cold restore preserves facts without replay.',fallback,finishAfterNotes,externalRequests,run:ids.run,tools:result.tools.length}));
+    : 'Deterministic model through actual Core/Electron. Native static HTML/JS/CSS/Markdown resources bind the check; compiled context preserves PASS after unrelated README mutation and becomes STALE after a real CSS mutation. Cold restore preserves facts without replay.',fallback,finishAfterNotes,rootAssets,externalRequests,run:ids.run,tools:result.tools.length}));
   console.log('BROWSER_STATIC_SCOPE_E2E=PASS evidence='+evidence);
 }catch(error){
   if(cdp)await captureScreenshot(cdp,path.join(evidence,'failure.png')).catch(()=>{});

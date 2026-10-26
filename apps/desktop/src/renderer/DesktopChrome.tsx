@@ -229,7 +229,7 @@ export function DesktopChrome({ children }: { children: ReactNode }) {
   }, [route.route, settingsRoute, toolsOpen, utilityView]);
 
   const menuButton = (id: ChromeMenu, label: string, content: ReactNode) => <div className="chrome-menu-wrap">
-    <button className={menu === id ? 'active' : ''} onClick={() => setMenu((current) => current === id ? null : id)}>{label}</button>
+    <button className={menu === id ? 'active' : ''} onClick={() => setMenu((current) => current === id ? null : id)} data-testid={`chrome-menu-${id.toLowerCase()}`}>{label}</button>
     {menu === id && <div className="chrome-menu" role="menu" data-surface="overlay" onClick={() => setMenu(null)}>{content}</div>}
   </div>;
 

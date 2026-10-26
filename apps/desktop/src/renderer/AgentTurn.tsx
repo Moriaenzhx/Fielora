@@ -33,6 +33,7 @@ import {
   agentRequestKind,
   commandApprovalReason,
   agentModelIsActive,
+  agentBrowserDialogWaiting,
   agentPausePresentation,
   agentPendingChecks,
   agentCompletionTimeLabel,
@@ -48,7 +49,7 @@ import {
 import { MarkdownMessage, type ActivityFileContext } from './MarkdownMessage';
 import { webActivity, activityDetailFields, activityStatusLabel, activityFailureReason, activityToolIssue, browserLoadPauseReason, resolveActivityFileLink, shouldShowMcpRuntime, type ActivityFileLink } from './agent-activity-detail';
 import { WebResearchActivity, WebResearchSummary } from './WebResearchActivity';
-import { conversationToolPresentation, conversationTimelineSections } from './conversation-presentation';
+import { conversationToolPresentation, conversationTimelineSections, conversationOperationIcon, conversationGroupIcon } from './conversation-presentation';
 import { ActivityApplicationIdentity } from './ActivityApplicationIdentity';
 import { AppIcon, type AppIconName } from './ui';
 
@@ -125,18 +126,6 @@ function CurrentRunMcp({ runtime, busyConnectionId, onActivate }: {
   </section>;
 }
 
-function activityIcon(kind: ConversationActivityGroupKind): AppIconName {
-  if (kind === 'SEARCH') return 'search';
-  if (kind === 'DIRECTORY') return 'folderOpen';
-  if (kind === 'INSPECT') return 'files';
-  if (kind === 'CHANGE') return 'edit';
-  if (kind === 'VERIFY') return 'check';
-  if (kind === 'COMMAND') return 'terminal';
-  if (kind === 'VERSION') return 'branch';
-  if (kind === 'NETWORK') return 'browse';
-  return 'tools';
-}
-
 function activityTimestamp(timestamp: number): string {
   return agentCompletionTimeLabel(timestamp).replace(/^(?:完成于|结束于)\s+/, '');
 }
@@ -146,7 +135,7 @@ function operationLabel(entry: ConversationActivityEntry): string {
 }
 
 function operationIcon(entry: ConversationActivityEntry): AppIconName {
-  return entry.kind === 'TOOL' ? conversationToolPresentation(entry.tool).icon : activityIcon(entry.activityKind);
+  return conversationOperationIcon(entry);
 }
 
 function operationStatus(entry: ConversationActivityEntry) {
@@ -249,7 +238,7 @@ function CompactActivityGroup({ item, activityFiles }: { item: ConversationActiv
     <div className={applications.length ? 'application-operation-summary' : undefined}>
       {applications.map(application => <ActivityApplicationIdentity key={application.target.appId || application.target.bundleId} target={application.target} iconDataUrl={applicationContext.icons?.[application.target.appId]} detail={application.label} previewToolId={application.previewTool?.id} onPreview={application.previewTool && applicationContext.onPreview ? () => applicationContext.onPreview?.(application.previewTool!) : undefined}/>)}
     <button type="button" className="operation-summary" title={label} data-testid="operation-group-toggle" aria-expanded={state.open} aria-controls={`operations-${item.id}`} onClick={() => disclosure.update(item.id, { ...state, open: !state.open })}>
-      {!applications.length && <AppIcon name={operationIcon(first)}/>}<span className="operation-label">{label}</span>
+      {!applications.length && <AppIcon name={conversationGroupIcon(item.entries, lastWeb)}/>}<span className="operation-label">{label}</span>
       {issues.length > 0 && <span className="operation-issue">{issues.join('、')}</span>}
       {active && <span>执行中</span>}<AppIcon name="chevronDown"/>
     </button>
@@ -264,6 +253,7 @@ function CompactActivityGroup({ item, activityFiles }: { item: ConversationActiv
 }
 
 function currentCompactAction(items: ConversationActivityItem[], tools: AgentToolCallView[], events: AgentEventView[]): string {
+  if (agentBrowserDialogWaiting(events, tools)) return '等待你处理网页弹窗，处理后继续';
   // Execution already has a visible operation row; do not repeat it in the footer.
   if (items.some(item => item.kind === 'CONTEXT' && item.completedAt === null && !item.interrupted)) return '';
   if (tools.some(tool => ['PROPOSED', 'RUNNING', 'WAITING_APPROVAL'].includes(tool.status))) return '';
@@ -347,8 +337,9 @@ function ConversationActivityStream({ items, tools, approval, approvalSummary, b
   </div>;
 }
 
-function AgentProgressSummary({ run, tools, events, busy, onResume, onStop }: {
+function AgentProgressSummary({ run, tools, events, busy, stopping, onResume, onStop }: {
   run: AgentRunView; tools: AgentToolCallView[]; events: AgentEventView[]; busy: boolean;
+  stopping?: boolean;
   onResume?: () => void; onStop?: () => void;
 }) {
   const pending = agentPendingChecks(run, events);
@@ -356,13 +347,13 @@ function AgentProgressSummary({ run, tools, events, busy, onResume, onStop }: {
     ? [...tools].reverse().find(tool => tool.name === 'request_user_input' && tool.status === 'COMPLETED')?.arguments as { question?: string; reason?: string } | undefined : undefined;
   return <div className="agent-progress-summary" data-testid="agent-execution-status" data-execution-stage={run.status}>
     <div className="agent-pause-notice" data-testid="agent-pause-notice">
-      <div className="agent-pause-heading"><AppIcon name={clarification ? 'conversation' : 'pause'}/><strong>{clarification ? '需要你的回答' : '任务已暂停'}</strong></div>
+      <div className="agent-pause-heading"><AppIcon name={clarification ? 'question' : 'pause'}/><strong>{clarification ? '需要你的回答' : '任务已暂停'}</strong></div>
       {clarification?.question && <div className="agent-user-question" data-testid="agent-visible-question">{clarification.reason && <p>{clarification.reason}</p>}<p>{clarification.question}</p></div>}
       <p>{(run.error_code === 'AGENT_VERIFICATION_REQUIRED' ? browserLoadPauseReason(tools) : null) ?? agentPausePresentation(run, events).reason}</p>
       {pending.length > 0 && <div className="agent-pending-list" data-testid="agent-pending-checks"><strong>待解决的检查</strong><ul>{pending.map((check, index) => <li key={`${index}-${check}`}><AppIcon name="warning"/><span>{check}</span></li>)}</ul></div>}
       <div className="agent-pause-actions" aria-busy={busy}>
-        {onResume && agentPausePresentation(run).canResume && <button type="button" className="agent-resume-action is-primary" disabled={busy} onClick={onResume}>{agentPausePresentation(run).action}</button>}
-        {onStop && <button type="button" className="agent-resume-action" disabled={busy} onClick={onStop}>停止任务</button>}
+        {onResume && agentPausePresentation(run).canResume && <button type="button" className="agent-resume-action is-primary" disabled={busy || stopping} onClick={onResume}>{agentPausePresentation(run).action}</button>}
+        {onStop && <button type="button" className="agent-resume-action" disabled={stopping} onClick={onStop}>{stopping ? '正在停止' : '停止任务'}</button>}
       </div>
     </div>
   </div>;
@@ -557,7 +548,7 @@ export function AgentTurn({
       </div>
       {!terminal && currentAction && <div className="agent-current-action" data-testid="agent-current-action"><span className={thinking && !stopping ? 'agent-running-label is-working' : 'agent-running-label'} data-testid="agent-running-label">{currentAction}</span></div>}
       {!terminal && approval && onDecision && !activityItems.some(item => item.kind === 'APPROVAL' && item.approvalId === approval.id) && <AgentApproval approval={approval} tool={tools.find(tool => tool.id === approval.tool_call_id) ?? null} summary={approvalSummary} busy={busy} onDecision={onDecision}/>}
-      {!terminal && run.status === 'PAUSED' && <AgentProgressSummary run={run} tools={tools} events={events} busy={busy} onResume={onResume} onStop={onStop}/>}
+      {!terminal && run.status === 'PAUSED' && <AgentProgressSummary run={run} tools={tools} events={events} busy={busy} stopping={stopping} onResume={onResume} onStop={onStop}/>}
       {!terminal && pausedReview && pausedReview.files.length > 0 && <ChangedFiles review={pausedReview} onReview={onReview} onReviewFile={onReviewFile}/>}
       {!terminal && <CurrentRunMcp runtime={mcpRuntime} busyConnectionId={mcpBusyConnectionId} onActivate={onActivateMcp}/>}
     </>}

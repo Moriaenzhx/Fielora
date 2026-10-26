@@ -142,6 +142,12 @@ pub struct StorageHandle {
     pub database_path: PathBuf,
 }
 
+enum ResumeAdmission {
+    None,
+    Allowance,
+    Direction(MessageId),
+}
+
 pub struct StorageWorker {
     handle: StorageHandle,
     worker: Option<JoinHandle<()>>,
@@ -710,6 +716,80 @@ impl StorageHandle {
         })
     }
 
+    /// Native input facts may arrive after Stop. This narrow audit append cannot
+    /// change execution state, terminal timestamps, errors or resource grants.
+    /// Core must first authenticate the live parent-request correlation.
+    pub fn record_browser_input_event(
+        &self,
+        run_id: AgentRunId,
+        tool_call_id: ToolCallId,
+        payload: Value,
+        now: i64,
+    ) -> Result<AgentEventCommit, DomainError> {
+        let owner = self.local_user.clone();
+        request_task(&self.sender, move |connection| {
+            let current = get_agent_run(connection, &owner, &run_id)?;
+            let tool = get_agent_tool_call(connection, &owner, &tool_call_id)?;
+            let wait = payload["kind"] == "BROWSER_DIALOG_WAIT"
+                && matches!(payload["state"].as_str(), Some("OPEN" | "CLOSED"));
+            let delivery = payload["kind"] == "BROWSER_INPUT_DELIVERY_ACKNOWLEDGED"
+                && payload["receipt"]["tool_call_id"] == tool_call_id.0
+                && payload["receipt"]["input_state"] == "DISPATCHED"
+                && payload["receipt"]["outcome_unknown"] == false
+                && payload["receipt"]["verification_eligible"] == false;
+            if tool.run_id != run_id
+                || tool.name != "browser"
+                || tool.arguments["action"] != "click"
+                || !matches!(
+                    tool.status,
+                    AgentToolStatus::Running
+                        | AgentToolStatus::Unknown
+                        | AgentToolStatus::Completed
+                        | AgentToolStatus::Cancelled
+                )
+                || payload["tool_call_id"] != tool_call_id.0
+                || (!wait && !delivery)
+                || payload["request_id"]
+                    .as_str()
+                    .is_none_or(|id| id.is_empty() || id.len() > 100)
+            {
+                return Err(DomainError::Validation(
+                    "AGENT_BROWSER_INPUT_EVIDENCE_INVALID".into(),
+                ));
+            }
+            let payload_json = payload.to_string();
+            if payload_json.len() > 8192 {
+                return Err(DomainError::Validation("AGENT_EVENT_TOO_LARGE".into()));
+            }
+            let sequence = current.next_sequence;
+            let event_id = AgentEventId::new(Uuid::now_v7().to_string());
+            let transaction = connection.transaction().map_err(storage_domain)?;
+            transaction.execute(
+                "INSERT INTO agent_events(id,run_id,sequence,schema_version,kind,payload_json,created_at) VALUES(?1,?2,?3,1,'CHECKPOINT_CREATED',?4,?5)",
+                params![event_id.0,run_id.0,revision_to_domain(sequence)?,payload_json,now],
+            ).map_err(storage_domain)?;
+            transaction
+                .execute(
+                    "UPDATE agent_runs SET next_sequence=?1 WHERE id=?2",
+                    params![revision_to_domain(sequence + 1)?, run_id.0],
+                )
+                .map_err(storage_domain)?;
+            transaction.commit().map_err(storage_domain)?;
+            Ok(AgentEventCommit {
+                event: AgentEventView {
+                    id: event_id,
+                    run_id: run_id.clone(),
+                    sequence,
+                    schema_version: 1,
+                    kind: AgentEventKind::CheckpointCreated,
+                    payload,
+                    created_at: now,
+                },
+                run: get_agent_run(connection, &owner, &run_id)?,
+            })
+        })
+    }
+
     pub fn append_agent_event(
         &self,
         run_id: AgentRunId,
@@ -718,7 +798,7 @@ impl StorageHandle {
         update: AgentProjectionUpdate,
         now: i64,
     ) -> Result<AgentEventCommit, DomainError> {
-        self.append_agent_event_inner(run_id, kind, payload, update, now, false)
+        self.append_agent_event_inner(run_id, kind, payload, update, now, ResumeAdmission::None)
     }
 
     /// Called only by the trusted user-resume ingress, never by a model tool.
@@ -751,7 +831,25 @@ impl StorageHandle {
                 ..Default::default()
             },
             now,
-            true,
+            ResumeAdmission::Allowance,
+        )
+    }
+
+    /// Trusted correction ingress. Admission, stale proposal cancellation and
+    /// continuation commit together; this grants no new execution allowance.
+    pub fn resume_agent_run_with_direction(
+        &self,
+        run_id: AgentRunId,
+        message_id: MessageId,
+        now: i64,
+    ) -> Result<AgentEventCommit, DomainError> {
+        self.append_agent_event_inner(
+            run_id,
+            AgentEventKind::RunResumed,
+            serde_json::json!({"kind":"USER_DIRECTION_RECEIVED","reason":"USER_DIRECTION","source":"EXPLICIT_USER_DIRECTION","user_message_id":message_id,"verification_eligible":false,"grants_authority":false}),
+            AgentProjectionUpdate { status: Some(AgentRunStatus::Running), ..Default::default() },
+            now,
+            ResumeAdmission::Direction(message_id),
         )
     }
 
@@ -762,7 +860,7 @@ impl StorageHandle {
         mut payload: Value,
         update: AgentProjectionUpdate,
         now: i64,
-        explicit_resume: bool,
+        user_resume: ResumeAdmission,
     ) -> Result<AgentEventCommit, DomainError> {
         let owner = self.local_user.clone();
         request_task(&self.sender, move |connection| {
@@ -771,7 +869,65 @@ impl StorageHandle {
                 return Err(DomainError::TerminalResource);
             }
             let mut max_steps = current.max_steps;
-            if explicit_resume {
+            if !matches!(user_resume, ResumeAdmission::None)
+                && current.status != AgentRunStatus::Paused
+            {
+                return Err(DomainError::InvalidStateTransition);
+            }
+            if let ResumeAdmission::Direction(message_id) = &user_resume {
+                let message = get_conversation_message(connection, &owner, message_id)?;
+                if message.conversation_id != current.conversation_id
+                    || message.role != ConversationMessageRole::User
+                    || message.status != ConversationMessageStatus::Completed
+                    || message.created_at < current.created_at
+                    || message.content.trim().is_empty()
+                    || message.content.chars().count() > 32000
+                {
+                    return Err(DomainError::Validation("AGENT_DIRECTION_INVALID".into()));
+                }
+                let used: bool = connection.query_row(
+                    "SELECT EXISTS(SELECT 1 FROM agent_events WHERE run_id=?1 AND json_extract(payload_json,'$.user_message_id')=?2)",
+                    params![run_id.0,message_id.0], |row| row.get(0),
+                ).map_err(storage_domain)?;
+                if used {
+                    return Err(DomainError::Validation(
+                        "AGENT_DIRECTION_ALREADY_RECEIVED".into(),
+                    ));
+                }
+                let prior_chars: i64 = connection.query_row(
+                    "SELECT COALESCE(SUM(length(m.content)),0) FROM agent_events e JOIN conversation_messages m ON m.id=json_extract(e.payload_json,'$.user_message_id') WHERE e.run_id=?1 AND json_extract(e.payload_json,'$.kind')='USER_DIRECTION_RECEIVED'",
+                    params![run_id.0], |row| row.get(0),
+                ).map_err(storage_domain)?;
+                if prior_chars.saturating_add(message.content.chars().count() as i64) > 64000 {
+                    return Err(DomainError::Validation(
+                        "AGENT_DIRECTION_CONTEXT_LIMIT".into(),
+                    ));
+                }
+                let unsettled: bool = connection.query_row(
+                    "SELECT EXISTS(SELECT 1 FROM agent_tool_calls WHERE run_id=?1 AND status IN ('RUNNING','UNKNOWN'))",
+                    params![run_id.0], |row| row.get(0),
+                ).map_err(storage_domain)?;
+                if unsettled {
+                    return Err(DomainError::Validation(
+                        "AGENT_DIRECTION_REQUIRES_SETTLED_TOOLS".into(),
+                    ));
+                }
+                let mut statement = connection.prepare("SELECT id FROM agent_tool_calls WHERE run_id=?1 AND status IN ('PROPOSED','WAITING_APPROVAL')").map_err(storage_domain)?;
+                let obsolete = statement
+                    .query_map(params![run_id.0], |row| row.get::<_, String>(0))
+                    .map_err(storage_domain)?
+                    .collect::<Result<Vec<_>, _>>()
+                    .map_err(storage_domain)?;
+                payload["cancelled_tool_call_ids"] = serde_json::json!(obsolete);
+                let mut statement = connection.prepare("SELECT id FROM agent_tool_calls WHERE run_id=?1 AND name='request_user_input' AND status='COMPLETED'").map_err(storage_domain)?;
+                let questions = statement
+                    .query_map(params![run_id.0], |row| row.get::<_, String>(0))
+                    .map_err(storage_domain)?
+                    .collect::<Result<Vec<_>, _>>()
+                    .map_err(storage_domain)?;
+                payload["superseded_question_tool_call_ids"] = serde_json::json!(questions);
+            }
+            if matches!(user_resume, ResumeAdmission::Allowance) {
                 if current.status != AgentRunStatus::Paused {
                     return Err(DomainError::InvalidStateTransition);
                 }
@@ -817,6 +973,12 @@ impl StorageHandle {
             let event_id = AgentEventId::new(Uuid::now_v7().to_string());
             let finished_at = status.is_terminal().then_some(now);
             let transaction = connection.transaction().map_err(storage_domain)?;
+            if matches!(user_resume, ResumeAdmission::Direction(_)) {
+                transaction.execute(
+                    "UPDATE agent_tool_calls SET status='CANCELLED',error_code='USER_DIRECTION_SUPERSEDED',updated_at=?1,finished_at=?1 WHERE run_id=?2 AND status IN ('PROPOSED','WAITING_APPROVAL')",
+                    params![now,run_id.0],
+                ).map_err(storage_domain)?;
+            }
             transaction.execute(
                 "INSERT INTO agent_events(id,run_id,sequence,schema_version,kind,payload_json,created_at) VALUES(?1,?2,?3,1,?4,?5,?6)",
                 params![event_id.0,run_id.0,revision_to_domain(sequence)?,wire(&kind),payload_json,now],
@@ -8417,6 +8579,241 @@ mod tests {
             )
             .unwrap();
         (project, conversation, handle.get_agent_run(run.id).unwrap())
+    }
+
+    #[test]
+    fn direction_atomically_invalidates_old_approval_without_granting_budget() {
+        let root = temporary_root();
+        let worker = start(&root, 1);
+        let handle = worker.handle();
+        let (_, conversation, run) = artifact_run_fixture(&handle, &root, 10);
+        let old = handle
+            .create_agent_tool_call(
+                run.id.clone(),
+                "create_file".into(),
+                AgentToolEffect::WorkspaceWrite,
+                AgentPolicyDecision::Ask,
+                json!({"path":"old.txt","content":"old"}),
+                20,
+            )
+            .unwrap();
+        let approval = handle
+            .create_agent_approval(run.id.clone(), old.id.clone(), 21)
+            .unwrap();
+        let reply = handle
+            .create_conversation_message(
+                CreateConversationMessageRequest {
+                    conversation_id: conversation.id,
+                    role: ConversationMessageRole::User,
+                    content: "改为创建 new.txt".into(),
+                    status: ConversationMessageStatus::Completed,
+                    provider_config_id: None,
+                    model_id: None,
+                    invocation_id: None,
+                    references: vec![],
+                },
+                22,
+            )
+            .unwrap();
+        assert!(
+            handle
+                .resume_agent_run_with_direction(run.id.clone(), reply.id.clone(), 23)
+                .is_err()
+        );
+        handle
+            .append_agent_event(
+                run.id.clone(),
+                AgentEventKind::RunPaused,
+                json!({"reason":"USER_PAUSE"}),
+                AgentProjectionUpdate {
+                    status: Some(AgentRunStatus::Paused),
+                    ..Default::default()
+                },
+                24,
+            )
+            .unwrap();
+        let admitted = handle
+            .resume_agent_run_with_direction(run.id.clone(), reply.id.clone(), 25)
+            .unwrap();
+        assert_eq!(admitted.run.id, run.id);
+        assert_eq!(admitted.run.task, run.task);
+        assert_eq!(admitted.run.max_steps, run.max_steps);
+        assert_eq!(admitted.run.current_step, run.current_step);
+        assert_eq!(admitted.run.permission, run.permission);
+        assert!(
+            admitted
+                .event
+                .payload
+                .get("resource_budget_reset")
+                .is_none()
+        );
+        assert!(admitted.event.payload.get("budget_grant").is_none());
+        assert_eq!(
+            admitted.event.payload["cancelled_tool_call_ids"],
+            json!([old.id])
+        );
+        assert!(
+            handle
+                .resolve_agent_approval(
+                    ResolveAgentApprovalRequest {
+                        run_id: run.id.clone(),
+                        approval_id: approval.id,
+                        nonce: approval.nonce,
+                        decision: ApprovalDecision::AllowOnce,
+                    },
+                    26
+                )
+                .is_err()
+        );
+        assert_eq!(
+            handle.list_agent_tool_calls(run.id.clone()).unwrap()[0].status,
+            AgentToolStatus::Cancelled
+        );
+        handle
+            .append_agent_event(
+                run.id.clone(),
+                AgentEventKind::RunPaused,
+                json!({}),
+                AgentProjectionUpdate {
+                    status: Some(AgentRunStatus::Paused),
+                    ..Default::default()
+                },
+                27,
+            )
+            .unwrap();
+        assert!(
+            matches!(handle.resume_agent_run_with_direction(run.id.clone(), reply.id, 28),
+            Err(DomainError::Validation(code)) if code == "AGENT_DIRECTION_ALREADY_RECEIVED")
+        );
+        assert_eq!(
+            handle.get_agent_run(run.id).unwrap().status,
+            AgentRunStatus::Paused
+        );
+        worker.shutdown();
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn direction_rejects_foreign_non_user_and_unsettled_inputs() {
+        let root = temporary_root();
+        let worker = start(&root, 1);
+        let handle = worker.handle();
+        let (project, conversation, run) = artifact_run_fixture(&handle, &root, 10);
+        let foreign = handle
+            .create_conversation(
+                CreateConversationRequest {
+                    field_id: project.field_id,
+                    title: "Other".into(),
+                    provider_config_id: None,
+                    model_id: None,
+                },
+                20,
+            )
+            .unwrap();
+        handle
+            .append_agent_event(
+                run.id.clone(),
+                AgentEventKind::RunPaused,
+                json!({}),
+                AgentProjectionUpdate {
+                    status: Some(AgentRunStatus::Paused),
+                    ..Default::default()
+                },
+                21,
+            )
+            .unwrap();
+        for (conversation_id, role, content, now) in [
+            (foreign.id, ConversationMessageRole::User, "foreign", 22),
+            (
+                conversation.id.clone(),
+                ConversationMessageRole::Assistant,
+                "model supplied",
+                23,
+            ),
+            (
+                conversation.id.clone(),
+                ConversationMessageRole::User,
+                "predates run",
+                13,
+            ),
+        ] {
+            let message = handle
+                .create_conversation_message(
+                    CreateConversationMessageRequest {
+                        conversation_id,
+                        role,
+                        content: content.into(),
+                        status: ConversationMessageStatus::Completed,
+                        provider_config_id: None,
+                        model_id: None,
+                        invocation_id: None,
+                        references: vec![],
+                    },
+                    now,
+                )
+                .unwrap();
+            assert!(
+                handle
+                    .resume_agent_run_with_direction(run.id.clone(), message.id, 30)
+                    .is_err()
+            );
+        }
+        let message = handle
+            .create_conversation_message(
+                CreateConversationMessageRequest {
+                    conversation_id: conversation.id,
+                    role: ConversationMessageRole::User,
+                    content: "Current correction".into(),
+                    status: ConversationMessageStatus::Completed,
+                    provider_config_id: None,
+                    model_id: None,
+                    invocation_id: None,
+                    references: vec![],
+                },
+                31,
+            )
+            .unwrap();
+        let unknown = handle
+            .create_agent_tool_call(
+                run.id.clone(),
+                "run_command".into(),
+                AgentToolEffect::Process,
+                AgentPolicyDecision::Allow,
+                json!({}),
+                32,
+            )
+            .unwrap();
+        handle
+            .update_agent_tool_call(unknown.id.clone(), AgentToolStatus::Running, None, None, 33)
+            .unwrap();
+        handle
+            .update_agent_tool_call(unknown.id, AgentToolStatus::Unknown, None, None, 34)
+            .unwrap();
+        assert!(
+            matches!(handle.resume_agent_run_with_direction(run.id.clone(), message.id.clone(), 35),
+            Err(DomainError::Validation(code)) if code == "AGENT_DIRECTION_REQUIRES_SETTLED_TOOLS")
+        );
+        let unchanged = handle.get_agent_run(run.id.clone()).unwrap();
+        assert_eq!(unchanged.status, AgentRunStatus::Paused);
+        handle
+            .append_agent_event(
+                run.id.clone(),
+                AgentEventKind::RunCancelled,
+                json!({}),
+                AgentProjectionUpdate {
+                    status: Some(AgentRunStatus::Cancelled),
+                    ..Default::default()
+                },
+                36,
+            )
+            .unwrap();
+        assert!(
+            handle
+                .resume_agent_run_with_direction(run.id, message.id, 37)
+                .is_err()
+        );
+        worker.shutdown();
+        fs::remove_dir_all(root).unwrap();
     }
 
     #[test]

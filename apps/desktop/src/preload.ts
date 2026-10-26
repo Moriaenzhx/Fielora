@@ -232,6 +232,7 @@ contextBridge.exposeInMainWorld('fielora', bridge);
 
 if (process.env.FIELORA_E2E === '1') {
   contextBridge.exposeInMainWorld('fieloraTest', {
+    dismissContextMenu: () => ipcRenderer.invoke(channels.testDismissContextMenu),
     killCore: () => ipcRenderer.invoke(channels.testKillCore),
     resizeWindow: (size: { width: number; height: number }) => ipcRenderer.invoke(channels.testResizeWindow, size),
     createProject: (request: Parameters<NonNullable<Window['fieloraTest']>['createProject']>[0]) => ipcRenderer.invoke(channels.testCreateProject, request),

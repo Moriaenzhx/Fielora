@@ -50,6 +50,7 @@ fn main() {
         "crates/fielora-core/src/agent_turn_context.rs",
         "crates/fielora-core/src/agent_user_input.rs",
         "crates/fielora-core/src/agent_task_outcome.rs",
+        "crates/fielora-core/src/agent_report.rs",
         "crates/fielora-core/src/agent_skill_verification.rs",
         "crates/fielora-core/src/agent_verification.rs",
         "crates/fielora-agent/src/skill_verification.rs",
@@ -117,6 +118,8 @@ fn main() {
         "apps/desktop/src/browser-runtime.ts",
         "apps/desktop/src/browser-page-errors.ts",
         "apps/desktop/src/browser-agent-dom.ts",
+        "apps/desktop/src/browser-agent-input.ts",
+        "apps/desktop/src/browser-input-lifecycle.ts",
         "apps/desktop/src/agent-browser-host.ts",
     ];
     let mut all = core.to_vec();

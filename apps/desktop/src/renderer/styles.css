@@ -1167,6 +1167,7 @@ input[type="checkbox"]:checked::before { transform: translateY(-1px) rotate(-45d
 .utility-control-dock, .project-context-controls { position: absolute; z-index: var(--fl-layer-dock); top: 3px; display: flex; align-items: center; height: 34px; padding: 0; border: 0; background: transparent; }
 .utility-control-dock { right: 10px; -webkit-app-region: no-drag; }
 .project-context-controls { right: 89px; gap: 4px; transition: right var(--fl-duration-panel) var(--fl-ease-panel), opacity var(--fl-duration-control) var(--fl-ease-standard); }
+.project-context-controls .environment-menu { height: var(--fl-control-md); }
 .utility-control-dock.in-utility { background: transparent; box-shadow: none; }
 .desktop-project-actions-layer { display: contents; }
 .utility-resizer { width: 1px; min-width: 1px; grid-column: 2; grid-row: 1; border-left: 0; opacity: 0; pointer-events: none; transition: margin-bottom var(--fl-duration-panel) var(--fl-ease-panel), opacity 160ms var(--fl-ease-panel); }

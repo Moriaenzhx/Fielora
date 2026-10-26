@@ -1060,7 +1060,8 @@ mod tests {
             crate::agent_verification::Assessment::fixture(false),
         );
         let retained = current.context(&tools, &[]);
-        assert!(retained.contains("relevant assertion"));
+        assert!(retained.contains("current request or actual changes require verification"));
+        assert!(retained.contains("relevant missing assertion"));
         assert!(retained.contains("advisory plan, never user authorization"));
         fs::remove_dir_all(root).unwrap();
     }

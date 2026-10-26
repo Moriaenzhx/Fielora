@@ -76,7 +76,11 @@ try {
   assert.ok(tools.some(t=>t.name==='run_command'&&t.receipt?.success===true&&t.receipt?.verification_eligible===true));
   const firstPrompt=history.find(e=>e.kind==='MODEL_COMPLETED').payload.prompt;
   const lastPrompt=history.filter(e=>e.kind==='MODEL_COMPLETED').at(-1).payload.prompt;
-  assert.ok(firstPrompt.tool_count<=19,q(firstPrompt.visible_tool_names));
+  // General tasks also expose optional review; it must not consume the core
+  // discovery budget or introduce a mandatory review step (checked above).
+  assert.ok(firstPrompt.visible_tool_names.includes('record_work_review'));
+  assert.ok(firstPrompt.tool_count<=20,q(firstPrompt.visible_tool_names));
+  assert.ok(firstPrompt.visible_tool_names.filter(name=>name!=='record_work_review').length<=19);
   assert.ok(firstPrompt.message_bytes>=43000,'Large history must reach the actual model request');
   assert.ok(!firstPrompt.visible_tool_names.includes('apply_patches'));
   assert.ok(lastPrompt.visible_tool_names.includes('apply_patches'));

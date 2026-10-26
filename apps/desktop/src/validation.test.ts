@@ -171,6 +171,10 @@ test('multimodal Agent and attachment bridges accept only bounded native image p
   assert.equal(validateStartAgent(start).attachments?.[0]?.source, 'clipboard');
   assert.equal(validateStartAgent(start).attachments?.[0]?.mime_type, 'image/png');
   assert.deepEqual(validateResumeAgent({ run_id: fieldId }), { run_id: fieldId });
+  assert.deepEqual(validateResumeAgent({ run_id: fieldId, direction_message_id: fieldId }), { run_id: fieldId, direction_message_id: fieldId });
+  for (const extra of [{ user_message_id: fieldId }, { attachments: [] }, { resource_budget: { max_execution_ms: 60000, max_input_tokens: 1000, max_output_tokens: 1024 } }]) {
+    assert.throws(() => validateResumeAgent({ run_id: fieldId, direction_message_id: fieldId, ...extra }));
+  }
   assert.equal(validateResumeAgent({ run_id: fieldId, attachments: [image] }).attachments?.[0]?.data_url, image.data_url);
   assert.throws(() => validateResumeAgent({ run_id: fieldId, attachments: [{ ...image, data_url: 'https://example.com/image.png' }] }));
   assert.throws(() => validateResumeAgent({ run_id: fieldId, task: 'replace original task' }));

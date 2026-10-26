@@ -9,6 +9,35 @@ import {
   validateEvalDocuments,
 } from '../../scripts/eval-agent-china-preflight.mjs';
 
+for (const [caseName, minimumFaults] of [
+  ['large-files', 6], ['http-protection', 6], ['cold-recovery', 5], ['midrun-correction', 6],
+]) {
+  test(`offline ${caseName} oracle rejects defects without claiming real-model acceptance`, () => {
+    const root = path.resolve(import.meta.dirname, '../..');
+    const result = spawnSync(process.platform === 'win32' ? 'python' : 'python3',
+      ['-B', 'scripts/agent-convergence-case.py', 'self-test', '--case', caseName],
+      {cwd: root, encoding: 'utf8', timeout: 60000});
+    assert.equal(result.status, 0, result.stderr || result.error?.message);
+    const report = JSON.parse(result.stdout);
+    assert.equal(report.status, 'PASS');
+    assert.equal(report.real_model, 'NOT_RUN');
+    assert.ok(report.rejected_faults.length >= minimumFaults);
+    if (caseName.includes('recovery') || caseName.includes('correction')) {
+      assert.equal(report.actual_control_scenario, 'NOT_RUN');
+      assert.ok(report.rejected_faults.includes('missing_raw_receipt'));
+      assert.ok(report.rejected_faults.includes('new_run'));
+    }
+  });
+}
+
+test('paired scoring preserves missing runs, missing usage and zero comparison denominators', () => {
+  const root = path.resolve(import.meta.dirname, '../..');
+  const result = spawnSync(process.platform === 'win32' ? 'python' : 'python3',
+    ['-B', 'tests/eval/opencode-comparison-scoring.py'],
+    {cwd: root, encoding: 'utf8', timeout: 30000});
+  assert.equal(result.status, 0, result.stderr || result.error?.message);
+});
+
 test('offline detector oracle rejects copied-logic tests and detects real decision faults', () => {
   const root = path.resolve(import.meta.dirname, '../..');
   const result = spawnSync(process.platform === 'win32' ? 'python' : 'python3',

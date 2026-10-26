@@ -2002,6 +2002,8 @@ Supersedes the automatic review-only scheduling and fixed production source-pool
 
 The model-facing default exposes common coding tools and capability discovery. Successful exact discovery adds definitions from the current catalog (bounded recent extensions), reconstructed on restart. Definitions in old receipts are never executable authority; current policy and backend checks still apply. replace_text/write_file may omit expected_sha256; before proposal persistence the Harness binds only a previous successful builtin file observation/effect from this Run. Explicit guards are never repaired, and current disk bytes are still checked by ToolExecutor. No observation means no inferred guard. Existing lower-level tool contracts remain strict.
 
+Missing or malformed edit-guard feedback must describe this same observed-version path: observe the relevant range when necessary, then omit the field to bind that observation. It must not require the model to transcribe a digest that the Harness can already bind. Direct executor calls still require a valid guard; neither the feedback nor omission authorizes a fresh-disk version or automatic correction of an explicit value.
+
 Normal failures and resumes continue directly with the execution catalog. Optional record_work_review remains intercepted, rejects mixed execution, retains provenance and never verifies a claim. Legacy review evidence restores without rescheduling a mandatory review. Replaceable error guidance is not permanent user context. Existing unknown-effect, resource, repetition and completion gates remain enforced. No second Core, state owner, permission system or migration. Impact and acceptance limits: `docs/engineering/AGENT_CODING_LOOP_CHANGE_IMPACT.md`; fixture evidence cannot establish real-model/OpenCode parity.
 
 ### Coding-loop resume contract follow-up (2026-10-10)
@@ -2047,6 +2049,8 @@ The production Coordinator registers public-only WebToolProvider fetch through t
 Browser open/inspect/reload optionally select view=text; the default is interactive. Durable host receipts remain complete. Only the model-facing projection omits controls, declares the omission and requests a new interactive observation before control selection. Capability observations remove exactly duplicated metadata. Existing compaction retains bounded web excerpts with source, retrieval date and coverage facts, preferentially retaining web observations over ordinary local-read summaries that already have a source reservation. It grants no instruction or verification authority. The current UTC date is host-derived; UI actions/sites/body counts project actual tool facts.
 
 For InvalidToolCall with parser EOF and assembled arguments at least 8192 bytes, the existing single retry includes parser facts and a request-local 3000-character limit on write content/new_text fields. It asks for incremental coherent modules, never truncates or repairs arguments, never executes rejected fragments, and does not increase budgets. Explicit resume recovers guidance from the existing ModelFailed diagnostic and reapplies schema narrowing while that recovery note is retained. Normal non-EOF failures retain the existing correction route. Generation constraints are advisory for providers; task completion still uses current execution/evidence checks. No schema migration, raw-response retention or second recovery runtime.
+
+2026-10-22 recovery continuity amendment: large argument JSON SYNTAX receives the same generation guidance as EOF; neither proves provider truncation. The General request compiler derives a constant-size projection from this Run's existing MODEL_RETRY / MODEL_FAILED events, refreshes it incrementally and reconstructs it by paginated replay after restart. Once established, the small-write guidance and schemas remain for subsequent calls in the same Run, including after discovery, reads, successful small writes, transcript reduction and explicit continuation. New Runs start unconstrained. The request manifest identifies the source event sequence without retaining response text. This supersedes the earlier recovery-note-only lifetime: changing the final parser category or completing an unrelated valid call must not erase the known generation problem. The original single retry, model settings, output/task budgets, parsing rejection, file version guards and execution policy remain unchanged; no inferred JSON repair or fragment dispatch is permitted. Actual model compliance and full task acceptance remain separate from engineering evidence.
 
 Acceptance separates offline tests, public fetch smoke, real desktop/native input with synthetic models, and original real-model task completion. Change impact: docs/engineering/AGENT_RESEARCH_RECOVERY_CHANGE_IMPACT.md.
 
@@ -2116,6 +2120,13 @@ not establish an OS/network sandbox. Process lifetime, listening, loaded page an
 verified interaction remain distinct evidence. Source keyword matches do not verify
 browser behavior. Electron window.prompt is unsupported; local authoring should
 use observable DOM controls. No new runtime, schema or authority is introduced.
+
+The finite-command entry point rejects an explicit Python `-m http.server` service
+before spawning, with `AGENT_COMMAND_MANAGED_SERVICE_REQUIRED` and discovery
+guidance for the existing `browser_server` serve/start actions. Help invocations,
+ordinary scripts and test commands remain finite-command inputs. This bounded
+recognition does not infer arbitrary script lifetimes, dispatch a managed service
+automatically, or change permission and process ownership.
 
 ### 2026-10-12: Blocked continuation and declared unfinished work
 
@@ -2270,3 +2281,141 @@ The prior local-preview-only restriction is superseded only for explicit `comput
 Native coordinate inputs bind to full-window screenshot pixels and a fresh same-Run snapshot. Platform rechecks identity, foreground, bounds, current AX state and actual same-window hit testing, preserving existing secure/protected/governed-control denials. Input consumes visual freshness; new screenshots are required for subsequent coordinate or ref-free keyboard actions. Drag has bounded interpolation and mouse-up cleanup; dispatched unknown outcomes retain original no-replay semantics. No new verification authority, Model adapter, permission axis, Run, schema or state owner.
 
 Harness L9/Desktop projects native dispatch metadata into an expiring pointer/status pill and the existing local preview. Before native execution L5 waits for Main to confirm feedback windows are hidden, using the existing BrowserBridge pending/completion transport with a distinct bounded message. Cancellation or missing/false acknowledgement is NOT_DISPATCHED. Main keeps only temporary presentation suppression for overlapping operations, so another task's failure cannot re-show feedback while input is still active. Stop remains the existing coordinator cancellation command; shutdown and task termination remove feedback. See `docs/engineering/AGENT_COMPUTER_VISION_CHANGE_IMPACT.md`; deterministic native, packaged, production permission and live-model acceptance are reported separately.
+
+### 2026-10-22 — Explicit same-Run direction and independent Stop
+
+Normal composer submissions during execution remain queued follow-up tasks. Explicit “adjust direction” uses existing pause boundaries, waits for PAUSED, then calls trusted agent.resume with direction_message_id. It cannot be combined with clarification user_message_id, replacement attachments or resource_budget. The existing storage owner atomically admits a completed, same-conversation USER message created after Run creation, cancels PROPOSED/WAITING_APPROVAL ToolCalls with USER_DIRECTION_SUPERSEDED, and appends RUN_RESUMED/USER_DIRECTION_RECEIVED. A terminal Run rejects new admission; an already admitted message is idempotently acknowledged without another execution. Running/UNKNOWN ToolCalls block admission until existing recovery reconciles them. Cancelled proposals cannot be approved using old nonces.
+
+The durable original task, permission and execution allowance remain unchanged. L1 binds the new message identity; L2/L3 rebuild the current request from the original and admitted corrections; L4 replans through the existing general loop; L5/L7 invalidate unexecuted proposals; L6 persists and restores the same ledger; L8 retains actual-effect and verification obligations; L9 records identity/hash metadata. No second runtime/state/evidence owner or Schema/Migration is added. Correction bodies remain in existing Conversation persistence, referenced by events; cumulative admitted correction text is bounded at 64,000 characters, with explicit rejection rather than silent truncation. Compaction/restart reconstructs source-bearing context. Old provider continuations and native snapshots are invalidated; prior side effects are neither undone nor automatically replayed. Only proposals explicitly cancelled before execution are excluded from attempted-effect requirements.
+
+Desktop Stop owns its cancellation state independently of send/resume busy flags and waits for actual Run convergence. It persists a hold on the existing UI queue. Only COMPLETED can automatically drain that queue; cancellation/failure retains messages for explicit continuation, editing or deletion. Dispatch checks current queue membership and hold state; post-dispatch cancellation reconciles deletion/Stop. Retrying an uncertain queued submission first checks existing RunCreated and admitted-direction events. Restart restores held messages, never treats elapsed time as permission. Test model substitution, real desktop execution and external model acceptance remain separate validation layers.
+
+An explicit user pause also wins over a pending capability activation handoff, including after PAUSED is published but before the old loop retires. An internal handoff cannot clear that user intent. Stop wins before/after the pause boundary; a cancelled execution token cannot be replaced by a fresh continuation, and loop retirement reconciles a late Stop to the durable cancelled state.
+
+### 2026-10-23 — Native dialog waiting and input delivery continuity
+
+Browser click dispatch may wait on a native JavaScript modal before Chromium acknowledges mouseReleased. The existing Host reports bounded OPEN/CLOSED metadata to the Core-created request correlation; message/prompt text and user input are not retained. Ordinary deadlines pause during human waiting, within a ten-minute total bound. UI and browser execution-budget accounting exclude that wait. Stop releases the caller without replay; no later mouse event is sent after cancellation and no operation overlaps unfinished input on the same page. No automatic dialog handling or model-accessible CDP is added.
+
+A complete native delivery acknowledgement is admitted only from the trusted parent, bound to the original Run/ToolCall, and saved in the existing checkpoint ledger. Explicit UNKNOWN reconciliation consumes this fact after restart, retains observation_required and verification_eligible=false, and performs no replay. Late receipt arrival never resumes a cancelled/paused Run. Mere dialog presence, partial input, foreign request/page or missing historical acknowledgement cannot resolve UNKNOWN. Delivery does not prove the business effect. No schema, parallel runtime/state owner or authority is introduced. See [change impact](../engineering/BROWSER_DIALOG_RECOVERY_CHANGE_IMPACT.md).
+
+The existing storage owner admits these narrowly validated input audit facts after Stop without altering Run lifecycle: only the event and next_sequence change. Status, error, finish/update timestamps and execution allowances remain intact. Generic terminal event mutation stays rejected; an unexecuted proposal cannot produce a delivery fact.
+
+回执接收与期限裁决必须观察一致的原输入状态：BrowserBridge 使用既有 input mutex 覆盖完成端的事实落盘、关联移除与 channel delivery，并在同锁内轮询回执和判断期限。不得在等待该锁之后，仅因关联已移除就应用旧30秒期限，丢弃同时到达的可信回执。取消仍优先；此同步不生成新的运行或验证权威。
+
+### 2026-10-24 — Static build resources and evidence-led recovery
+
+The existing static preview keeps its random mount and root confinement. BrowserRuntime may redirect same-origin GET subresources into that mount only for the owning Run's native page while its committed document is under that mount. Main-frame/subframe navigation, foreign pages/origins and direct root HTTP access gain no alias. Only actual native final requests plus served response hashes can establish the existing static verification scope; worker/external/unknown dependency fallback remains conservative. No project source rewriting or second capability/state owner is introduced.
+
+Agent-owned documents report bounded native HTTP/network resource failures alongside console observations. Records omit URL credentials, query and fragment, response bodies and headers; full navigation clears pending identities and failures so old completions cannot contaminate a new document. Successful completion is not a network error. These untrusted observations explain runtime faults, not business acceptance; recorded failures withhold scoped verification. L2/L8 continuity retains successful start and serve arguments/receipts after stop or source reads. Repeated empty observations at the same known URL/revision require investigation of the served entry/resource paths instead of unbounded inspect/restart advice. See [change impact](../engineering/STATIC_PREVIEW_RESOURCE_CHANGE_IMPACT.md).
+
+The result protocol names outcome explicitly: completed/blocked are string values, never separate fields. Invalid argument feedback lists only public schema fields, preserves still-current evidence and does not require repeated effects merely to repair a proposal. Canonical evidence and completion checks remain unchanged.
+
+Edit strategy selection is a conservative optimization: non-change hints and explanatory/review ambiguity select the existing General loop, not a forced patch pipeline. This does not classify semantic intent, waive mixed action requests or grant authority. The existing outcome Handoff retains a fixed rejected-decision diagnostic in its narrow packet and checkpoint; excluding ordinary execution history must not exclude its own recovery feedback. Unknown inputs are not reflected or executed. Continue clears that feedback; original retry limits and cold draft reconstruction constraints remain.
+### 2026-10-24 — Read-only outcome method diagnostics
+
+CurrentWork's acceptance projection describes recorded check status, not a new
+requirement to execute commands. In both ordinary and restricted handoff tools,
+required_evidence describes the model's interpretation of methods required by
+the current request; evidence_tool_call_ids can separately support source-only
+answers. A kind mismatch must identify its model-declared basis and give
+method-specific recovery rather than suggesting a universal browser/command
+obligation. Existing checks on actual effects, unknown outcomes, current
+verification and unresolved acceptance remain unchanged. No extra retries,
+automatic proposal rewriting, new state owner or permission is introduced.
+
+The shared final-summary schema must distinguish source inspection from actual
+test execution, and limit passing-test claims to the exercised implementation,
+inputs and assertions. A test of copied logic does not establish the production
+implementation's correctness. This guidance also applies during read-only
+reviews and handoff; the final prose remains an unverified model assessment,
+not a new semantic-verification mechanism.
+
+
+### 2026-10-25 — Historical file-change evidence in read-only follow-ups
+
+`read_run_history` reuses existing immutable file-mutation revisions and verified
+content blobs. The prior-run index includes bounded change pointers; an indexed
+Run plus completed workspace-write ToolCall selects a revision with bounded,
+redacted before/after source excerpts, original hashes, line ranges, truncation
+and current-file-match information. The source is untrusted, historical-only and
+never current verification. Initial Git baselines do not identify the state
+immediately before an intermediate uncommitted repair.
+
+Scope remains the same Project/Conversation and pre-origin prior Runs. Current
+path/sensitive-file checks and stored blob integrity apply before content leaves
+the Harness. Missing or inaccessible contents remain unknown. No migration,
+second ledger, completion predicate or permission owner is introduced. See
+[bounded impact](../engineering/HISTORICAL_CHANGE_REVIEW_CHANGE_IMPACT.md).
+
+Outcome guidance also requires claims to name their tested implementation/cases;
+reading tests does not establish execution and copied logic does not establish
+production behavior. This is model guidance, not a semantic validator. Engineering
+checks and real-model report accuracy must be evaluated separately.
+
+
+For a nonempty prior-run index, retain the current already-admitted history tool
+after generic tool reduction. Do not synthesize a definition or change the
+access-confirmation surface. The empty-history initial core tool set is unchanged.
+Source pagination advances only over actually shown lines; a single oversized
+line is explicitly truncated. This view is reconstructed from existing storage
+on restart and does not change earlier Run status or verification.
+
+
+### 2026-10-25 — Evidence-scoped final delivery
+
+The existing finish_task proposal accepts bounded evidence_notes containing an observed subject, concrete finding, limits, current-Run receipt IDs and inspection/execution/check/history basis. New schemas request the field; legacy omitted fields remain compatible. L8 validates receipt membership and basis, derives recorded check state from CurrentWork or existing browser/skill freshness checks, and retains semantic_understanding_verified=false. Subjects, findings and limits remain model interpretations; provenance binding does not certify entailment or general correctness.
+
+L2 supplies bounded report_evidence metadata through the existing CurrentWork projection, including outcome handoff. L4 renders the notes and factual evidence basis into the existing Conversation final message after terminal-boundary revalidation. No new store, Schema/Migration, FIPC, permission or verification authority. Pure answers and legacy proposals remain valid without artificial tool use; existing effects, unknown-outcome, quote and verification requirements remain. Missing notes do not become a legacy execution obligation.
+
+Engineering checks and actual model report accuracy remain separate. This change does not detect arbitrary test import relationships or prove free-text claims. See docs/engineering/AGENT_REPORT_SCOPE_CHANGE_IMPACT.md.
+
+
+Report-review follow-up: the structured-only real task still overstated algorithm
+correctness. For a validated completed proposal with nonempty evidence_notes,
+L4 schedules at most one automatic report-review handoff per Run using the same
+model and existing outcome decision tools. L2 supplies only current constraints,
+the durable draft and bounded available source/command observations. L8 still
+validates the revised finish proposal; the review is model judgment, not semantic
+certification. The existing handoff checkpoint retains a draft ToolCall pointer
+and one-use flag. Cold restore cannot reconstruct missing source bodies; continue
+returns to ordinary tools without replay or replenishing the automatic review.
+Legacy proposals, pure answers and evidenced blockers retain their previous path.
+
+The focused review is instructed to preserve source-only conditional claims throughout summary
+and notes, describe representative actual inputs/assertions, and distinguish
+helper calls from UI actions. Prefer precise field names and descriptions over
+reconstructed quotations; quoted source must match observations. These remain
+model instructions, not new mechanical proof or runtime authority.
+
+The existing report-review call additionally supplies bounded report_review claim
+comparisons (original claim, observed evidence, delivered claim). L8 checks the
+current-Run draft identity, literal quote membership and inclusion of the delivered
+claim in summary/notes. These short model assessments are retained in the existing
+proposal JSON; they neither certify semantics nor add a review pass. Legacy
+proposals may omit the field; new review-phase finish calls require it.
+
+Real acceptance remains failed as of the 2026-10-26 calibration candidate: even
+with both source observations retained and precise indexed format diagnostics,
+the model repeated general algorithm correctness in its final report. A temporary
+scoped revision was lost during format repair. Literal consistency checks and
+same-model review are not sufficient safeguards against this defect; their cost
+and semantic results must both be recorded. The generic finite-test example is
+instructional context only, never evidence for the current task.
+
+
+### 2026-10-26 — Automatic report-review experiment withdrawn
+
+This amendment supersedes the automatic review and claim-comparison requirements
+above. Valid finish proposals proceed through the existing terminal validation
+without a second model review. Remove comparison schemas and literal quote gates;
+keep existing evidence-note provenance, actual-effect/unknown/current-check rules
+and ordinary outcome protocol recovery. Legacy report_review proposal JSON remains
+inert readable metadata. A pending legacy review checkpoint resumes as an ordinary
+finish/continue decision, never automatic completion or action replay.
+
+Delivery projects bounded tool target/status/command arguments/exit code directly
+from existing receipts beside model interpretation. It does not infer assertion
+counts from prose, certify semantics or create another evidence owner. Existing
+source/output tool records remain authoritative. No permission, FIPC or migration
+change. The reason for withdrawal is repeated real-model failure and extra retries,
+not an assertion that model report accuracy has now been solved.

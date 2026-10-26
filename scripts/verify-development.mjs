@@ -34,6 +34,6 @@ if (lane === 'PreMerge') {
   process.env.FIELORA_AGENT_TURN_EVIDENCE_DIR = path.join(process.env.FIELORA_E2E_EVIDENCE_DIR, 'agent-turn');
   process.env.FIELORA_E2E_TARGET_TIMEOUT_MS = '120000';
   console.log(`E2E_EVIDENCE=${process.env.FIELORA_E2E_EVIDENCE_DIR}`);
-  for (const name of ['test:e2e', 'test:e2e:browse', 'test:e2e:desktop-foundation']) pnpm(name);
+  for (const name of ['test:e2e', 'test:e2e:browser-lifecycle', 'test:e2e:browser-dialog-native', 'test:e2e:browse', 'test:e2e:desktop-foundation', 'test:e2e:agent-intervention', 'test:e2e:browser-dialog']) pnpm(name);
 }
 console.log(`DEVELOPMENT_GATE=PASS lane=${lane}`);

@@ -592,7 +592,7 @@ export type SetArtifactArchiveStateCommandRequest = { field_id: FieldId, convers
 
 export type AgentRunRequest = { run_id: AgentRunId, };
 
-export type ResumeAgentRunRequest = { resource_budget?: AgentResourceBudget, run_id: AgentRunId, user_message_id?: MessageId, attachments?: Array<AgentInputAttachment>, };
+export type ResumeAgentRunRequest = { resource_budget?: AgentResourceBudget, run_id: AgentRunId, user_message_id?: MessageId, direction_message_id?: MessageId, attachments?: Array<AgentInputAttachment>, };
 
 export type ListAgentRunsRequest = { conversation_id: ConversationId, };
 

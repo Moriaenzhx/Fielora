@@ -44,3 +44,35 @@ test('static preview rejects escape, symlinks, hidden files, oversized files and
     assert.equal((await fetch(preview.url, { method: 'POST' })).status, 404);
   } finally { preview.stop(); await rm(root, { recursive: true, force: true }); }
 });
+
+test('root-relative subresources map into the owned mount without exposing a public root alias', async () => {
+  const root = await mkdtemp(path.join(tmpdir(), 'fielora-static-root-assets-'));
+  const preview = new BrowserStaticPreview();
+  try {
+    await mkdir(path.join(root, 'assets'));
+    await writeFile(path.join(root, 'index.html'), '<script type="module" src="/assets/app.js"></script>');
+    await writeFile(path.join(root, 'assets/app.js'), 'import "./chunk.js";');
+    await writeFile(path.join(root, 'assets/chunk.js'), 'export const ready = true;');
+    await preview.start(root, '.');
+    const url = new URL('/assets/app.js?v=1', preview.url).href;
+    assert.equal((await fetch(url)).status, 404, 'Unattributed/direct root access stays denied');
+    const mapped = preview.redirectSubresource(url, 'GET', 'script', preview.url)!;
+    assert.equal(mapped, preview.url + 'assets/app.js?v=1');
+    assert.equal((await fetch(mapped)).status, 200);
+    const chunk = new URL('./chunk.js', mapped).href;
+    assert.equal((await fetch(chunk)).status, 200);
+    await fetch(preview.url);
+    assert.deepEqual((preview.scope(preview.url, [preview.url, mapped, chunk], false)!.files as { path: string }[])
+      .map(f => f.path), ['assets/app.js', 'assets/chunk.js', 'index.html']);
+    for (const [target, method, type] of [
+      [mapped, 'GET', 'script'], [url, 'POST', 'xhr'], [url, 'GET', 'mainFrame'],
+      [url, 'GET', 'subFrame'], ['http://127.0.0.1:1/assets/app.js', 'GET', 'script'],
+      [new URL('/favicon.ico', preview.url).href, 'GET', 'image'],
+      [url.replace('127.0.0.1', 'user:secret@127.0.0.1'), 'GET', 'script'],
+    ]) assert.equal(preview.redirectSubresource(target!, method!, type!, preview.url), undefined);
+    assert.equal(preview.redirectSubresource(url, 'GET', 'script', 'https://example.com/'), undefined);
+    assert.equal(preview.redirectSubresource(url, 'GET', 'script', new URL('/foreign/', preview.url).href), undefined);
+    const escaped = preview.redirectSubresource(new URL('/%2e%2e%2fprivate', preview.url).href, 'GET', 'xhr', preview.url)!;
+    assert.equal((await fetch(escaped)).status, 404, 'Mapping cannot bypass file containment');
+  } finally { preview.stop(); await rm(root, { recursive: true, force: true }); }
+});

@@ -941,7 +941,7 @@ pub fn coding_tool_catalog() -> Vec<ToolSpec> {
         ),
         tool(
             "run_command",
-            "Run a finite installed OS command with an argv array in the project. This tool waits for exit and cleans up its owned process group on exit/timeout, including nohup/background children. For a persistent local preview, discover and use browser_server; do not background a server here. Timeout alone does not prove a sandbox or browser networking restriction. Tool IDs such as web.search/web.fetch are NOT executables; call an exposed tool directly. Shell command strings are not accepted. On Windows do not assume bash exists; inspect the executable or use an available native program. Do not repeat a missing executable with different search terms. Use environment.inspect to discover alternative runtimes and pass their absolute path as program. argv contains only arguments, not the executable again. cwd may be relative or an absolute directory inside the project; omit it for the project root.",
+            "Run a finite installed OS command with an argv array in the project. This tool waits for exit and cleans up its owned process group on exit/timeout, including nohup/background children. For a persistent local preview, discover browser_server: action=serve hosts static project files; action=start owns a dynamic service. Python -m http.server is rejected here before launch; do not foreground or background a persistent server in run_command. Timeout alone does not prove a sandbox or browser networking restriction. Tool IDs such as web.search/web.fetch are NOT executables; call an exposed tool directly. Shell command strings are not accepted. On Windows do not assume bash exists; inspect the executable or use an available native program. Do not repeat a missing executable with different search terms. Use environment.inspect to discover alternative runtimes and pass their absolute path as program. argv contains only arguments, not the executable again. cwd may be relative or an absolute directory inside the project; omit it for the project root.",
             AgentToolEffect::Process,
             json!({"type":"object","properties":{"program":{"type":"string"},"argv":{"type":"array","items":{"type":"string"},"maxItems":128},"cwd":{"type":"string"},"timeout_ms":{"type":"integer","minimum":1000,"maximum":900000}},"required":["program","argv"],"additionalProperties":false}),
         ),
@@ -4165,6 +4165,12 @@ impl ToolRuntime {
         {
             return Err(AgentError::ToolArgumentsInvalid);
         }
+        if python_http_service(&args.program, &args.argv) {
+            return Err(AgentError::WorkGuidance {
+                code: "AGENT_COMMAND_MANAGED_SERVICE_REQUIRED",
+                detail: "This Python http.server invocation starts a persistent service, but run_command waits for exit and cleans up its owned process group. No process was launched. Discover browser_server with capability_status. For static files use browser_server action=serve with the project-relative directory, then open its returned URL with browser; use action=start for a dynamic service. Do not retry this command with a longer timeout, nohup or backgrounding. This is a lifecycle mismatch, not a network or permission failure.".into(),
+            });
+        }
         if dangerous_command(arguments) && !approved_unsandboxed {
             return Err(AgentError::CommandDenied);
         }
@@ -4460,7 +4466,7 @@ fn require_edit_guard(arguments: &Value, field: &'static str) -> Result<(), Agen
     Err(AgentError::WorkGuidance {
         code: "AGENT_TOOL_ARGUMENTS_INVALID",
         detail: format!(
-            "{field} is {reason}. Supply the current SHA-256 from an existing read/edit receipt; read only if that evidence is missing or outdated. No write occurred. This does not require reading the entire file."
+            "{field} is {reason}. No write occurred. When editing through the Agent Harness, omit this expected_sha256 field after observing the file in the current Run: the Harness binds the last observed version and still rejects concurrent changes. If that observation is missing or outdated, read the relevant range first. An explicitly supplied hash is never repaired automatically; remove it to use observed-version binding, or supply the exact valid hash from an existing receipt. Direct executor calls still require the guard. No whole-file read is required."
         ),
     })
 }
@@ -4755,6 +4761,48 @@ fn reject_tool_program(arguments: &Value, catalog: &[ToolSpec]) -> Result<(), Ag
     Ok(())
 }
 
+// Recognize an exact interpreter entry point, not arbitrary filenames or source
+// text. Unknown scripts may be finite commands; never infer their lifecycle.
+fn python_http_service(program: &str, argv: &[String]) -> bool {
+    let name = program
+        .rsplit(['/', '\\'])
+        .next()
+        .unwrap_or(program)
+        .to_ascii_lowercase();
+    let name = name.strip_suffix(".exe").unwrap_or(&name);
+    let python = name == "python"
+        || name == "python3"
+        || name.strip_prefix("python3.").is_some_and(|version| {
+            !version.is_empty() && version.chars().all(|c| c.is_ascii_digit() || c == '.')
+        });
+    if !python {
+        return false;
+    }
+    let mut args = argv.iter();
+    while let Some(arg) = args.next() {
+        match arg.as_str() {
+            "-m" => {
+                return args.next().is_some_and(|module| module == "http.server")
+                    && !args.any(|arg| matches!(arg.as_str(), "-h" | "--help"));
+            }
+            "-W" | "-X" => {
+                if args.next().is_none() {
+                    return false;
+                }
+            }
+            _ if arg.starts_with("-W") || arg.starts_with("-X") => {}
+            _ if arg.starts_with('-')
+                && arg.len() > 1
+                && arg[1..]
+                    .chars()
+                    .all(|c| matches!(c, 'u' | 'B' | 'E' | 'I' | 's' | 'S' | 'q' | 'O' | 'P')) => {}
+            // A script, -c, help/version, or an unknown option changes parsing.
+            _ => return false,
+        }
+    }
+    false
+}
+
 fn command_spawn_error(program: &str, kind: std::io::ErrorKind) -> AgentError {
     let (code, detail) = match kind {
         std::io::ErrorKind::NotFound => (
@@ -4993,6 +5041,61 @@ mod tests {
         fs::remove_file(&link).unwrap();
         fs::remove_dir_all(root).unwrap();
         let _ = fs::remove_dir_all(artifacts);
+    }
+
+    #[test]
+    fn persistent_python_http_service_is_rejected_before_process_launch() {
+        let (root, artifacts) = fixture();
+        let runtime = ToolRuntime::new(&root, &artifacts).unwrap();
+        let cancel = CommandCancellation::default();
+        // This interpreter does not exist. Reaching process launch would report
+        // PROGRAM_NOT_FOUND, not the lifecycle guidance required here.
+        let program = root.join("missing/python3").to_string_lossy().into_owned();
+        let error = runtime.execute("run_command", &json!({
+            "program":program,"argv":["-u","-m","http.server","8765","--directory","."],"timeout_ms":900000
+        }), true, &cancel).unwrap_err();
+        assert_eq!(error.code(), "AGENT_COMMAND_MANAGED_SERVICE_REQUIRED");
+        assert!(
+            matches!(&error, AgentError::WorkGuidance { detail, .. } if detail.contains("No process was launched"))
+        );
+        let help = runtime
+            .execute(
+                "run_command",
+                &json!({
+                    "program":program,"argv":["-m","http.server","--help"]
+                }),
+                true,
+                &cancel,
+            )
+            .unwrap_err();
+        assert_eq!(help.code(), "AGENT_PROGRAM_NOT_FOUND");
+        fs::remove_dir_all(root).unwrap();
+        let _ = fs::remove_dir_all(artifacts);
+    }
+
+    #[test]
+    fn python_service_detection_preserves_finite_commands_and_script_arguments() {
+        let args = |items: &[&str]| items.iter().map(|s| s.to_string()).collect::<Vec<_>>();
+        assert!(python_http_service(
+            "/opt/python3.13",
+            &args(&["-Iu", "-W", "ignore", "-m", "http.server"])
+        ));
+        assert!(python_http_service(
+            "C:\\Python\\python.exe",
+            &args(&["-m", "http.server", "8000"])
+        ));
+        for argv in [
+            vec!["-m", "http.server", "--help"],
+            vec!["-m", "unittest"],
+            vec!["script.py", "-m", "http.server"],
+            vec!["-c", "print('http.server')"],
+            vec!["-W", "http.server"],
+            vec!["--version"],
+            vec!["-X", "-m", "http.server"],
+        ] {
+            assert!(!python_http_service("python3", &args(&argv)), "{argv:?}");
+        }
+        assert!(!python_http_service("node", &args(&["-m", "http.server"])));
     }
 
     #[test]
@@ -6715,23 +6818,47 @@ mod tests {
     }
 
     #[test]
-    fn repair_missing_hash_names_the_field_without_inventing_a_read_requirement() {
+    fn edit_guard_recovery_explains_observed_binding_without_allowing_unguarded_writes() {
         let (root, artifacts) = fixture();
         let runtime = ToolRuntime::new(&root, &artifacts).unwrap();
         fs::write(root.join("repair.py"), "old").unwrap();
-        for name in ["write_file", "replace_text"] {
-            let args = if name == "write_file" {
-                json!({"path":"repair.py","content":"new"})
-            } else {
-                json!({"path":"repair.py","old_text":"old","new_text":"new"})
-            };
+        for (name, args) in [
+            ("write_file", json!({"path":"repair.py","content":"new"})),
+            (
+                "replace_text",
+                json!({"path":"repair.py","old_text":"old","new_text":"new"}),
+            ),
+            (
+                "write_file",
+                json!({"path":"repair.py","content":"new","expected_sha256":"0".repeat(62)}),
+            ),
+            (
+                "apply_patches",
+                json!({"patches":[{"path":"repair.py","expected_sha256":"0".repeat(62),"replacements":[{"old_text":"old","new_text":"new"}]}]}),
+            ),
+        ] {
             let error = runtime
                 .execute(name, &args, true, &CommandCancellation::default())
                 .unwrap_err();
             assert_eq!(error.code(), "AGENT_TOOL_ARGUMENTS_INVALID");
             assert!(error.model_recovery_message().contains("expected_sha256"));
-            assert!(error.model_recovery_message().contains("missing"));
+            assert!(
+                error
+                    .model_recovery_message()
+                    .contains("omit this expected_sha256 field")
+            );
+            assert!(
+                error
+                    .model_recovery_message()
+                    .contains("still rejects concurrent changes")
+            );
+            assert!(
+                error
+                    .model_recovery_message()
+                    .contains("Direct executor calls still require the guard")
+            );
             assert!(!error.model_recovery_message().contains("fully read"));
+            assert_eq!(fs::read(root.join("repair.py")).unwrap(), b"old");
         }
         assert_eq!(fs::read(root.join("repair.py")).unwrap(), b"old");
         fs::remove_dir_all(root).unwrap();

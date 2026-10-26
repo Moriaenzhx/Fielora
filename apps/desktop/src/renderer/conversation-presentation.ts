@@ -1,6 +1,6 @@
 import type { AgentToolCallView } from '@fielora/contracts';
 import type { AppIconName } from './ui';
-import type { ConversationActivityEntry, ConversationActivityItem } from './agent-activity-projection.ts';
+import type { ConversationActivityEntry, ConversationActivityItem, ConversationActivityGroupKind } from './agent-activity-projection.ts';
 import { computerApplicationActivity } from './agent-activity-projection.ts';
 import { activityToolDescription, activityToolIssue, webActivity } from './agent-activity-detail.ts';
 import { toolDetail } from './agent-presentation.ts';
@@ -105,6 +105,15 @@ export function conversationToolPresentation(tool: AgentToolCallView): Conversat
     action = '运行命令'; detail = commandSummary(tool); icon = 'terminal';
   } else if (tool.name === 'work_plan') {
     action = '更新工作计划'; icon = 'plan';
+  } else if (tool.name === 'git_read') {
+    const operations: Record<string, [string, AppIconName]> = {
+      status: ['检查 Git 状态', 'changes'], diff: ['查看代码差异', 'fileDiff'],
+      log: ['查看提交历史', 'history'], show: ['查看提交内容', 'commit'],
+    };
+    [action, icon] = operations[String(args.operation)] ?? ['查看 Git 信息', 'branch'];
+    detail = concise(activityToolDescription(tool));
+  } else if (tool.name === 'artifact.set_archive_state') {
+    action = args.archived === true ? '归档产物' : args.archived === false ? '恢复产物' : '更新产物归档状态'; icon = 'archive';
   } else if (tool.name === 'browser_server') {
     const actions: Record<string, string> = { start: '启动服务进程', serve: '启动本地预览服务', status: '检查开发服务', stop: '停止开发服务' };
     action = actions[String(args.action)] ?? '操作开发服务'; icon = 'server';
@@ -118,11 +127,16 @@ export function conversationToolPresentation(tool: AgentToolCallView): Conversat
       git_commit: ['提交变更', 'commit'], git_push: ['推送提交', 'cloud'], git_create_branch: ['创建分支', 'branch'], git_switch_branch: ['切换分支', 'branch'],
       browser_plan: ['记录页面检查计划', 'plan'], browser_verify: ['检查页面结果', 'verified'],
       list_skills: ['查看 Skill 清单', 'extensions'], load_skill: ['加载 Skill', 'extensions'], verify_skill: ['检查 Skill 文件', 'verified'],
-      capability_status: ['查询可用能力', 'tools'], 'mcp.list_connections': ['查看工具连接', 'extensions'], 'mcp.activate_connection': ['连接外部工具', 'extensions'],
+      capability_status: ['查询可用能力', 'tools'], 'mcp.list_connections': ['查看工具连接', 'connection'], 'mcp.activate_connection': ['连接外部工具', 'connection'],
       'skills.search': ['搜索 Skill 来源', 'search'], 'skills.prepare': ['准备 Skill 包', 'extensions'], 'skills.install': ['安装 Skill', 'extensions'],
+      request_user_input: ['向你提问', 'question'], continue_task: ['继续处理任务', 'run'],
       finish_task: ['提交任务结果', 'inbox'], record_request_intent: ['记录当前请求', 'plan'], read_run_history: ['查看执行历史', 'history'],
-      delegate_readonly: ['委派只读检查', 'search'], 'file.extract': ['提取文档内容', 'file'], 'environment.inspect': ['检查运行环境', 'environment'],
-      'fonts.list': ['查看本机字体', 'appearance'], 'fonts.prepare': ['准备字体文件', 'appearance'], 'fonts.install': ['安装用户字体', 'appearance'],
+      record_work_review: ['记录工作复盘', 'plan'],
+      delegate_readonly: ['委派只读检查', 'delegate'], 'file.extract': ['提取文档内容', 'source'], 'environment.inspect': ['检查运行环境', 'environment'],
+      'fonts.list': ['查看本机字体', 'font'], 'fonts.prepare': ['准备字体文件', 'font'], 'fonts.install': ['安装用户字体', 'font'],
+      'tools.prepare': ['准备工具安装', 'tools'], 'tools.install': ['安装工具', 'tools'],
+      'artifact.create': ['创建产物', 'objects'], 'artifact.read': ['读取产物', 'source'], 'artifact.list': ['查看产物列表', 'objects'],
+      'artifact.update': ['更新产物', 'edit'], 'artifact.history': ['查看产物历史', 'history'], 'artifact.export': ['导出产物', 'download'],
     };
     [action, icon] = actions[tool.name] ?? [`调用 ${concise(tool.name, 40) || '工具'}`, 'tools'];
     const readPath = tool.name === 'read_file' && typeof args.path === 'string' ? args.path : null;
@@ -134,6 +148,23 @@ export function conversationToolPresentation(tool: AgentToolCallView): Conversat
   }
   const label = tool.error_code === 'AGENT_EDIT_ALREADY_CURRENT' ? '内容已一致' : statusAction(action, status);
   return { action, label: [label, detail].filter(Boolean).join(' · '), detail, icon, status, succeeded: status === 'COMPLETED', command };
+}
+
+const ACTIVITY_ICONS: Record<ConversationActivityGroupKind, AppIconName> = {
+  SEARCH: 'search', DIRECTORY: 'folderOpen', INSPECT: 'files', CHANGE: 'edit', VERIFY: 'verified',
+  COMMAND: 'terminal', VERSION: 'branch', NETWORK: 'browse', OTHER: 'tools', MIXED: 'operations',
+};
+
+export function conversationOperationIcon(entry: ConversationActivityEntry): AppIconName {
+  return entry.kind === 'TOOL' ? conversationToolPresentation(entry.tool).icon : ACTIVITY_ICONS[entry.activityKind];
+}
+
+/** A mixed group must not impersonate its first tool. Match a web-led label to
+ * that same web entry; otherwise use a shared action icon or a neutral stack. */
+export function conversationGroupIcon(entries: readonly ConversationActivityEntry[], labelEntry?: ConversationActivityEntry): AppIconName {
+  if (labelEntry) return conversationOperationIcon(labelEntry);
+  const icons = new Set(entries.map(conversationOperationIcon));
+  return icons.size === 1 ? [...icons][0]! : 'operations';
 }
 
 export interface ConversationArchiveSummary {

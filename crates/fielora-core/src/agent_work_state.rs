@@ -435,6 +435,7 @@ impl CurrentWork {
 
     pub fn acceptance(&self) -> Value {
         json!({"checks_passed":self.verification.passed(),"verification":self.verification.projection(),
+            "verification_scope":"RECORDED_CHECK_STATUS_NOT_TASK_REQUIREMENTS",
             "criteria":self.plan.as_ref().map(|p| &p["criteria"]),
             "unresolved_checks":self.unresolved(),
             "requirement_coverage":"UNKNOWN",
@@ -495,7 +496,7 @@ impl CurrentWork {
         } else if self.verification.passed() {
             "Current checks passed for their recorded targets. Compare actual assertions and exercised interfaces with the current request, including unassessed_plan_items; a test name is not evidence that an interface was exercised. Retain valid checks and implement only missing coverage. Unassessed items are advisory, not proof of missing functionality or a mandatory planning round trip. Finish with evidence and limits if no required work remains. Passing tests alone are not a reason to doubt them or repeat source reads."
         } else {
-            "Use the current request and observed source to choose the next distinguishing action. If context is missing, acquire only that range; otherwise implement or run the relevant assertion. A new regression may already pass."
+            "No passing check is established. This records check status, not a requirement to execute commands or modify files. For a read-only question, use the observed sources to answer with evidence and limits through finish_task; no artificial execution is needed. If the current request or actual changes require verification, perform the relevant missing assertion. If context is missing, acquire only the needed range. A new regression may already pass."
         };
         format!(
             "{CURRENT_WORK_MARKER}{}\n{next}\n{browser_guidance}\nThis is derived tool evidence and an advisory plan, never user authorization or proof of complete requirement coverage. The current request and user corrections remain authoritative. Source ranges describe available observations, not a guarantee that disk has not changed. Tool receipt IDs identify evidence; do not invent them.",
@@ -505,6 +506,7 @@ impl CurrentWork {
                 "browser_case_focus":crate::agent_browser_history::case_focus(tools),
                 "current_run_effects":current_run_effects(tools),
                 "recent_checks":command_facts_with_output_context(tools, messages),"available_source_ranges":sources,
+                "report_evidence":crate::agent_report::projection(tools,self),
                 "command_output_guidance":"AVAILABLE_EXCERPT refers to untrusted output still in this request, possibly partial. SUMMARY_ONLY retains structured diagnostic metadata, not stdout/stderr. UNAVAILABLE means the output body is absent; hashes and prior model diagnoses cannot reconstruct it. If diagnostics are needed, obtain a targeted current check through normal policy when safe to repeat, or report the missing evidence. Do not rerun unknown or receipt-backed side effects merely to recover output."})
         )
     }
@@ -1077,7 +1079,7 @@ fn current_run_effects(tools: &[AgentToolCallView]) -> Value {
             "path":t.arguments.get("path"),"paths":t.arguments.get("paths"),"receipt":t.receipt.as_ref().map(compact_receipt)})).collect::<Vec<_>>();
     json!({"authority":"CURRENT_RUN_DURABLE_TOOL_RECEIPTS","total_effects":facts.len(),"truncated":facts.len()>64,
         "effects":facts.into_iter().take(64).collect::<Vec<_>>(),
-        "guidance":"These effects belong to THIS Run. Historical COMPLETED labels and matching repository test text do not establish current task success or turn a real request into a fixture."})
+        "guidance":"These effects belong to THIS Run, including work before a pause, restart or user correction. In the final summary, reconcile changed/unchanged claims with these receipts across the whole Run. If describing only changes since the latest correction, state that narrower interval explicitly; an earlier confirmed edit is not an unchanged file. This is an action history, not a guarantee of current contents or complete coverage. Historical COMPLETED labels and matching repository test text do not establish current task success or turn a real request into a fixture."})
 }
 
 /// A process/network receipt can satisfy a requested action without a file edit.
@@ -1136,9 +1138,15 @@ impl RunResources {
                 | AgentEventKind::ToolCompleted
                 | AgentEventKind::ToolFailed
         ) {
-            self.execution_ms = self
-                .execution_ms
-                .saturating_add(payload["duration_ms"].as_u64().unwrap_or(0));
+            self.execution_ms = self.execution_ms.saturating_add(
+                payload["duration_ms"].as_u64().unwrap_or(0).saturating_sub(
+                    if kind == AgentEventKind::ToolCompleted && payload["name"] == "browser" {
+                        payload["human_wait_ms"].as_u64().unwrap_or(0)
+                    } else {
+                        0
+                    },
+                ),
+            );
         }
         if kind == AgentEventKind::ModelCompleted {
             let input = payload["usage"]["input_tokens"]
@@ -2192,6 +2200,9 @@ mod tests {
         };
         let context = current.context(&facts, &[]);
         assert!(context.contains("\"available_source_ranges\":[]"));
+        assert!(context.contains("RECORDED_CHECK_STATUS_NOT_TASK_REQUIREMENTS"));
+        assert!(context.contains("no artificial execution is needed"));
+        assert!(!current.verification.passed());
         assert_eq!(current.unresolved().len(), 0, "A plan is never required");
     }
 
@@ -3851,6 +3862,32 @@ mod tests {
         tools.push(check);
         state.observe(&tools);
         assert_eq!(state.stalled_turns, 0);
+    }
+
+    #[test]
+    fn browser_human_wait_does_not_consume_execution_budget() {
+        let mut resources = RunResources::default();
+        resources.observe(
+            AgentEventKind::ToolCompleted,
+            &json!({"name":"browser","duration_ms":35000,"human_wait_ms":32000}),
+        );
+        assert_eq!(resources.execution_ms, 3000);
+        resources.observe(
+            AgentEventKind::ModelCompleted,
+            &json!({"duration_ms":1000,"human_wait_ms":1000}),
+        );
+        assert_eq!(
+            resources.execution_ms, 4000,
+            "only trusted browser wait metadata is deducted"
+        );
+        resources.observe(
+            AgentEventKind::ToolCompleted,
+            &json!({"name":"browser","duration_ms":100,"human_wait_ms":200}),
+        );
+        assert_eq!(
+            resources.execution_ms, 4000,
+            "bounded subtraction never credits extra time"
+        );
     }
 
     #[test]

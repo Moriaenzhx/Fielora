@@ -4326,3 +4326,296 @@ Forge 已补本地 ad-hoc 从内到外签名，签名错误中止打包；postPa
 按用户要求未重跑全量测试。status-fix 已安装到 canonical，原包保留在 Fielora-backups/20261014-130049-before-status-receipt-fix/Fielora.app；新签名的辅助功能与录屏在既有授权范围内重新绑定。真实 Qwen 同 Run 01a13840-c6e2-7d60-adff-98128ade5257 已识别全部权限、触发图像审批、获取820×660截图，按图点击红色目标。后续截图与独立目标可信事件共同确认 clicks=1，最小看图操作闭环成立；焦点变化、缺少新截图、陈旧快照均先被零派发拒绝，模型自行重观察恢复。
 
 收窄范围的追加消息进入队列，未即时改变旧任务；模型继续其他合成动作后于step45完成，记录保留此额外执行。排队消息随后启动重复Run，已拒绝其图像授权，零图像与零输入后暂停，不再继续。该样本不证明通用应用可靠性或原办公任务完成，也不替代既有全量PreMerge边界。具体证据见artifacts/agent-computer-vision-20261014/DELIVERY.md。
+
+
+## 2026-10-22 — 稳定化主线开始
+
+用户要求按现状检查的优先级逐项完成，在本轮完成前不开展其他工作。顺序为：恢复完整桌面回归基线；补齐运行中纠正、可靠停止与追加队列处置；再做代表性真实任务及同模型 OpenCode 对照。既有 Aegis/DXE/Personal Steward 后续路线不提前展开。
+
+当前 Browse 关页失败已定位到测试留下的 macOS 原生上下文菜单：逻辑 Page 被删除，但菜单 tracking 延后 WebContents 销毁。宿主现统一持有菜单，在替换、关页与 Runtime teardown 时请求原生清理；测试不再用 CDP 网页 Escape 代替 OS 菜单操作。完整 Browse dev E2E 与新增真实原生菜单/网页销毁专项均通过，仍以实际 destroyed/target 消失及零 Page 断言验收。Foundation dev E2E 随后已通过，保留真实审批、文件写入/审阅、终端执行与重启恢复；断言按既有未发送对话复用、终态呈现及终端容器行为更新。顶部环境控件容器高度偏差已修正。365 项 TypeScript、lint、typecheck 与 23 项 UI/UX 专项通过。本轮第一项完整 PreMerge 随后通过（artifacts/stability-20261022/premerge-1.log），包含 Core、FIPC 与 Field/Browse/Foundation 桌面回归；packaged 与真实模型任务仍待验证，本轮尚无外部模型请求。
+
+### 2026-10-22 — 同 Run 纠正、独立停止与队列恢复
+
+确认旧“调整方向”只编辑输入框，未进入执行中 Run；Stop 受共享发送锁拦截，队列又对 CANCELLED/FAILED 自动接续。现 Stop 独立等待实际取消，暂停追加队列并持久化；仅 COMPLETED 自动接续，停止/失败后可显式继续、编辑或删除。排队请求在派发前检查保留状态，在启动回执后对停止/删除做取消对账；丢失回执重试先核对现有事件，避免重复启动。空队列的停止状态不带入用户下一次显式新任务。
+
+纠正复用 pause 的安全边界与 resume 的新增 direction_message_id；同一笔事件事务验证同 Conversation 的真实 USER 消息、取消未执行提案并继续同 Run。原始 task、权限及预算不改写；后续上下文从原始任务和已接纳纠正重建，UNKNOWN 动作须先核对。旧审批不可重放，纠正不是新的执行许可或验证证据。真实 Electron/Core 的确定模型专项通过停止保留、删除、重启、手动/自动接续、同 Run 新目标文件与实际内容检查、旧审批拒绝、纠正后重启、忙碌中停止和丢失回执不重放（artifacts/stability-20261022/intervention-dev-4/summary.json）。这些结论不代表真实模型已解决 10 月 14 日原办公任务；新完整 PreMerge 与打包验证待本轮最终代码复验。
+
+第二项最终验证：完整 pnpm verify:premerge 通过（artifacts/stability-20261022/premerge-6.log）；新增定序测试证明显式暂停阻止旧 Capability handoff 自动接续，Stop 在暂停边界前后都进入 CANCELLED，续跑不能替换已取消 token。等待批准时也保留独立 Stop。独立 ad-hoc 签名包的 Browse、Foundation、intervention 三项全部通过，开发版/包内 Core 和 renderer 指纹一致；包位于 artifacts/stability-20261022/package/Fielora-darwin-arm64/Fielora.app。原安装包未替换，Windows 本轮未实跑。中途磁盘不足只清理可重建编译缓存；一次 Browse 在源码编辑/开发热重载期间丢失页面，固定源码后的完整重跑及打包回归均通过，没有放宽 Browse 或文件结果断言。
+
+第三项开始前只读检查当前配置：仅有 qwen3.7-plus 的 Coding Plan endpoint，不能用于自动评测。已向用户询问允许自动评测的按量 API 配置；可继续准备八类实体任务和独立评分，但真实配对结果保持 NOT_RUN。OpenCode v1.18.35 tag 再核对为 53d1eabb61e21162157817bf677da0a4ad3332e3，官方 macOS arm64 CLI archive 已按 Release SHA-256 校验，尚未调用模型。
+
+### 2026-10-22 — 八类评测资产补齐；现有模型交互被 429 阻塞
+
+八类实体项目均已有项目外评分，新增 large-files / http-protection 为 Node 24 原生 TypeScript；cold-recovery / midrun-correction 复用真实跨文件项目，但必须另外证明安全暂停、实际进程重启/同 Run 方向接纳和后续实际模型输入，不能只凭最终文件正确通过。准备器生成 24 组、48 个逐文件同哈希且拥有独立 Git 起点的项目；聚合器核对原始证据哈希，保留失败/未运行和 UNKNOWN 用量，拒绝零分母的虚假提升。所有离线自检仅为评分机制证据，完整配对仍 NOT_RUN。
+
+用户随后要求保留现有不限额套餐，未配置按量 API。因此按现有 qwen3.7-plus 连接做逐项交互式编码验收，实际参数 enable_thinking=true / max_tokens=6144，凭据继续由现有产品读取，未复制或输出。候选包在独立项目启动 Run 01a1620f-b8ee-7692-96d1-cf6aaa336e9b；第一轮及稍后一次人工受控同 Run 续跑都收到 HTTP 429 / PROVIDER_RATE_LIMITED，Run 保持 PAUSED，工具数为 0，源文件没有修改。原因只能确认 Provider 限流，未证明额度耗尽；不把它归因于旧 UI/审批/原生权限问题，也不继续循环重试。原始任务、中途更正、冷恢复的真实模型成功仍待该连接恢复；材料和截图位于 artifacts/stability-20261022/interactive-current-model/。
+
+### 2026-10-22 — 模型恢复后的真实编码、冷恢复与纠正
+
+用户再次要求开始后，现有连接恢复；同一 Run 完成了实际源码修改、安全暂停、旧宿主退出、新进程冷启动和继续，随后从真实 UI 接纳 CSV 改 JSON Lines 的纠正。纠正消息与下一实际模型请求的来源 ID/内容哈希对应，最终同 Run COMPLETED；7 项外部行为检查、30 项提交测试及保护文件哈希均通过。此为逐项交互的组合验收，包含之前的 429 尝试，不是正式匹配起点的 OpenCode 样本。
+
+收尾报告把纠正前已经修改的 service.py 列为“未修改”。核对确认该写入在纠正后及最终回合的 current_run_effects 中始终存在，不能归因于冷恢复丢失账本。Model 混淆整个 Run 与纠正后阶段的报告范围；现有 Harness 上下文仅补充按整项回执核对变更、阶段性报告明确时间范围的说明，不增加状态所有者或自然语言判分器。这一说明尚待新真实运行复验；当前功能/控制链通过，报告准确性不通过，原办公任务与正式配对仍未验证。
+
+后续独立 Run 01a1629c-5101-74a3-80ae-ff009500e8b6 已完成同类真实 UI 纠正验收：7 项外部检查、30 项提交测试及保护范围全部通过，最终报告没有再误称之前的修改为“未修改”。这是一个真实样本的报告准确性通过，不是一般可靠性保证；初次错误证据保留。修改后的完整 PreMerge 与新签名包 intervention 回归通过。继续在独立项目恢复完整 AI 办公评审原任务，不把小型编码验收替代其研究、浏览器和原生桌面交付。
+
+完整原任务第一轮 01a162a5-03e2-7701-9c15-9e0b5e843881 在研究与网页写入后，用同步 run_command 启动 Python http.server 并设置 900000ms 超时，阻塞后续动作。真实进程运行及调用参数确认是有限命令/常驻服务生命周期不匹配；当前原生权限为 GRANTED。操作者停止后 Run、工具均 CANCELLED，所属进程消失；原任务仍未完成。现有限命令入口对明确的 Python -m http.server 启动提前返回未派发的托管服务指导，沿用 browser_server serve/start；不自动改路，不修改任意脚本/帮助/测试命令的执行语义。新包及真实任务复验待执行，不能沿用之前报告范围修正的工程 PASS。
+
+生命周期修正最终工程验收：service-lifecycle-premerge 完整通过，Agent 201 项通过/7 项既有 ignored；开发及新签名包的 local-preview 均证明拒绝→目录发现→托管 Python→真实页面加载/点击与退出清理。旧专项测试漏显示 Browser surface，已先走正常显示路径并等待非零 bounds，未放宽真实输入断言。新候选包为 artifacts/stability-20261022/package-service-lifecycle/Fielora-darwin-arm64/Fielora.app，原安装包不变。完整原任务第二个干净副本已启动，真实模型是否正确完成仍待结果。
+
+完整原任务第二轮 01a162be-096a-72a3-9b59-9f275e4c6070 于第 13 步 PAUSED/PROVIDER_INVALID_TOOL_CALL：两次大参数 EOF 后最终 SYNTAX；既有缩小写入提示与临时 schema 约束未使重试成功。只生成来源记录，未到服务托管/浏览器/原生保存，不计原任务成功；元数据不能证明服务端截断的单一原因。未更换模型、放大输出参数或补齐非法 JSON 执行。
+
+随后按冻结的 paired-suite-r2 开始逐项交互对照，首次 repair-01 两边均为同 qwen3.7-plus、thinking ON、输出6144。Fielora 自报16测试通过，但外部检查发现空/缺字段备份会清空隔离测试数据库；OpenCode 实现通过同一行为检查、提交25测试通过。两边均未检出预定的“仅空对象恢复不安全”突变，完整评分都失败；Fielora 的报告与数据保护另记失败，OpenCode 不因此被写成功能失败。不存在用户生产数据损失。此为一个配对样本，不能推导总体优劣或忽略失败计算效率；24组与原任务连续成功仍未完成。协议冻结时的 NOT_RUN 历史状态保留，后续实际结果以独立回执及评分为准。
+
+第二个修复配对 repair-02：Fielora 与 OpenCode 均通过 6 项外部功能检查，分别提交 19/24 项通过测试，但两边仍未检出预定的空对象恢复突变，完整样本均失败。Fielora 本次正确拒绝空备份、保护数据库，不能把第一次损坏推广为每次必现；也不能用第二次成功覆盖首个失败。本次报告仅有恢复测试分组数量的轻微笔误，总数和行为描述正确，独立记录不归为虚假完成。继续跨文件等不同场景，当前已有安全失败的基线不具备整体过线资格。
+
+后续 cross-file-01 与 large-files-01 两个配对两边均通过完整样本检查：跨文件各 12 项外部行为/34 项提交测试；大文件各 14 项外部检查及 24/21 项提交测试，两份静态注册表逐字保留。Fielora 跨文件出现 3 次版本哈希参数拒绝，大文件出现可选计划字段和收尾回执 ID 拒绝，均自行恢复且拒绝时无写入/无完成。两组共同成功的用时与 Token 均高于匹配 OpenCode，但样本量仍小，不把开销差异归于单一机制。当前继续只补回归、HTTP 数据保护等独立场景，P2 未通过。
+
+同模型配对暂止于 6 组：两边各 2 组完整通过，其余失败/未完成均保留；剩余 18 组未运行。regression-only-01 两边仍漏检固定空对象恢复突变；Fielora 报告混淆源码具备校验与测试已覆盖。http-protection-01 的 Fielora 外部 18 项和提交 19 项通过，但声称全部非法输入测试都比较了旧文件，实际四项只断言错误码，报告/虚假验证另记失败。OpenCode 同组初始两个并发请求均收到 HTTP429，工具数0、用量未知、原始种子未改，随后本地转发阻止继续请求。当前服务再次限流，不自动启动剩余样本或循环重试；仍不能判定套餐耗尽。
+
+跨文件哈希失误的源码追查确认：现有 Harness 早已允许省略 expected_sha256 并绑定已观察版本，底层错误提示却仍要求手抄摘要。现仅统一该恢复说明，明确观察后可省略、无观察先读相关范围、显式错误不自动修正和直接 Executor 仍严格要求 guard；不新增状态或削弱冲突检测。缺失/62位错误 guard 的零写入定向测试通过，Core 既有绑定/并发冲突测试及候选包继续验证。此前配对固定包和失败记录保留，此提示修正尚无新真实模型证据。
+
+该窄修正的完整 PreMerge 已通过（hash-recovery-premerge.log），包含 Field、Browse、Foundation 与 intervention 真实桌面回归；独立签名包的编码/冷恢复专项通过，实际重新启动后同 Run 完成修复，原测试及数据保持。专项首次因工具数旧断言失败：General 任务已有 19 个核心工具加可选 record_work_review；现分别限定核心 19/总数 20，并保留零强制 REVIEW、真实失败后编辑、观察版本和文件检查，原失败记录未覆盖。最终候选位于 artifacts/stability-20261022/package-hash-recovery/Fielora-darwin-arm64/Fielora.app，严格签名通过；实际包内 source fingerprint 为 baf14690aae9173c9afad15dbafed023012b22711f5f8d0225cc7ec96482dd4c。现有安装未替换，Windows 本轮未运行。P0/P1 工程验证完成，P2 仍未通过：6 组对照各 2 组完整成功、18 组未运行，原办公任务未验收；模型再次 429 后没有继续请求，新提示尚未真实模型复验。
+
+### 2026-10-22 — 大参数恢复的跨回合连续性修复
+
+用户要求下一步后，核对原办公 Run 01a162be-096a-72a3-9b59-9f275e4c6070：seq94 大参数 EOF 的一次重试实际成功返回 capability_status，seq99 完成发现；seq103 下一回合又大参数 EOF，seq104 最后 SYNTAX 后暂停。原因不能笼统写成模型从未响应缩小提示：已确认 Harness 在一次有效调用后丢弃请求级约束，以及只按最后 EOF 恢复的第二缺口。模型最初生成非法参数的原因仍未证明。
+
+候选修复从同 Run 既有模型错误事件重建并增量更新常量大小的恢复投影，跨普通回合、历史压缩和重启保留小块写入提示与 schema；大参数 SYNTAX 与 EOF 同样处理，新 Run 不继承。没有额外模型重试、预算提升、自动 JSON 修复或片段执行。4 项定向测试通过；完整 Core 与桌面/打包专项正在验证，真实模型及原任务仍待验。证据目录 artifacts/model-recovery-20261022/。
+
+该候选 Core lane 完整通过（662 项 Rust / 8 项既有 ignored、格式、Clippy），开发版及独立签名包的大参数恢复专项通过；包内实际 source fingerprint 为 21912d9a193d44afdf77f26d0375b25af703636abd746d61f3f66c615301ea7f，与当前源码一致。当前候选没有另跑完整 PreMerge；此前完整 PASS 仅属于上一候选。既有安装未替换，Windows 未运行。
+
+当前千问已恢复，同一原办公 Run 从第13步显式继续至第38步，25次真实模型调用全部有效，无新增模型失败或自动重试，全部请求保留seq104恢复来源。完成5次文件写入/修改，经托管服务实际打开网页；浏览器确认6人预算1680、4/3/5得到3.90及排序变化。原请求、PROGRESS、SOURCES逐字保留。首个create_file仍有3213字符，不能将有效恢复写成Provider严格遵从3000字符schema或普遍可靠性证明。
+
+原任务仍未通过：非法评分检查失败，模型生成的renderScores会清空整个输入表，模型已自行识别此缺陷。其随后点击“重置默认”触发原生confirm“确定重置为默认值？”，mouseUp确认返回被弹窗阻塞；30秒后ToolCall 01a1633f-76f2-7540-af53-81c42dc48b62进入UNKNOWN。操作者通过实际UI取消弹窗，保留测试数据；再点继续只完成恢复核对并暂停AGENT_BROWSER_OUTCOME_REVIEW_REQUIRED，没有新模型调用或输入重放。未伪造该操作成功或修改UNKNOWN记录。此为Capability浏览器输入与Harness L5/L6恢复衔接的新阻塞，下一步需处理弹窗状态及可信结果核对；导出、原生摘要与整体研究仍未验收。完整证据在real-office/acceptance-review.json。
+
+### 2026-10-23 — 网页确认弹窗与迟到输入回执恢复候选
+
+真实 Electron 实验确认原生 confirm 关闭之后 Chromium 才确认 mouseReleased。候选沿现有 BrowserRuntime/Host/BrowserBridge 记录本次输入的弹窗打开/关闭，等待期间暂停普通25/30秒时限、总等待仍限10分钟；取消立即释放调用方，尚未结束的输入继续占用原页面，禁止叠加输入。没有自动处理确认框，也不保存弹窗正文/输入文本。UI 显示等待，实际人工等待从显示用时和本次浏览器工具执行预算扣除。
+
+实际 DISPATCHED 回执经 Core 原请求/Run/ToolCall 关联，写入既有 checkpoint ledger。显式恢复只可据此核对同一 UNKNOWN 点击，不重放、不产生 Verification PASS；停止的 Run 不因迟到回执自动运行。旧任务没有保存原回执，仍不能倒推成功或清除 UNKNOWN。真实原生专项已覆盖超过30秒、取消/接受/alert、Stop后迟到回执及鼠标按下阶段中断仍UNKNOWN；Core冷恢复专项通过，UI lane 368项通过。开发版及签名包完整桌面专项、完整PreMerge最终复跑均PASS，原真实办公任务仍未验收。证据：artifacts/browser-dialog-recovery-20261023/。
+
+完整桌面联调补出终态审计缺口：generic append_agent_event 拒绝 Stop 后回执，且普通 checkpoint 更新生命周期投影。现新增同一 Storage 内的窄 browser input audit append，只允许已派发 browser click 的等待/回执事实，仅增加事件和next_sequence，保留取消状态、错误、时间与额度；普通终态变更仍拒绝。36项浏览器Core定向通过；完整PreMerge通过665项Rust（8项既有ignored）、368项TS、15项FIPC及全部桌面回归。开发/签名包均验证原生等待、停止后迟到事实、冷重启保持取消与不重放，实际三项源码指纹一致；严格签名通过。首轮PreMerge因确认框在计划处理前收到accepted=true而未满足31秒等待断言，失败证据保留；同源码独立原生重跑及完整重跑通过，未放宽断言，提前确认原因未证明。Windows本轮未运行，既有安装未替换。
+
+同一原项目的新Run 01a166fa-b12d-7690-95f9-7bcf5b4bff8f 使用现有qwen3.7-plus（thinking=true、max_tokens=6144）交互续接。真实模型在第11步再次触发网页confirm，等待66306ms后由操作者通过实际UI确认；原请求保存OPEN/CLOSED/真实DISPATCHED，Tool正常完成并继续第12步，无UNKNOWN或点击重放。人工等待扣除为66306ms，显示用时保持；该样本证明本次输入机制进入真实链路，不代表工作台已验收或无人干预成功。旧Run第38步的UNKNOWN保留。
+
+真实续跑还发现UI用时投影遗漏：调整方向会取消旧未执行审批，却不会生成该审批的APPROVAL_RESOLVED，旧approval等待标记因此漏算后续执行时间，直到另一次审批解除才恢复增长。现以RUN_RESUMED结束旧审批等待，新审批仍独立计时；定向测试先红后绿，369项UI测试通过。最终package-final已构建，完整最终PreMerge与包内专项正在复验。该修正不改变任务状态、权限、执行或模型账本。
+
+最终PreMerge在确认关闭后的回执/超时并发窗口失败：真实回执已在seq47落盘，接收端随后因关联删除而按原30秒期限生成UNKNOWN。先前包通过不能排除该竞态。现将回执轮询和期限判定放到完成端持有的同一input锁内；受控锁竞争回归在旧顺序稳定复现UNKNOWN，修复及最终候选正在复验，当前不得标记最终PreMerge通过。原真实办公续跑停在第34步正常审批，未并发操作桌面。
+
+竞态修复后的最终完整PreMerge通过（666 Rust / 8项既有ignored、369 TS、15 FIPC及全部桌面回归）；package-race-fixed严格签名及包内同路径通过。开发和签名包实际三项指纹与源码一致，source为50267e733ba82292454cff77cd9d752d25c733fafa73bf10147e41a495724042。真实办公Run在第34步审批处由操作者重启至此包，原审批及同Run保持；旧瞬时页面/服务须由模型重新建立。原任务尚未通过，人工纠正1次及本次版本切换单列，不能记无人干预成功。
+
+最终真实续跑于同Run第37步暂停PROVIDER_STREAM_INTERRUPTED：36次有效模型完成，既有一次流恢复尝试后仍中断（HTTP200、总240386ms），该步无工具派发。新包UI显示可继续，原REQUEST/PROGRESS/SOURCES哈希保持，旧第38步UNKNOWN保留。没有追加重试或改变模型/额度。机制工程通过与原办公任务未通过继续分开；当前请求中断不能推定全局模型服务不可用。最终证据见artifacts/browser-dialog-recovery-20261023/real-office/acceptance-review.json。
+
+### 2026-10-24 — 既有 Vue 项目的真实修改验收
+
+用户要求从本机既有代码提供实际修改任务，按可运行结果评价。取现有待办应用七个输入文件作独立 Git 副本，通过正常生产 UI 交给现有 qwen3.7-plus（thinking=true、max_tokens=6144），要求搜索/状态筛选、统计、撤销删除、旧数据及原有交互保持。Run `01a16c26-fc5e-78c3-a6ce-0f90e79a1a34` 实际完成41次模型调用，无 Provider 失败；实现中操作者只处理8次必要审批，没有技术提示或代改代码。原项目七文件哈希不变。
+
+模型自行统一旧 index.html 与 Vue 源码的双入口，去掉 CDN、接入样式并实现功能。独立构建与开发页面通过；真实页面验证组合搜索/筛选、全局计数、旧数据、编辑保存/取消/Enter/Escape、勾选、刷新持久化、跨筛选撤销和连续删除只撤销最后一次。另以实际编译的 App.vue 函数核对 ID、metadata 和顺序。375px 搜索/筛选无横向溢出；撤销在 Fielora 528px 页面实际操作，未另做375px撤销。
+
+仍有明确缺陷：删除提示显示“已删除「」”，模板取 lastDeleted.text 而数据是 lastDeleted.todo.text；模型自写的37条检查复制业务实现而非执行组件，不能证明真实模板。其浏览器验收两次静态预览空白后再次提出相同 serve，操作者在第41步停止，终态 CANCELLED，不计自主完成。独立复现确认 dist 根路径 /assets 与 BrowserStaticPreview 随机挂载目录不兼容（HTML200，根路径 JS/CSS404，带前缀200）；不是已证明的构建失败或 Provider 故障。模型重复恢复与上下文压缩的因果关系尚未证明。本轮仅调查和验收，没有修改生产实现。
+
+证据及原样代码：artifacts/code-task-20261024/todo-filter-undo/RESULTS.json、first-attempt-stopped.json、project/、preview-mount-diagnosis.json 和真实页面截图。评测者 IAB 工具另被原生确认框阻塞，由用户取消一次，后续确认/撤销改在 Fielora 原生 UI 验收；不归为 Fielora 模型失败。该任务不是正式配对样本，也不关闭旧办公任务。
+
+### 2026-10-24 — 静态预览路径与恢复诊断修复候选
+
+用户要求开始修复实际待办任务的失败。确认 Capability 静态服务只接受随机挂载路径，Vue 默认根路径资源因此404；Host 又未收集原生资源失败。另查明 Harness 恢复事实只保留 start、遗漏 serve，空白恢复指引不区分首次和重复观察；这些是已确认机制缺口，但不证明上下文压缩是模型错误解释的原因。
+
+候选在既有 BrowserRuntime 请求链中，仅对同 Run 所有页面、当前已提交挂载文档发起的同源 GET 子资源转入随机挂载；主文档、子框架、其他页面和外部来源不改路，HTTP服务根路径仍拒绝，目录及实际资源闭包校验保持。增加当前文档有界原生 HTTP/网络失败回执，去除 URL query/fragment/credential；成功 HTML 不再被误解为全部资源成功。L2/L8 保留成功 serve 的真实目录/URL，资源失败优先诊断，连续同版本空白转向查实际入口而非重复等待。无新状态所有者、Schema、权限或模型配置变更。
+
+定向 Rust 恢复和静态服务测试通过；真实 Electron 已验证404/网络失败可见和导航清除。原样 Vue 首次实机复验已显示内容，同时揭露新诊断把成功 onCompleted 的 error 字段误记为失败，现修正为仅 onErrorOccurred 判定网络失败；原失败保留。最终原项目、完整开发回归、签名包和真实模型收尾仍需分别验收。Change Impact: docs/engineering/STATIC_PREVIEW_RESOURCE_CHANGE_IMPACT.md。
+
+候选最终验证：完整 PreMerge、严格签名及签名包静态资源专项通过；实际原样 Vue 构建可见，JS/CSS 加载闭包成立，其他 Run 根路径别名拒绝。包为 artifacts/static-preview-repair-20261024/package-final/Fielora-darwin-arm64/Fielora.app，运行三项指纹与源码一致，source c25a8ddd8460446dc86aa68c7fe8f5f238042b58e0e690afd62859badf1e53dd。既有 canonical 包未替换。
+
+正常 UI 交给现有 Qwen 的新 Run 01a16c6e-6990-7111-aa90-d593ea6b32ee 自行将待办模板 lastDeleted.text 改为 lastDeleted.todo.text，构建后首次打开托管静态预览即取得完整页面、resource_errors=[]；真实新增/确认删除/提示完整文字/撤销恢复及两项 browser_verify 通过。操作者仅处理普通审批及一次合成数据原生确认，未提供中途技术提示或代改。原七文件和首轮完整源码副本哈希保持。
+
+收尾另有 Model 冗余：finish_task 先添加不允许的 completed 字段，再引用上一轮而非当前请求，被既有校验拒绝；随后重复构建、serve（被已有服务保护拒绝）、stop/serve及重新计划。两个通过结果仍在 checkpoint/current_work，模型自己明确承认已通过；不能声称上下文遗失，也不能将其“服务仍是旧版本”的自述当事实。源代码仍只有同一行修改。第二轮停在step28普通输入审批时Mac锁屏，等待人工解锁；当前不是自主完成。证据见 artifacts/static-preview-repair-20261024/RESULTS.json。
+
+用户解锁后，同 Run 完成第二次真实删除提示及撤销恢复检查；一次旧 snapshot 点击被宿主拒绝后，模型自行取新快照继续，没有输入重放。最终第38步提交合法 finish_task，状态 COMPLETED，共38次模型调用、23次普通审批、2次合成数据原生确认、0次中途技术提示/代改。两次构建循环和共4次非法完成提案仍记为效率问题，不抹去首轮 CANCELLED。终态报告把原错误绑定说成固定文字，并继续夸大复制逻辑测试；实际一行 diff 与4条真实页面检查是本次修复证据。
+
+另发现收尾协议说明 `with completed` 未明确该值属于 outcome，unknown-field 回复也没有给出正确结构。这是 Harness 指令/诊断的歧义诱因，不能断言为模型重复工作的唯一原因。现明确 outcome/intent 字段和值，非法字段回执列出固定合法字段、要求仅修提案并复用仍有效的证据。Schema、终态裁决和证据校验不变；真实两种 completed 错误参数回归证明仍拒绝，修正参数不绕过验证、已有有效回执无需重新执行。26项结果协议定向检查通过，最终候选完整复验及打包待完成；前述真实Run使用静态预览修复包，不能倒算为新说明的真实模型验证。
+
+收尾说明候选完成最终PreMerge、严格签名及包内静态资源闭包/冷恢复检查，运行指纹与源码一致46a1053d5c4a3acbf54d0f695cfdb75cb63aa1d74459b7652b45ed335450b9fb。操作者另在完成后独立确认完整删除提示及撤销，未改代码；独立动作不计模型表现。
+
+新增只读复核Run01a16c91-dd0f-7103-9375-1caaed05d42c暴露独立缺口：分类器见“删除/字段/改成”进入FAST_EDIT，忽略明确不要修改文件；只有2个read_file实际执行，未修改或运行命令，随后升级General。第5/6步模型各有一个协议决策，但未通过handoff白名单校验，两个请求packet的SHA相同，最终第6步PAUSED/AGENT_TASK_OUTCOME_REQUIRED。现有诊断不足以还原这两个拒绝决策的具体参数，不能猜测同为completed字段错误。
+
+代码证实Handoff会剔除普通ToolResult，使自己的拒绝提示也未进入下一包。候选令非修改/解释/复核等可能有歧义的请求走General；这只是策略选择，不裁决意图或取消实际动作义务。现有Handoff保存固定拒绝反馈并随既有checkpoint恢复，continue后清除，不记录任意被拒输入、不执行未知决策、不增加重试。315项Core测试通过，最终候选全量与真实复核待验。此新失败不撤销原待办修复真实完成，也不算新的成功样本。
+
+Final candidate acceptance (2026-10-24): package-verified passed the full PreMerge, strict signing and packaged static-resource/cold-restore checks. Runtime fingerprints match source 6562e066dcda30f01a37f3df3cc77e8fbe9f133722cb8742d7468a0650a46580. The preceding PreMerge failure remains recorded: the lost-ack queue test clicked after button presence, before explicitly waiting for the intended completed Run and enabled continuation. That precondition is now required; queue removal, single Run and unchanged event sequence assertions remain. A final screenshot alone does not establish the exact first-failure cause. Full rerun passed.
+
+The identical read-only request in Run 01a16ca0-b510-73d0-9b74-1960b5cca03d started GENERAL and read actual App.vue and the test file. It executed zero writes and zero run_command, plus two git_read observations. Following the step-6 pause, the operator continued once; retained rejected-decision feedback entered recovery. The model then declared read_file/git_read as command verification, was correctly rejected twice, and falsely claimed that the Harness required a command. One operator clarification reiterated the original read-only scope. Step18 completed with required_evidence=[]. This is assisted completion, not autonomous acceptance. No extra permissions or historical status rewrites occurred.
+
+The final model answer still incorrectly inferred that no field-binding repair existed because the initial Git baseline had no undo feature. Preserved first-attempt-source and the real repair Run prove lastDeleted.text -> lastDeleted.todo.text. An initial Git baseline is not the previous uncommitted Run state. The 37 duplicate-implementation assertions do not prove general algorithm correctness or real component behavior. The original todo defect and preview blocker are repaired and verified; general autonomous closure, evidence-method interpretation and cross-Run comparison remain open limitations. Do not infer overall Agent reliability from engineering PASS. Evidence: artifacts/static-preview-repair-20261024/RESULTS.json and independent-delete-label.png. Original source and frozen delivered-source hashes remain unchanged.
+
+### 2026-10-24 — 核心主线收敛与只读收尾诊断
+
+用户明确当前只推进已有核心能力完整闭环，不将生图等扩展能力排为下一阶段。沿既有真实待办任务追查收尾：Run 01a16ca0-b510-73d0-9b74-1960b5cca03d 两次把 read_file/git_read 填入 command 类 required_evidence。原拒绝正确阻止把观察当验证，但 expected_evidence 未明确来自模型声明，且无论类别都解释 browser 验证；CurrentWork 在无通过检查时也一律建议实现/运行断言。它们是已确认的 Harness L2/L8 提示歧义，不能证明是模型错误解释的唯一原因。
+
+候选按声明的 browser/command/web 分别解释拒绝，在回执标明 MODEL_DECLARED_METHOD / adds_user_requirement=false，并在普通及收尾工具说明区分主证据与必需验证类别。CurrentWork 明确投影为检查状态，不自行新增只读任务的执行义务。原校验谓词、效果/未知结果处理、重试上限、Schema与权限不变。只读声明纠正的定向回归已通过：复用相同观察可回答且 verification_passed=false；已有写入、未知效果、实际命令检查要求仍拒绝缺失证据。完整工程与当前模型复验待完成，尚未解决跨Run报告准确性或证明核心全部通过。
+
+2026-10-25 续验：Core完整检查（672通过、8 ignored、Clippy/格式）、15项FIPC集成和签名包通过；本轮未运行完整PreMerge或Windows。正常启动、不启用E2E开关，两个干净对话使用当前qwen3.7-plus和相同只读源码问题，分别在Run 01a16ea0-bcf7-7f52-9640-eb6ca88e9afe / 01a16ea5-4b4b-78f0-95f5-126b9eb85622以3次调用、28/30秒完成，均只有2次read_file和1次finish_task，无命令/写入/人工继续/澄清/代做，十个项目输入文件哈希保持。实际完整读取两个源文件，无历史消息或上下文缩减。该样本不等于原跨Run复核通过，也不能把不同任务和历史上下文的耗时差归因于修复。
+
+两次结果均正确指出lastDeleted.todo.text和测试未执行真实Vue组件，但仍声称复制逻辑测试通过能证明“核心业务算法正确”，超出被测实现及样例断言。第二候选已在共享summary schema说明实现/输入/断言边界，实际工具schema hash改变且运行指纹为03088cebbbedc15a9c48d6b86dae45a5043608b6fc56279c65662f737c4f2caa，真实报告仍复发，不能记为该提示修复成功或归咎于历史污染/压缩遗失。收尾样本通过与报告准确性未通过分开记录；核心完整验收保持未完成。证据：artifacts/core-closure-20261024/RESULTS.json、两次完整回执与截图。当前运行package-scope候选，未覆盖原安装包。
+
+
+### 2026-10-25 — 核心报告链路：历史入口与逐次变更
+
+原只读复核 Run 01a16ca0-b510-73d0-9b74-1960b5cca03d 首轮包含3个历史
+Run 索引，但工具精简后没有直接暴露 read_run_history。即使经 capability_status
+发现该工具，其旧输出也只有路径/状态，没有已存储的中间版本内容。模型用最初
+Git baseline 否定 lastDeleted.text → lastDeleted.todo.text 的实际修复，属于
+Model 错误推断及 Harness L2/L6 的两处证据衔接缺口。
+
+现复用同一历史工具、文件变更 Artifact 和内容存储：有历史时保留已准入的工具
+定义，索引给出变更指针，按 Run/ToolCall 提供有界 before/after、哈希、截断与
+当前文件匹配信息。仍限制同 Project/Conversation、原消息之前的 Run、成功写
+及安全路径，历史内容不成为当前验证。没有新增运行系统或 Schema。逐行预算
+保证分页不跳过未展示的整行；超长单行明确截断。
+
+Core 与真实 Electron dev 冷重启回归通过；签名包及正常生产 UI 的当前千问
+原对话复核待完成。有限测试/复制实现不能推出一般算法或生产行为正确的规范
+已补入主收尾 guidance；仍为模型指导，不能替代真实报告验收。证据位于
+artifacts/report-evidence-20261025/，最终结果后补。
+
+
+本轮最终结果：Core 674通过/8 ignored、格式/Clippy、Docs及签名包冷重启
+套件通过。正常UI、现有qwen3.7-plus原对话复核在13次调用后自主完成，确实
+读到原修复的不可变 before/after，正确报告 lastDeleted.text →
+lastDeleted.todo.text；没有人工提示/继续、文件改动或重新运行命令/页面。
+旧Run与源文件均保持。对应 Run 01a16f02-b373-7c70-8210-4873d8b4944a。
+
+报告仍夸大有限复制测试能证明的范围，因此这一部分未通过。无历史对照Run
+01a16f09-5e68-7bc0-9ff4-6d5a8b4eed0a 也自主3次调用结束，虽明确模拟/真实
+组件边界，仍缺少具体样例/断言限定；不能把该问题单归因于旧聊天或宣称
+提示已解决。历史追溯机制通过不等于核心整体通过；下一处核心工作仍是结果
+报告与具体验证范围的对应。未运行完整PreMerge/Windows；当前正常候选包位于
+artifacts/report-evidence-20261025/package-history/，没有覆盖安装包。
+
+
+### 2026-10-25 — 交付报告绑定观察对象与检查范围候选
+
+用户要求修复反复夸大有限测试结论。既有 finish_task 新增有界 evidence_notes，将观察对象、具体结果和限制与当前 Run 回执关联；代码校验 inspection/execution/check/history 类型，独立投影实际检查状态。最终消息同时呈现模型说明与回执依据，终态前再次校验。主摘要不重复扩大这些结论。旧提案缺字段兼容、只读回答无需执行测试；原效果、未知结果、当前版本检查保持。没有 Schema、FIPC、权限或新证据所有者。
+
+Core 680 项通过、8 ignored、格式/Clippy通过；真实Electron历史复核/意图/冷恢复套件通过，新增报告来源、范围说明及重启后消息/回执不变硬断言。上述是机制验证，当前模型报告是否收敛仍待交互验收。证据 artifacts/report-scope-20261025/。
+
+
+2026-10-25 结构化候选真实失败：正常生产 UI 的 qwen3.7-plus Run
+01a173bd-df36-73d0-8409-cc3c2d133f36，3次调用约36秒自主结束、两次完整
+read_file加finish_task、无干预/写入/执行测试。确实生成evidence_notes，但主摘要
+仍写“通过后只能证明核心算法正确”，不能靠附加范围标签算通过。源指纹
+7a7c3202afe70222ad79141260de70fdab1894c4f37ec088ea29371a91b4b3b2。
+后续候选在既有outcome handoff增加同Run一次集中报告复核，带当前请求、草稿、
+有界实际源码/命令观察，复用同一模型与finish/continue；不改变原完成校验，
+不把自我复核记为语义验证。冷恢复保留草稿回执指针和一次性标记，缺失源码
+明确不可用，不重放动作。首次复验失败证据和截图保留；当前Mac锁屏，等待用户
+解锁后继续真实验收，不能用工程PASS关闭此缺陷。
+
+
+2026-10-26 收尾：集中复核候选Cross通过（682 Rust、8 ignored、格式/Clippy与
+15项FIPC集成），开发版和签名包的真实Electron回归通过。新增在有效草稿之后
+耗尽显式步数、冷重启并继续的场景：没有提前RunCompleted，只进入一次
+REPORT_REVIEW，最终只交付复核后的结果，历史操作不重放；再次重启保持消息
+和ToolCall序列。证据artifacts/report-scope-20261025/review-cold、review-packaged。
+最终候选在package-review/，本机正常窗口仍为已失败的第一候选且没有活动任务。
+Mac持续锁屏，用户解锁问题已提出，无法继续原只读问题及实际运行已有测试两项
+真实千问验收。新候选语义效果明确NOT_RUN，不标缺陷已解决；10个任务输入文件
+哈希未变。无完整PreMerge/Windows结论；RESULTS.json保存准确状态和构建身份。
+
+
+### 2026-10-26 — 解锁后集中复核的真实效果与进一步收紧
+
+正常 UI、同一 qwen3.7-plus 的两项任务均自主完成，各一次 REPORT_REVIEW、
+零技术干预。只读任务初稿仍夸大为算法正确，复核后限定到模拟实现的被测场景；
+但附注条件时态含糊、源码引用出现多余 span>，报告准确性只记部分改善。执行
+任务真实运行已有测试并报告37通过/0失败，正确指出未测真实Vue；仍将helper
+调用写成“勾选后列表即时更新”。证据 source-review-reviewed.json、
+executed-test-review.json 保留，不覆盖此前结构化候选的真实失败。
+
+进一步仅收紧已有报告复核指导：正面结论引用具体输入/断言，源码观察显式说明
+本轮未运行测试并全程保持条件语气，模拟动作与UI动作分开，避免重构源码引用。
+不增加轮数、权限、工具或语义验证权。Core682通过/8ignored及签名包构建通过；
+package-refined 正在相同原题复验，结果随后记录。
+
+
+2026-10-26 比较记录候选：Core683通过/8ignored、格式/Clippy通过，本机签名包
+和真实Electron冷恢复套件通过。验证草稿身份、精确原句、修正句进入交付、一次
+复核与不重放动作、后续重启消息保持；不把这些确定性替身结果当作模型修正能力。
+一次无关本机搜索fixture因WouldBlock超时失败；单项及随后完整Core通过，日志
+保留。初次测试辅助断言的编译和Clippy问题已修正。
+
+候选package-claim-review源指纹9364d3242ef12f8cf2e3eecf69350e01bc983bbfb2d45ec6758603f8b663919c。
+Mac再次锁屏，在正常UI切换新包前就被阻断；已请求解锁。真实原题及执行题均
+尚未在该候选运行，不能声明报告外推已解决。正常窗口仍是package-refined旧
+失败候选且任务已结束；10个任务输入哈希未变。RESULTS.json保留全部尝试。
+
+
+2026-10-26 再次解锁：逐项比较候选真实验收仍失败。只读Run
+01a175f1-5595-7821-976f-e1e47edc1601，四次模型调用，其中一次REPORT_REVIEW，
+两份完整源码保留、未缩减，reasoning=ON；比较记录真实引用了最强原句，但仍把
+“覆盖筛选/搜索/删除/撤销”当成“核心算法正确”。已确认复核执行，不能再说
+只是未复核或漏上下文，也不能把格式校验通过当成语义正确。
+
+执行Run 01a175f4-132b-7ac3-ad62-fc87b0e25fb5只运行一次node测试，37通过/0失败。
+两次AGENT_REPORT_REVIEW_INVALID后自行修正格式并结束，总计7次模型请求，
+其中3次在同一个复核阶段。原句包含Markdown或修正句未复制到最终字段，现有
+错误只给通用描述，促成无效修复。最终报告仍有宽泛算法结论，并同时写出输出
+37通过和输出UNAVAILABLE，故动作完成、报告验收失败。两项均无技术干预。
+
+本轮修改：明确索引及original_claim/delivered_claim错误字段，不回显原文；
+复核指导使用与任务无关的add(1,2)测试反例说明有限断言与一般正确性的差别，
+要求依据当前附带命令摘录修正草稿中的旧可用性说法。不更换模型、不增复核
+阶段或重试额度；示例不是本任务证据。改进仍需真实复验，不能提前宣布解决。
+
+2026-10-26 校准候选的原题仍失败：正常UI Run
+01a17601-aa60-7c91-ab05-598c8e232b19，源指纹
+051c8b2392db34cd4b7d2cb95aa604a6cf804a59fc1647b7095996de5f87415d。
+两次完整读取、7次模型调用、约188秒；同一复核阶段内因两个精确引用/交付
+格式错误共请求3次。中途曾限定到已测用例，最终却回到“核心过滤算法逻辑
+正确”和一般纯JS算法正确。三次复核均保留两份完整源码且未缩减，零人工
+提示/继续/编辑；因此不能归咎于没复核或丢失源码，也不能把格式修复成功
+当作语义修复。新增反例指导仍不足，缺陷保持开放。
+
+该候选Core683通过/8ignored、格式/Clippy、签名包与Docs检查通过；冷恢复
+机制在前一比较记录候选通过，本次只有提示/错误诊断变化，未重跑冷恢复。
+10个任务输入哈希不变。Mac在第一项任务运行期间再次锁屏，后台已结束，
+第二项执行测试任务及最终截图尚未完成；已请求解锁。证据及全部失败尝试
+保留在artifacts/report-scope-20261025/RESULTS.json，不声明核心整体完成。
+
+
+### 2026-10-26 — 撤回未证实有效的强制报告复核
+
+用户明确授权先精简，再完成一项真实代码功能。移除同模型自动REPORT_REVIEW、
+逐字比较schema及校验，正常有效finish直接进入原终态校验。保留结构化来源、
+实际效果/UNKNOWN/当前检查约束、历史记录和普通finish/continue协议恢复。
+旧proposal中的report_review作为不具权威的兼容元数据保留；旧待复核checkpoint
+恢复为普通收尾决策，不自动完成、不重放动作，也不再要求比较记录。
+
+工具名称、目标、状态、命令参数和退出码由已有回执投影，模型的finding/limits
+仍是解释；不从自然语言测试输出推导一般正确性。此举减少未证明收益的流程，
+不宣称已解决所有报告外推。工程及真实任务验证随后记录，先前失败证据保留。
+
+
+2026-10-26 本轮收敛交付：Cross通过（373 TS、682 Rust、8 ignored、15 FIPC），
+开发版与本机签名包的历史读取/意图/收尾/冷恢复回归通过。首次开发检查因操作者
+同时打包造成webpack入口冲突失败；串行重跑又暴露测试替身错误期待冷恢复保留
+完整历史源码。替身改为通过原历史工具重新读取后通过，未扩大生产正文留存、
+未放宽原完成约束；两份失败日志均保留。无完整PreMerge/Windows结论。
+
+真实功能Run 01a1763d-77cf-7bf3-8f5d-fed67d7e566d，qwen3.7-plus，正常UI，
+source 17f61c691a1bb2206106ca0896a6f277d0c34015ee939d121928e91d5330a630。
+自行修改待办App.vue、style.css和现有测试，完成“完成当前结果”按钮。约7分42秒、
+46次模型请求，REPORT_REVIEW=0，零技术提示/人工继续/代改代码。经历3次收尾
+拒绝、一次前台预览命令超时、一次缺snapshot输入拒绝及一次错误检查属性后自行
+恢复，不能据此宣称高效。实际60条模拟测试通过（新增23），构建通过；浏览器
+最终3个用例通过，主要是全部列表下批量完成与刷新。检查“全部”按钮的文字
+不能单独证明当前选中筛选状态，模型未操作非空搜索+状态筛选的组合场景。
+
+操作者独立在编译后的真实Vue页面用UI建立4项混合数据，验证搜索A+未完成筛选
+一次完成两项、隐藏B不变、原已完成项/顺序不变、筛选/搜索保持、计数变化及刷新
+持久化；另验已完成/无匹配时禁用、清除筛选、剩余项完成、全完成刷新、新增后
+重新启用与编辑。仅改隔离预览数据，没有代改源码；最终源码哈希保持。
+
+功能在上述样例可用，自主交付已观察到，报告仍未通过：摘要错称新增38条断言，
+实际为23；引用的pre-state实测按钮1，报告写2；搜索框实为空，报告写milk。
+这次已说明复制测试边界且没有额外复核，但不能据此关闭报告准确性缺陷。证据
+artifacts/report-simplification-20261026/RESULTS.json。Mac后续锁屏只影响原生
+最终截图，独立IAB页面操作与截图已完成，不再等待解锁来替代实际验收。

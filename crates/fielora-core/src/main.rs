@@ -10,10 +10,12 @@ mod agent_computer;
 mod agent_computer_fixture;
 mod agent_computer_visual_fixture;
 mod agent_image_history;
+mod agent_intervention_fixture;
 mod agent_model_repair;
 mod agent_operation_fixture;
 mod agent_operation_policy;
 mod agent_recovery;
+mod agent_report;
 mod agent_request_intent;
 mod agent_request_scope;
 mod agent_runtime;
@@ -622,6 +624,10 @@ fn dispatch_request(
         // Parent/Main only: never exported by the renderer preload bridge.
         "host.browser.complete" => Ok((
             json!({"accepted":runtime.agent.complete_browser_request(&request.params)}),
+            None,
+        )),
+        "host.browser.progress" => Ok((
+            json!({"accepted":runtime.agent.browser_request_progress(&request.params)}),
             None,
         )),
         "system.hello" => {

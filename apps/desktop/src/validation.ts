@@ -369,7 +369,11 @@ export function validateApplyWorkspaceFile(value:unknown):ApplyWorkspaceFileRequ
 export function validateRunTerminal(value:unknown):RunTerminalRequest{const input=object(value);exact(input,['field_id','command','working_directory']);return{field_id:id(input.field_id),command:boundedUnicodeText(input.command,8000,32000,'terminal command'),working_directory:boundedUnicodeText(input.working_directory,4096,16384,'terminal working directory')};}
 export function validateCancelTerminal(value:unknown):CancelTerminalRequest{const input=object(value);exact(input,['run_id']);if(typeof input.run_id!=='string'||!/^run_[0-9a-f-]{36}$/.test(input.run_id))throw new Error('Invalid terminal run');return{run_id:input.run_id};}
 
-export function validateResumeAgent(value:unknown):ResumeAgentRunRequest{const input=object(value);exact(input,['run_id','attachments','user_message_id','resource_budget']);return{run_id:id(input.run_id,'Agent run'),...(input.resource_budget==null?{}:{resource_budget:validateAgentResourceBudget(input.resource_budget)}),...(input.user_message_id==null?{}:{user_message_id:id(input.user_message_id,'User message')}),...(input.attachments==null?{}:{attachments:validateAgentAttachments(input.attachments)})};}
+export function validateResumeAgent(value:unknown):ResumeAgentRunRequest{
+  const input=object(value);exact(input,['run_id','attachments','user_message_id','direction_message_id','resource_budget']);
+  if(input.direction_message_id!=null && (input.user_message_id!=null || input.resource_budget!=null || input.attachments!=null)) throw new Error('A direction cannot grant a new allowance or replace inputs');
+  return{run_id:id(input.run_id,'Agent run'),...(input.direction_message_id==null?{}:{direction_message_id:id(input.direction_message_id,'Direction message')}),...(input.resource_budget==null?{}:{resource_budget:validateAgentResourceBudget(input.resource_budget)}),...(input.user_message_id==null?{}:{user_message_id:id(input.user_message_id,'User message')}),...(input.attachments==null?{}:{attachments:validateAgentAttachments(input.attachments)})};
+}
 
 export function validateUpdateModelRuntime(value: unknown): UpdateModelRuntimeRequest {
   const input = object(value); exact(input, ['provider_config_id', 'expected_provider_revision', 'expected_revision', 'settings']);

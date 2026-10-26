@@ -187,10 +187,14 @@ pub fn turn(
         });
     }
     if data["current_request"] != task
-        || !request
-            .tools
-            .iter()
-            .any(|t| t.name == crate::agent_turn_context::TOOL)
+        || (data["historical_execution_index"]["total"]
+            .as_u64()
+            .unwrap_or(0)
+            > 0
+            && !request
+                .tools
+                .iter()
+                .any(|t| t.name == crate::agent_turn_context::TOOL))
     {
         return Err(ModelError::ProviderProtocolError);
     }
@@ -211,7 +215,67 @@ pub fn turn(
         return Ok(turn);
     }
     let mut text = "正在检查当前请求的执行证据。".to_owned();
-    let tool = if task == "为什么这次没有改成功" {
+    let tool = if task == "只读说明刚才的逐次修改" {
+        // Cold reconstruction retains bounded metadata, not this full source
+        // observation. Reacquire the historical read when its body is absent;
+        // never replay the historical mutation or invent the missing excerpt.
+        if step == 1 || previous["receipt"]["history"]["file_change"].is_null() {
+            let run = &data["historical_execution_index"]["runs"][0];
+            if run["file_changes"][0]["tool_call_id"].as_str().is_none() {
+                return Err(ModelError::ProviderProtocolError);
+            }
+            Some((
+                "read_run_history",
+                json!({"run_id":run["run_id"],"tool_call_id":run["file_changes"][0]["tool_call_id"]}),
+            ))
+        } else {
+            let change = &previous["receipt"]["history"]["file_change"];
+            if change["availability"] != "AVAILABLE"
+                || change["current_matches_after"] != false
+                || change["before_excerpt"]["changed_span_fully_shown"] != true
+                || change["after_excerpt"]["changed_span_fully_shown"] != true
+                || !change["before_excerpt"]["source"]["text"]
+                    .as_str()
+                    .is_some_and(|s| s.contains("value = 'wrong'"))
+                || !change["after_excerpt"]["source"]["text"]
+                    .as_str()
+                    .is_some_and(|s| s.contains("value = 'right'"))
+                || previous["receipt"]["verification_eligible"] != false
+            {
+                return Err(ModelError::ProviderProtocolError);
+            }
+            text = "历史逐次修改把 wrong 改为 right；当前文件已经再次变化。这只是历史源码证据，不是当前验证。".into();
+            let report_context = request
+                .messages
+                .iter()
+                .find_map(|m| match m {
+                    AgentModelMessage::User(body) => body
+                        .strip_prefix(crate::agent_work_state::CURRENT_WORK_MARKER)
+                        .and_then(|s| {
+                            serde_json::from_str::<Value>(s.lines().next().unwrap_or("")).ok()
+                        }),
+                    _ => None,
+                })
+                .ok_or(ModelError::ProviderProtocolError)?;
+            if report_context["report_evidence"]["receipts"][0]["basis"] != "history"
+                || !request.tools.iter().any(|t| {
+                    t.name == "finish_task"
+                        && t.input_schema["properties"]["evidence_notes"].is_object()
+                })
+            {
+                return Err(ModelError::ProviderProtocolError);
+            }
+            Some((
+                "finish_task",
+                json!({"outcome":"completed","intent":"answer_only",
+                "request_quote":task,"summary":text,"required_evidence":[],"remaining_work":[],
+                "evidence_tool_call_ids":[previous["receipt"]["tool_call_id"]],
+                "evidence_notes":[{"tool_call_ids":[previous["receipt"]["tool_call_id"]],"basis":"history",
+                    "subject":"settings.js 的中间修改","finding":"持久 before/after 显示 wrong → right。",
+                    "limits":"当前文件已是 later；这份历史内容不能证明当前行为。"}]}),
+            ))
+        }
+    } else if task == "为什么这次没有改成功" {
         if step == 1 {
             let id = data["historical_execution_index"]["runs"][0]["run_id"]
                 .as_str()
@@ -287,14 +351,12 @@ fn request_intent_turn(
     if !question && !mixed && !unverified {
         return Ok(None);
     }
-    if !request
-        .tools
-        .iter()
-        .any(|t| t.name == crate::agent_request_intent::TOOL)
-        || !context.contains(crate::agent_request_intent::GUIDANCE)
-        || !context.contains(
-            "Current explicit user corrections override earlier assistant interpretations",
-        )
+    if !request.tools.iter().any(|t| {
+        t.name == crate::agent_request_intent::TOOL
+            && t.description == crate::agent_request_intent::GUIDANCE
+    }) || !request
+        .system
+        .contains("Current explicit user corrections override earlier assistant interpretations")
     {
         return Err(ModelError::ProviderProtocolError);
     }

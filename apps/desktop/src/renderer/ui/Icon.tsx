@@ -1,5 +1,6 @@
 import {
   AppWindow,
+  Archive,
   ArrowClockwise,
   ArrowCounterClockwise,
   ArrowDown,
@@ -10,21 +11,23 @@ import {
   ArrowUUpLeft,
   ArrowsOutSimple,
   ArrowsInSimple,
+  ArrowsInLineHorizontal,
   CaretDown,
   ChatCircle,
   ChatCircleDots,
+  ChatCircleText,
   Books,
   CalendarBlank,
   Check,
   Clock,
   CloudArrowUp,
-  Columns,
   Copy,
   Cpu,
   ChartBar,
   Database,
   Desktop,
   DotsThree,
+  DownloadSimple,
   File,
   FilePlus,
   FileText,
@@ -50,6 +53,7 @@ import {
   PlusMinus,
   Play,
   PuzzlePiece,
+  PlugsConnected,
   Sidebar,
   SidebarSimple,
   SlidersHorizontal,
@@ -57,16 +61,20 @@ import {
   Shapes,
   SquaresFour,
   Stop,
+  Stack,
   Sun,
   Terminal,
   TerminalWindow,
   Trash,
+  TextAa,
   Tray,
   WarningOctagon,
   WarningCircle,
   ShieldCheck,
   ClockCounterClockwise,
   HardDrives,
+  UsersThree,
+  Wrench,
   X,
   type Icon,
   type IconProps,
@@ -82,7 +90,8 @@ export type AppIconName =
   | 'sort' | 'plus' | 'edit' | 'search' | 'run' | 'pause' | 'delete' | 'chevronDown' | 'panelRight' | 'sidebar'
   | 'back' | 'forward' | 'arrowDown' | 'focus' | 'unfocus' | 'fileTree' | 'tools' | 'microphone' | 'send' | 'stop'
   | 'permissionAsk' | 'permissionReview' | 'permissionFull' | 'application'
-  | 'warning' | 'verified' | 'history' | 'plan' | 'server';
+  | 'warning' | 'verified' | 'history' | 'plan' | 'server'
+  | 'question' | 'connection' | 'delegate' | 'font' | 'archive' | 'download' | 'operations';
 
 const ICONS: Record<AppIconName, Icon> = {
   usage: ChartBar,
@@ -101,7 +110,7 @@ const ICONS: Record<AppIconName, Icon> = {
   file: File,
   image: Image,
   images: Images,
-  contextCompress: FileText,
+  contextCompress: ArrowsInLineHorizontal,
   filePlus: FilePlus,
   objects: Shapes,
   diff: PlusMinus,
@@ -147,7 +156,14 @@ const ICONS: Record<AppIconName, Icon> = {
   focus: ArrowsOutSimple,
   unfocus: ArrowsInSimple,
   fileTree: Folders,
-  tools: Columns,
+  tools: Wrench,
+  question: ChatCircleText,
+  connection: PlugsConnected,
+  delegate: UsersThree,
+  font: TextAa,
+  archive: Archive,
+  download: DownloadSimple,
+  operations: Stack,
   microphone: Microphone,
   send: ArrowUp,
   stop: Stop,
@@ -169,9 +185,6 @@ export interface FieloraIconProps extends Omit<IconProps, 'size' | 'weight'> {
 }
 
 export function FieloraIcon({ name, size = 'md', weight = 'regular', className = '', ...props }: FieloraIconProps) {
-  if (name === 'terminal' || name === 'contextCompress') return <svg {...props} className={`app-icon shell-icon size-${size}${className ? ` ${className}` : ''}`} width={24} height={24} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5} strokeLinecap="round" strokeLinejoin="round" aria-hidden="true" focusable="false" data-icon={name} data-icon-size={size}>
-    {name === 'terminal' ? <><rect x="3" y="3" width="18" height="18" rx="4"/><path d="m7 8 3 3-3 3m6 1h4"/></> : <><path d="M8 3H5v7l-2 2 2 2v7h3m8-18h3v7l2 2-2 2v7h-3M9 8h6m-6 4h4m-4 4h6"/></>}
-  </svg>;
   if (name === 'fileDiff' || name === 'reviewChanges') return <svg {...props} className={`app-icon shell-icon size-${size}${className ? ` ${className}` : ''}`} width={24} height={24} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5} strokeLinecap="round" strokeLinejoin="round" aria-hidden="true" focusable="false" data-icon={name} data-icon-size={size}>
     {name === 'fileDiff' ? <><rect x="3.5" y="2" width="17" height="20" rx="3"/><path d="M9 8h6M12 5v6M9 16h6"/></> : <><rect x="2.5" y="2.5" width="19" height="19" rx="4"/><path d="M6 8h5M8.5 5.5v5M13 16h5M8 16l8-8"/></>}
   </svg>;

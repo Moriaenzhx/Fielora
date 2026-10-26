@@ -36,7 +36,7 @@ try {
     await window.fielora.provider.storeCredential({provider_config_id:p.id,secret:'synthetic-preview-only'});
     const f=await window.fieloraTest.createProject({title:'受管本地预览回归',goal:null,root_path:${q(project)}});
     const c=await window.fielora.conversation.create({field_id:f.field_id,title:'Local preview recovery',provider_config_id:p.id,model_id:p.default_model});
-    const task='Start the local workshop preview with a managed server after diagnosing a finite-command timeout, and open it in the browser.';
+    const task='Start the local workshop preview with a managed server after a finite-command lifecycle rejection, and open it in the browser.';
     const m=await window.fielora.conversation.createMessage({conversation_id:c.id,role:'USER',content:task,status:'COMPLETED',provider_config_id:null,model_id:null,invocation_id:null,references:[]});
     const r=await window.fielora.agent.start({field_id:f.field_id,conversation_id:c.id,user_message_id:m.id,provider_config_id:p.id,model_id:p.default_model,task,permission:'FULL_CONTROL',max_steps:15,attachments:[]});
     return {run:r.id,conversation:c.id};
@@ -48,7 +48,7 @@ try {
   await writeFile(path.join(evidence, 'preview-run.json'), JSON.stringify(result, null, 2));
   assert.equal(result.run.error_code, 'AGENT_USER_INPUT_REQUIRED', JSON.stringify(result.run));
   assert.deepEqual(result.tools.map(t => t.name), ['run_command','capability_status','browser_server','browser','request_user_input']);
-  assert.equal(result.tools[0].error_code, 'AGENT_COMMAND_TIMEOUT');
+  assert.equal(result.tools[0].error_code, 'AGENT_COMMAND_MANAGED_SERVICE_REQUIRED');
   assert.equal(result.tools[1].arguments.filter.text, 'browser');
   const afterDiscovery = result.events.find(e => e.kind === 'MODEL_COMPLETED' && e.payload.step === 3);
   assert.ok(['browser','browser_server'].every(n => afterDiscovery.payload.prompt.visible_tool_names.includes(n)));
@@ -56,8 +56,12 @@ try {
   assert.equal(result.tools[3].receipt.success, true);
   assert.equal(result.tools[3].receipt.page_loaded, true);
   assert.equal(await (await fetch(url)).text(), html, 'Server survives command/tool returns and serves the actual project');
-  validation.timeoutRecovered = validation.filteredToolsCallable = validation.managedServerReachable = validation.actualBrowserLoaded = true;
+  validation.lifecycleRejectionRecovered = validation.filteredToolsCallable = validation.managedServerReachable = validation.actualBrowserLoaded = true;
 
+  // Agent navigation preserves the conversation focus. Reveal the existing
+  // Browser surface before testing native input; a hidden 0x0 page cannot click.
+  await cdp.eval("window.dispatchEvent(new CustomEvent('fielora:open-utility',{detail:'BROWSER'}))");
+  await wait("window.fielora.browser.getState().then(s=>s.surface.visible&&s.surface.bounds.width>0&&s.surface.bounds.height>0)");
   const targets = await (await fetch(`http://127.0.0.1:${launched.port}/json/list`)).json();
   const target = targets.find(t => t.url === url);
   assert.ok(target, 'Actual browser WebContents target');

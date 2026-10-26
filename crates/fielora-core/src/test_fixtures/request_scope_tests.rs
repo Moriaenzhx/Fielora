@@ -124,6 +124,7 @@ async fn access_scope_blocks_approved_and_observe_dispatch_bypasses_and_finishes
         model: CancellationToken::new(),
         command: CommandCancellation::default(),
         pause_requested: Arc::new(AtomicBool::new(false)),
+        user_pause_requested: Arc::new(AtomicBool::new(false)),
     };
     let catalog = coordinator.available_tool_catalog().unwrap();
     for name in [

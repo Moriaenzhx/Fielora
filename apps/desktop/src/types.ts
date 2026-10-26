@@ -296,6 +296,7 @@ declare global {
   interface Window {
     fielora: FieloraBridge;
     fieloraTest?: {
+      dismissContextMenu(): Promise<boolean>;
       killCore(): Promise<void>;
       resizeWindow(size: { width: number; height: number }): Promise<{ width: number; height: number }>;
       createProject(request: CreateProjectRequest): Promise<ProjectView>;

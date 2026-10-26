@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import type { AgentToolCallView } from '@fielora/contracts';
 import type { ConversationActivityGroupItem, ConversationActivityItem } from './agent-activity-projection.ts';
-import { conversationTimelineSections, conversationToolPresentation, conversationToolStatus } from './conversation-presentation.ts';
+import { conversationTimelineSections, conversationToolPresentation, conversationToolStatus, conversationGroupIcon } from './conversation-presentation.ts';
 
 function tool(id: string, name = 'read_file', status: AgentToolCallView['status'] = 'COMPLETED', args: Record<string, unknown> = {}, receipt: Record<string, unknown> | null = null): AgentToolCallView {
   return { id, run_id: 'run', name, effect: 'OBSERVE', status, policy_decision: 'ALLOW', arguments: args, receipt, error_code: null, created_at: 1, updated_at: 2 };
@@ -15,6 +15,30 @@ function group(index: number, calls: AgentToolCallView[], completedAt: number | 
     entries: calls.map(call => ({ id: `tool-${call.id}`, kind: 'TOOL', sequence: index, occurredAt: index, completedAt,
       activityKind: 'OTHER', tool: call, status: call.status, toolId: call.id })) };
 }
+
+test('asking, searching and external fallback never imply a paused task', () => {
+  for (const status of ['COMPLETED', 'RUNNING', 'FAILED', 'WAITING_APPROVAL'] as const) {
+    const question = conversationToolPresentation(tool('ask', 'request_user_input', status));
+    assert.equal(question.icon, 'question');
+    assert.match(question.label, /向你提问/);
+    assert.doesNotMatch(question.label, /request_user_input|任务已暂停/);
+    assert.equal(conversationToolPresentation(tool('search', 'search_text', status)).icon, 'search');
+    assert.equal(conversationToolPresentation(tool('web', 'web.search', status)).icon, 'search');
+    assert.equal(conversationToolPresentation(tool('unknown', 'custom.search', status)).icon, 'tools', 'Unknown tool metadata does not establish a search operation');
+  }
+  assert.equal(conversationToolPresentation(tool('ask', 'request_user_input')).label, '已向你提问');
+  assert.equal(conversationToolPresentation(tool('git', 'git_read', 'COMPLETED', { operation: 'diff' })).icon, 'fileDiff');
+  assert.equal(conversationToolPresentation(tool('git', 'git_read', 'COMPLETED', { operation: 'log' })).icon, 'history');
+});
+
+test('group glyph follows its visible lead action or represents the complete mixed group', () => {
+  const mixed = group(1, [tool('unknown', 'custom.inspect'), tool('search', 'web.search')]).entries;
+  assert.equal(conversationGroupIcon(mixed), 'operations');
+  assert.equal(conversationGroupIcon(mixed, mixed[1]), 'search', 'A web-led summary cannot borrow the first generic tool glyph');
+  assert.equal(conversationGroupIcon([...mixed].reverse()), 'operations', 'Mixed group semantics do not depend on order');
+  assert.equal(conversationGroupIcon(group(1, [tool('a'), tool('b')]).entries), 'file');
+  assert.equal(conversationGroupIcon(group(1, [tool('a', 'run_command'), tool('b', 'run_command')]).entries), 'terminal', 'Verification commands still depict the actual operation');
+});
 
 test('tool labels describe the actual plan and server action without claiming readiness or verification', () => {
   assert.equal(conversationToolPresentation(tool('plan', 'work_plan')).label, '已更新工作计划');

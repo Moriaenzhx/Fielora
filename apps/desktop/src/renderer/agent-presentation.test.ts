@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import type { AgentEventView, AgentRunView, AgentToolCallView } from '@fielora/contracts';
+import { agentBrowserDialogWaiting } from './agent-presentation.ts';
 import { agentActiveDurationMs, agentModelIsActive, agentPausePresentation, agentPendingChecks, agentCompletionTimeLabel, agentOpeningNarrative, agentRequestKind, agentResultMarkdown, agentTerminalBody, agentTerminalTitle, approvalActionLabel, buildAgentPresentation, buildAgentResultViewModel, stripTerminalHeading } from './agent-presentation.ts';
 
 test('result presentation removes only redundant matching status headings and preserves authored content', () => {
@@ -27,6 +28,34 @@ function tool(overrides: Partial<AgentToolCallView>): AgentToolCallView {
     ...overrides,
   };
 }
+
+test('dialog waiting is scoped to the running call and excluded from elapsed work after reload', () => {
+  const current = run('RUNNING');
+  const events: AgentEventView[] = [{ id: 'dialog', run_id: current.id, sequence: 1, schema_version: 1, kind: 'CHECKPOINT_CREATED', created_at: 2000,
+    payload: { kind: 'BROWSER_DIALOG_WAIT', tool_call_id: 'tool-1', state: 'OPEN' } }];
+  assert.equal(agentBrowserDialogWaiting(events, [tool({ name: 'browser', status: 'RUNNING' })]), true);
+  assert.equal(agentBrowserDialogWaiting(events, [tool({ name: 'browser', status: 'UNKNOWN' })]), false);
+  assert.equal(agentActiveDurationMs(current, events, 40000), 1000);
+  events.push({ ...events[0]!, id: 'close', sequence: 2, created_at: 42000, payload: { kind: 'BROWSER_DIALOG_WAIT', tool_call_id: 'tool-1', state: 'CLOSED' } });
+  assert.equal(agentBrowserDialogWaiting(events.reverse(), [tool({ name: 'browser', status: 'RUNNING' })]), false);
+  assert.equal(agentActiveDurationMs(current, events, 44000), 3000);
+});
+
+test('same-run direction ends a superseded approval wait without losing later work time', () => {
+  const current = run('RUNNING');
+  const event = (sequence: number, kind: AgentEventView['kind'], created_at: number, payload = {}): AgentEventView => ({
+    id: `wait-${sequence}`, run_id: current.id, schema_version: 1, sequence, kind, created_at, payload,
+  });
+  const events = [
+    event(1, 'APPROVAL_REQUESTED', 2000),
+    event(2, 'RUN_PAUSED', 3000),
+    event(3, 'RUN_RESUMED', 4000, { kind: 'USER_DIRECTION_RECEIVED', cancelled_tool_call_ids: ['tool-1'] }),
+  ];
+  // The old proposal is cancelled, so it has no APPROVAL_RESOLVED event.
+  assert.equal(agentActiveDurationMs(current, events, 7000), 4000);
+  events.push(event(4, 'APPROVAL_REQUESTED', 8000), event(5, 'APPROVAL_RESOLVED', 9000));
+  assert.equal(agentActiveDurationMs(current, events, 10000), 6000);
+});
 
 test('completion timestamp uses stable local date and distinguishes incomplete terminal work', () => {
   const timestamp = new Date(2026, 7, 25, 14, 3, 7).getTime();

@@ -9,6 +9,7 @@ import type { AgentRunView, ConversationMessageView, LibraryMediaKind, LibraryOb
 import { validateComputerPreview } from './computer-preview-types';
 import type { LibraryImagePreviewView } from './workspace-types';
 import { BrowserRuntime } from './browser-runtime';
+import { dismissNativeContextMenu, showNativeContextMenu } from './native-context-menu';
 import { AgentBrowserHost } from './agent-browser-host';
 import { startAgentWithReconciliation } from './agent-start';
 import { channels } from './channels';
@@ -208,7 +209,7 @@ function showTrustedEditContextMenu(params: ContextMenuParams): void {
   if (!app.isPackaged || process.env.FIELORA_E2E === '1') {
     console.info(`[trusted-context-menu] editable=${params.isEditable} selection=${Boolean(params.selectionText)} items=${template.filter((item) => item.type !== 'separator').length}`);
   }
-  Menu.buildFromTemplate(template).popup({ window });
+  showNativeContextMenu(window, template);
 }
 
 let storageMaintenance = false;
@@ -968,6 +969,10 @@ function registerBridgeHandlers(): void {
   });
   ipcMain.handle(channels.coreQuit, (event) => { assertBridgeEvent(event); app.quit(); });
   if (process.env.FIELORA_E2E === '1') {
+    ipcMain.handle(channels.testDismissContextMenu, (event) => {
+      assertBridgeEvent(event);
+      return dismissNativeContextMenu(appWindow!);
+    });
     ipcMain.handle(channels.testKillCore, (event) => { assertBridgeEvent(event); supervisor.killForTest(); });
     ipcMain.handle(channels.testResizeWindow, (event, payload: unknown) => {
       assertBridgeEvent(event);

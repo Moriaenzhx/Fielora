@@ -58,10 +58,17 @@ for (const rejected of [false, true]) {
     if(rejected) {
       assert.deepEqual((await readdir(projectRoot)).sort(),['.git','requirements.txt']);
       assert.equal(events.filter(e=>e.kind==='MODEL_FAILED').length,1);
+      assert.equal(events.find(e=>e.kind==='MODEL_FAILED').payload.response_diagnostics.argument_json_error.category,'SYNTAX','EOF followed by SYNTAX must retain the small-write recovery');
       await wait("document.querySelector('[data-testid=agent-pause-notice]')?.textContent.includes('纠正要求')");
     } else {
       assert.match(await readFile(path.join(projectRoot,'app.py'),'utf8'),/repair verified/);
+      assert.match(await readFile(path.join(projectRoot,'helper.py'),'utf8'),/repair verified/);
       assert.equal(tools.filter(t=>t.name==='create_file'&&t.args.path==='app.py').length,1);
+      assert.equal(tools.filter(t=>t.name==='create_file'&&t.args.path==='helper.py').length,1);
+      const readIndex=tools.findIndex(t=>t.name==='read_file');
+      assert.ok(readIndex>=0 && readIndex<tools.findIndex(t=>t.args.path==='app.py'));
+      const retained=events.filter(e=>e.kind==='MODEL_COMPLETED'&&e.payload.prompt?.tool_call_recovery?.large_argument_source_sequence);
+      assert.ok(retained.length>=3,'Recovery survives the successful read and both subsequent module writes');
       assert.equal(events.filter(e=>e.kind==='MODEL_FAILED').length,0);
     }
     await reload();await click(`[data-testid="conversation-${run.conversation_id}"]`);

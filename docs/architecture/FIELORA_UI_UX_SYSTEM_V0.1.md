@@ -239,6 +239,18 @@ Contrast 控件使用无外围输入框的 3px neutral/action track、20px stron
 
 ## 4. Icon System
 
+2026-10-24 图标语义与视觉整理：沿用现有 Layout ownership、Phosphor regular 与 14/16/18px 尺度。
+通用工具改用 `tools → Wrench`，停止用近似暂停键的 Columns；`question → ChatCircleText` 专用于向用户提问，
+暂停仍使用 Pause，搜索仍为 MagnifyingGlass。连接、只读委派、字体、归档、导出分别使用 PlugsConnected、
+UsersThree、TextAa、Archive、DownloadSimple；上下文压缩使用 ArrowsInLineHorizontal，命令使用库内 Terminal，
+移除这两项另画的 SVG。保留此前明确指定的 fileDiff / reviewChanges 参考图形与文件类型资源。
+工具名称及 Git 子操作由现有真实 ToolCall 映射；未识别的外部工具保持中性扳手，不猜测其能力或完成状态。
+同类操作组复用共同图标，混合操作用 `operations → Stack`；摘要以某条 Web 操作为主时，图标必须与同一条
+操作一致，禁止无条件取第一项。request_user_input 显示“向你提问”，执行状态继续由既有回执和状态文字表达。
+过程行与展开标题统一为 16px / secondary icon contrast，展开箭头 14px，固定光学盒并垂直居中，不添加图标底板、
+局部粗描边或额外状态动画。验收检查真实 Electron 的搜索、提问、混合组、暂停、终端、字体与工具连接，
+以及详情展开、窄窗、大字号和深色 token 下的可见性；界面回放不代表真实模型任务通过。
+
 外观自定义渐变（2026-09-19）：侧栏/标题栏和工作区的渐变模式采用左下（0%,100%）、左上（0%,0%）、右上（100%,0%）三个径向颜色中心，固定柔和扩散范围。三个颜色分别编辑并显示位置标签，窄窗口仍保持可访问的 HEX 与颜色选择器。侧栏和标题栏沿用同一窗口背景坐标，不分别拉伸。
 
 兼容影响：仅为既有 UI preference v2 渐变对象添加可选 bottomLeft，from/to 继续表示左上/右上；旧值或无效新增值回退到原 from，不丢失用户已选颜色。无 Core schema/Migration、安全或权限变化。工作区中性控件从三色混合基色派生，不把多层背景图像送入 color-mix。默认主题/单色/重置语义保留。
@@ -274,6 +286,8 @@ Contrast 控件使用无外围输入框的 3px neutral/action track、20px stron
 - `TextActionDialog`
 
 Button/Menu/Select/Tabs 共用 geometry、type roles、hover、active、focus-visible、disabled、keyboard 和 reduced-motion。Feature 可以添加布局 class，但不得复制一套控件状态。原生 `alert` / `confirm` / `prompt` / 产品级原生 `select` 不进入 Renderer。
+
+2026-10-22 桌面稳定化：Project 顶部工作区信息菜单的容器与共享 ToolbarAction 同为 `--fl-control-md` 高，保证与 Terminal/Panel 控件的垂直中线一致。原生右键菜单由宿主统一持有并在替换或关闭 Page 时请求收起；桌面回归通过原生菜单 API 清理，并继续以 WebContents 实际销毁验证关闭结果，不以网页 CDP Escape 或逻辑 Page 删除冒充 OS 状态已收敛。
 
 共享 Button 的内容采用 inline-flex 居中和 space-2 间距，图标与文字不得依靠行内基线或直接相邻文本排版。资料库“添加文件”使用标准 16px FilePlus 图标与独立文案，保持当前色继承和完整点击区域（2026-09-19）。
 
