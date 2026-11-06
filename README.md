@@ -1,84 +1,154 @@
-# Fielora Codex Context Pack
+![Fielora — 本地优先的 AI 桌面工作空间](docs/media/fielora-banner.svg)
 
-版本：2026-08-17 / Rapid Multi-provider Desktop Rebase
+**Fielora 是一个开源的 AI 桌面工作空间。** 围绕本地项目，把对话、文件、模型和工具放在一起。从读懂一份资料、修改一段代码，到打开页面检查结果，都可以在同一个窗口里继续。
 
-本包用于让 Codex 在首次接手 Fielora 仓库时，不依赖单次 Prompt 猜测产品，而是先完整读取项目历史、当前事实、明确决策、交互规格和技术基线。
+[快速开始](#快速开始) · [功能展示](#功能展示) · [文档](docs/README.md) · [开发进展](docs/DEVELOPMENT_STATUS.md) · [English](README.en.md)
 
-## 使用方式
+[![License: Apache 2.0](https://img.shields.io/badge/License-Apache_2.0-5840C8?style=flat)](LICENSE)
+[![Status: Early development](https://img.shields.io/badge/Status-Early_development-E5A53D?style=flat)](docs/DEVELOPMENT_STATUS.md)
+[![Electron + React](https://img.shields.io/badge/Desktop-Electron_%2B_React-47848F?style=flat)](#技术栈)
+[![Rust](https://img.shields.io/badge/Core-Rust-8B5E3C?style=flat)](#技术栈)
 
-将本包内容复制到 Fielora 仓库根目录，使 `AGENTS.md` 位于仓库根目录。
+## Fielora 能做什么
 
-然后在 Codex 中打开该仓库，粘贴 `CODEX_FIRST_PROMPT.md` 的内容作为第一条任务。Agent 完成最小当前事实阅读与任务相关代码检查后即可进入纵向实现，不再生成或等待确认阅读报告。
+- **围绕项目持续工作**：连接本地文件夹，创建多个对话，保留文件上下文和工作记录。
+- **选择自己的模型**：接入 OpenAI Responses、Anthropic Messages 或 OpenAI-compatible 服务，在对话中选择模型。
+- **让 Agent 动手**：读取和搜索文件、修改代码、运行命令，再查看执行记录与文件 Diff。
+- **直接检查结果**：在工作区预览 Markdown、打开文件或网页，把结果和对话放在一起看。
+- **连接常用工具**：通过项目 Skill、本地 MCP stdio 和可配置的联网搜索扩展任务能力。
+- **使用本机资料**：收藏文件并带入对话；0.2.0 开发预览进一步加入文件夹索引与文件名搜索。
 
-## 阅读优先级
+## 快速开始
 
-发生冲突时，按以下优先级处理：
+目前面向愿意从源码运行的开发者和早期使用者，公开安装包暂未开放。请使用开发分支；默认 `main` 的产品代码较旧。
 
-1. 最新明确用户决定
-2. `docs/context/02_PROJECT_REALITY.md`
-3. `docs/context/03_DECISIONS.md`
-4. `docs/product/FIELORA_V0.1_INTERACTION_SPEC_CN.md`
-5. `docs/architecture/*`
-6. `docs/context/01_CONVERSATION_TIMELINE.md`
-7. 更早的构想、探索性方案
+### 1. 准备环境
 
-任何会改变当前用户流程、数据或安全边界且无法从最新决定确认的冲突，不得由 Codex 静默合理化；应在任务交付中简短说明。
+| 依赖 | 版本 / 要求 |
+| --- | --- |
+| Node.js | 24.18.1 |
+| pnpm | 11.21.0 |
+| Rust | 1.97.1 |
+| macOS Apple Silicon | Xcode Command Line Tools |
+| Windows 11 x64 | MSVC C++ 工具链与 Windows SDK |
 
-## 重要说明
+### 2. 获取代码并启动
 
-`01_CONVERSATION_TIMELINE.md` 是根据当前 Fielora 对话、项目历史与已上传的《Fielora 功能讨论》资料制作的**高保真时序重建**，用于保留“为什么会做出当前决定”的历史脉络；它不冒充 ChatGPT 官方逐字导出的原始聊天记录。
+```sh
+git clone --branch phase/complete-agent-v0.1 https://github.com/Moriaenzhx/Fielora.git
+cd Fielora
+pnpm install --frozen-lockfile
+pnpm dev
+```
 
-项目真正的当前事实源是 `02_PROJECT_REALITY.md`；已冻结实现边界见 `docs/architecture/TECHNICAL_ARCHITECTURE_V0.1.md`、`CORE_CONTRACTS_V0.1.md`、`SCHEMA_FREEZE_V0.1.md`、`PHASE_01_IMPLEMENTATION_SPEC_V0.1.md`、`PHASE_02_IMPLEMENTATION_SPEC_V0.1.md`、`PHASE_02_CONTRACT_DELTA_V0.1.md` 与 `PHASE_02_MIGRATION_0002_V0.1.md`。
+首次启动会编译 Rust Core，再打开 Electron 桌面窗口。Mac 的环境配置与常见问题见[开发指南](https://github.com/Moriaenzhx/Fielora/blob/b5ac134b5fe934f1ba0c97682b9ed8dbbf358d06/docs/engineering/MACOS_DEVELOPMENT.md)。
 
-当前 Agent 的正式架构基线为
-`docs/architecture/FIELORA_V0.1_AGENT_ARCHITECTURE_SPEC.md`。后续 Agent
-能力统一按 `Model + Harness + Tools` 扩展；Harness 内部使用八个功能域，
-现有 `FAST_EDIT_ADAPTIVE_V1` 归属 `CODING_V0.1` Harness Profile。
+### 3. 开始第一个任务
 
-## 当前阶段状态
+打开 **设置 → 模型配置**，填写服务地址、API Key 和模型名称。然后添加本地项目文件夹，创建对话，试试：
 
-Phase 01 Core Vertical Slice 已完成 Engineering、Desktop Reality 与 Human Experience Gate。用户于 2026-08-14 正式裁决 `PHASE_01: COMPLETE`。
+> 读一下这个项目的 README，告诉我怎样运行它，以及主要代码在哪里。
 
-Phase 01 完成证据位于 `artifacts/phase01/`。Phase 02 已严格依据三份 Frozen specs 完成实现；Engineering、Desktop Reality、Human Experience 与 Post-correction Full Gate 全部 PASS。用户于 2026-08-14 正式裁决 `PHASE_02_FINAL_ACCEPTANCE: GRANTED`、`PHASE_02: COMPLETE`。最终 portable 与 closeout Evidence 位于 `artifacts/phase02/`。轻量 Development Workflow Hardening 也已完成。
+需要修改时，再提出具体目标，并检查文件差异和实际运行结果。模型调用使用你自己的服务与额度。
 
-用户随后以 `main@7dc1aac593a4d478b7e175e5e197cf99466c1f47` 正式授权 Phase 03 — Browse Foundation。Real Web Runtime、Page Lifecycle、Browse/Field Boundary、Security Boundary、Desktop Experience 五个纵向 Slice 均已完成多轮自动与人工 Gate。用户于 2026-08-16 最终裁决 Phase 03 完结；正式 `pnpm verify:phase03` 在 dev、packaged、fresh-directory portable 中同时验证 Phase 02 Field Reality 与 Phase 03 Browse Runtime 并全部 PASS。最终 portable 与 closeout Evidence 位于 `artifacts/phase03/`。Page 仍只是 ephemeral Browse Runtime 资源，Loose Browse 不创建或修改 Field Reality；Remote/Local Page 共用隔离安全基线，Remote Page→`file://` 和所有 Loose Browse→`fielora://app` 继续拒绝。Phase 03 没有新增 durable Browser schema、设置 UI、Migration、History/Bookmarks/Profile/Sync、privileged Web bridge 或 Chromium Fork。
+## 功能展示
 
-用户已确认 `CODEX_READING_REPORT.md` 的竞品审计并完成 Phase 04 → V0.1 Alpha 路线重排。Phase 04 Freeze 已授予，Slice 01–05 已完成实现；既有正式 `pnpm verify:phase04` baseline 全部 PASS。首次 Human Gate 随后失败，限定 UX remediation 已实现：Summon Ask-first、Context progressive disclosure、Sensitivity exception-driven、Provider Setup/Inbox 独立、Inbox bounded preview、Quick Capture 不打断 Browse；完整 DXE 未实现。Phase 04 remediation 在 dev/packaged/fresh portable 三宿主 20/20 PASS，新 Portable 已生成；但本轮完整 Gate fresh rerun 被当前 Windows Clipboard `Access denied` 阻断在 Phase 03 原生 Ctrl+C/Ctrl+V 断言，未跳过或放宽。当前 `PHASE_04_HUMAN_EXPERIENCE_GATE: PENDING_RETEST`、`PHASE_04_REAL_PROVIDER_ACCEPTANCE: PENDING`、`PHASE_04_REMEDIATION_ENGINEERING_REVALIDATION: PENDING_ONE_ENVIRONMENT_CHECK`、`PHASE_04: NOT_COMPLETE`、`PHASE_05: NOT_AUTHORIZED`。实现与测试证据见 `artifacts/phase04/`。
+以下均为真实 Fielora 桌面截图。不同画面对应不同开发版本；拍摄时间、样例内容和运行范围见[截图说明](docs/media/showcase/README.md)。
 
-2026-08-17 竞争口径进一步收窄：ChatGPT Desktop/Codex 的 Projects、Goal/Resume、Memory、Browser、Coding、Computer Use、Plugins/MCP 等均视为 Foundation；Fielora 只以 Explicit Lifecycle、Operational Work State、Persistent Work Lineage + Verification 与 DXE 四项机制接受差异化验收。Field/Reality/Provider-neutral 等名称或架构本身不算差异。Phase 顺序不变；Phase 10 Alpha Closure 必须包含最小 bounded DXE Runtime proof。该 docs-only 重定位不改变 Phase 04 Frozen Contract/Exit 状态，不授权 Phase 05；详情见 `docs/product/COMPETITIVE_BOUNDARIES.md`。
+| 工作方式 | 你可以做什么 |
+| --- | --- |
+| 项目与对话 | 持久保存对话，围绕同一份本地资料继续工作 |
+| 编码与审阅 | 读取、搜索、修改文件，运行命令，检查 Diff 和输出 |
+| 文件与浏览器 | 预览 Markdown、查看文件、打开网页与本地页面 |
+| 模型与扩展 | 自带模型服务，配置 Skill、MCP 和搜索工具 |
+| 本机资料库预览 | 按文件名找资料，定位原文件，放入已有对话 |
 
-用户随后纠正产品与开发顺序：近期不再以差异化 Gate 阻断实现，先快速交付 Codex-like multi-provider desktop；之后依次建立 stable long tasks、Aegis、DXE 与 Personal Steward。现有 Field 暂作 Project compatibility layer，Phase 01–04 代码保留复用；旧 Phase 04→10 execution order 与繁重的首次阅读/Freeze ceremony 已被 supersede。当前 canonical 路线见 `docs/product/RAPID_DESKTOP_EXECUTION_V0.1.md`。
+### 01 · 项目、对话与文件同屏
 
-Codex-like Desktop Foundation Build A+B 已实现为 schema 5 candidate：Projects 默认工作面、本地 folder、持久 Conversation、Provider/Model 选择、stream/stop、文件 Context、Review Diff/accept/undo、Terminal/test/cancel 与 restart resume 已通过 dev 和 packaged Electron Hero Flow。Windows x64 ZIP 与人工验收清单位于 `apps/desktop/out/desktop-foundation/` 和 `artifacts/desktop-foundation/`。该结果未使用真实 Provider 凭据，不能改写为 real-provider 或用户 Human Acceptance PASS。
+在一边讨论任务，在另一边查看实际文件。文件目录、源码和预览按需展开，处理资料时不必不断切换窗口。
 
-首次 Codex 对照 Human review 指出的双左栏与永久深色工具面板已修正：Projects 现采用单一工作导航、Conversation-first 主区与可折叠 Files/Review/Terminal 工作区；完整 PreMerge 和最终 packaged 双 E2E 已通过，仍等待用户 Human Re-Gate。
+![项目工作区：左侧任务草稿与右侧 Markdown 预览](docs/media/showcase/workspace.jpg)
 
-后续 Human Re-Gate 又确认 Projects 与 Now/Browse/Fields/Inbox 仍在切换两套壳、“新对话”无 Project 时错误直接打开文件夹选择器、Project 空状态过重且底部没有真实设置页。当前所有主页面已共用同一 Codex-like 左栏；新对话先进入明确的对话起始页，文件夹选择只由显式按钮触发；Project 空列表压缩为一行提示；底部“设置”已接通启动页、模型服务、外观、快捷键与关于。完整 PreMerge、release packaged 与全新 ZIP 解压 E2E 均通过，最新 ZIP SHA-256 为 `4f16d66d5401d5d85acabd23a37c592d5dead33b3597d67836040e463f9cc077`，仍等待用户 Human Re-Gate。
+<sub>公开样例「纸页 · 阅读清单」。左侧为未发送的任务草稿，右侧为实际文件预览。</sub>
 
-第三次 Human Re-Gate 指出设置齿轮、Codex-like 集成顶栏与右侧工作区工具页仍缺失。当前 Windows native title bar 已与应用顶栏整合，提供侧栏、应用前进/后退、文件/编辑/视图/帮助及专注/工具入口；右侧启动器实际接通 Review、Terminal、Browse、Files 与 Summon，空 Project 会显示前置条件而非静默。设置图标已改为标准齿轮。完整 PreMerge、release packaged 与 fresh ZIP E2E PASS；由于用户仍打开上一版输出，新包独立交付于 `apps/desktop/out/desktop-foundation-chrome/`，ZIP SHA-256 为 `5cc24c6c9a3ed264eb964b096064b9912ffd3eddbfccff9434ad0211820df7db`。用户复验前需先关闭上一版 Desktop Foundation 窗口。
+### 02 · 从代码修改到页面检查
 
-第四次 Human Re-Gate 指出工具启动器仍是覆盖中间内容的悬浮层，且顶栏缺少独立 Terminal 入口。当前工具页改为与主工作区同一 grid 的真实右分栏：展开会压缩中间 Conversation、不再 overlay，并在该状态自动收窄 Project 导航以保留对话可读宽度；顶栏 Terminal 直接打开当前 Project 的真实终端。完整 PreMerge、release packaged 与全新 ZIP 解压后的 Desktop Foundation、Browse、single-instance E2E 均 PASS。最新交付位于 `apps/desktop/out/desktop-foundation-split/`，ZIP SHA-256 为 `a02d1345b5b9bb90d715c23a65b6429c7b853bacb502a4a99dc71c5a5311d861`。
+Agent 的执行记录、文件变更和运行页面可以并排查看。修改后打开 Diff，或在内置浏览器里检查交互，再决定下一步。
 
-最新 Composer correction 使用用户提供的透明 Fielora SVG，并生成 16–256 px 多尺寸透明 Windows ICO；输入区已接通 trusted 系统多文件选择器、受限 UTF-8 文本 Context、真实生效的“只读/审阅后修改”权限、已配置 Provider 默认模型选择、语音转写后确认发送，以及统一的发送/停止图标。Desktop Foundation dev、release packaged、全新 ZIP 与 packaged/fresh single-instance E2E PASS；完整 PreMerge 和三宿主 Browse 回归均在既有 Windows 原生 Ctrl+C/Ctrl+V 硬断言处被当前剪贴板环境阻断，未跳过或放宽。最新交付位于 `apps/desktop/out/desktop-foundation-composer-voice/`，ZIP SHA-256 为 `99cb0b82d6959726ae0f0c149ecb2e2f0540bf1878cc7181e4699e18fc4e89f5`；Human Acceptance 与真实 Provider 仍为 NOT_RUN。
+![代码任务：执行记录、Vue 文件变更和运行中的待办页面](docs/media/showcase/coding-preview.jpg)
 
-最新 Desktop layout correction 把 Browser 固定为右侧工具区能力，中间区域只承载 Project/Conversation；设置打开时右侧工具区与控制栏自动关闭。Project 导航、Settings 导航、Conversation 工作区和右侧工具区均支持拖动调整宽度，工具区使用 push layout 而非悬浮遮挡；真实 Chromium viewport 会随窗口和分隔条同步变化。Composer 权限与模型菜单改为向上展开并保持在可视区域内，专注、Terminal、Browser 与工具入口统一移至右侧控制栏且都连接真实动作。完整 PreMerge、42 项 TypeScript、30 项 Rust、6 项 Core integration，以及 dev/release/fresh ZIP 的 Desktop Foundation、Browse、single-instance 全部 PASS，原生 Clipboard 硬断言本轮也已通过。该历史交付位于 `apps/desktop/out/desktop-foundation-resizable-sidebar-v4/`，ZIP SHA-256 为 `ccf74f76458d08d8743ea21f7491d8ba860737dcd8aa03f115e6b2b7dba74279`；当时 Agent Runtime 尚未实现，已被后续 Complete Agent 状态取代。
+<sub>真实 Qwen 任务：修复 Vue 待办的删除提示，并检查删除与撤销。画面保留了本次检查的范围。</sub>
 
-用户误启历史 `artifacts/phase04/Fielora.exe` 后再次点击触发的 Main process `Object has been destroyed` 已精确定位为旧单实例回调访问已销毁 BrowserWindow。当前 Desktop Foundation 已加入统一 window/webContents lifecycle guard、提前清理与 packaged single-instance E2E。后续真实复验又证明旧进程仍会截获同 profile 的新版启动，因此 Desktop Foundation 现使用独立稳定的 Electron runtime profile `@fielora/desktop-foundation`；Core 数据仍位于既有 `LOCALAPPDATA/Fielora`，Project/Conversation 不迁移。保留历史 PID 运行的真实升级碰撞验证已经 PASS，历史 Phase 04 包仍仅作 Evidence。
+### 03 · 模型和工具由你选择
 
-Complete Agent 现已实现 Project-scoped 持久 Run、Context、typed file tools、受控命令、Approval、Verification、recovery 与只读 subagent。2026-08-18 的当前优先级进一步收敛为编程、测试和代码版本管理：新增 Always-Ask typed Git stage/unstage/branch/commit/push，文件写入后必须通过真实 test/check/build/lint/typecheck 再进入 Git finalize；Qwen、DeepSeek、Kimi、GLM、MiniMax、Doubao 共用 `china-coding-v1` 行为层和可编辑 Provider presets。已保存 Qwen Key 确认为 Coding Plan 并修正到专用交互 endpoint；自动化 Acceptance 对该类 Key fail-closed。deterministic engineering 已验证，六家真实模型质量仍为 `NOT_PASSED / UNVERIFIED`，不能据此宣称最终好用或 Provider certification。详情见 `docs/product/FIELORA_CHINA_MODEL_OPTIMIZATION_V0.1.md`。
+模型服务集中配置，支持兼容接口、自定义服务地址、模型能力与推理设置。用量与任务预算也在同一处查看。
 
-## 开发工作流
+![模型配置：服务、模型与接口设置](docs/media/showcase/models.jpg)
 
-日常开发与人工体验长期运行 `pnpm dev`。根据变更范围使用 `pnpm verify:dev:docs`、`verify:dev:ui`、`verify:dev:core` 或 `verify:dev:cross`；任何准备进入 main 的变更运行 `pnpm verify:premerge`。Packaging-sensitive 变更额外执行 targeted packaged smoke；重大 Contract/Schema/Permission/Reality/Verification 变化先形成 `CHANGE IMPACT` 并运行受影响兼容性与 Hero Flow regression。正式阶段仍运行冻结的完整 Phase Gate。精确定义见 `docs/engineering/DEVELOPMENT_WORKFLOW_V0.1.md`。
+项目可以加载 Skill、接入本地 MCP 工具；联网搜索支持 Exa、Brave Search 和 SearXNG 兼容服务。macOS 还提供经授权的应用操作与窗口观察，具体要求见[电脑控制说明](https://github.com/Moriaenzhx/Fielora/blob/b5ac134b5fe934f1ba0c97682b9ed8dbbf358d06/docs/product/COMPUTER_CONTROL_AND_PERMISSION_V0.1.md)。
 
-Desktop UI 的 canonical 设计语言是 **Fielora Quiet Workbench / 静默工作台**。新增或修改界面必须遵循 `docs/product/FIELORA_DESIGN_LANGUAGE_V0.1.md`，优先使用 semantic token 与共享 primitive，不再为单页复制颜色、控件或动效。
+### 04 · 本机文件资料库 · 开发预览
 
-## License
+选择文件夹建立索引，按文件名查找资料，打开或定位原文件，再将需要的文件带入对话。原文件保留在原来的位置。
 
-Fielora source code and documentation are licensed under the
-[Apache License, Version 2.0](LICENSE), except where a file or directory
-identifies a separate license. See [NOTICE](NOTICE) for project attribution.
-Third-party dependencies and vendored materials retain their original licenses
-and notices.
+![0.2.0 资料库开发预览：本机文件名搜索](docs/media/showcase/library.png)
 
-See [the adoption record](docs/engineering/APACHE_2_0_ADOPTION.md).
+<sub>0.2.0 本机打包版本实拍，使用隔离的测试文件。这项新增索引功能尚未同步到公开开发分支。</sub>
+
+当前索引以文件名和元数据为主；正文提取按格式提供支持。照片语义搜索、视频理解和全盘内容问答不在这一版范围内。
+
+## 文档
+
+| 我想了解 | 从这里开始 |
+| --- | --- |
+| 如何配置开发环境 | [macOS 开发指南](https://github.com/Moriaenzhx/Fielora/blob/b5ac134b5fe934f1ba0c97682b9ed8dbbf358d06/docs/engineering/MACOS_DEVELOPMENT.md) |
+| 如何接入联网搜索 | [联网搜索设置](https://github.com/Moriaenzhx/Fielora/blob/b5ac134b5fe934f1ba0c97682b9ed8dbbf358d06/docs/product/WEB_SEARCH_SETUP.md) |
+| 电脑控制需要哪些权限 | [电脑控制与权限](https://github.com/Moriaenzhx/Fielora/blob/b5ac134b5fe934f1ba0c97682b9ed8dbbf358d06/docs/product/COMPUTER_CONTROL_AND_PERMISSION_V0.1.md) |
+| Agent 如何组织模型和工具 | [Agent 架构](https://github.com/Moriaenzhx/Fielora/blob/b5ac134b5fe934f1ba0c97682b9ed8dbbf358d06/docs/architecture/AGENT_ENGINEERING_VIEWS_V0.1.md) |
+| 当前做到哪里、接下来做什么 | [开发进展](docs/DEVELOPMENT_STATUS.md) |
+| 如何提交问题或代码 | [贡献指南](CONTRIBUTING.md) |
+
+更多资料见[文档导航](docs/README.md)。
+
+## 技术栈
+
+**Electron + React + TypeScript** 构建桌面工作区，**Rust** 负责模型接入、任务执行、工具与持久化，**SQLite** 保存本机数据。
+
+```text
+apps/desktop/          桌面界面、浏览器与原生集成
+crates/                Rust Core、模型、工具、存储与契约
+packages/contracts/    TypeScript 共享契约
+tests/                 集成与桌面测试
+docs/                  使用、设计与开发文档
+```
+
+<details>
+<summary><strong>数据与执行说明</strong></summary>
+
+- 项目记录、对话和执行状态保存在本机。使用外部模型时，请求内容会发送到所选服务；目前不支持本地 LLM。
+- API Key 保存在本机 SQLite 数据库中，未做数据库加密；可移植导出会剔除密钥。请保护好数据库与备份。
+- 任务执行受权限设置控制。“完全访问”使用当前用户权限执行操作，不提供命令沙箱保证。
+- 模型的工具调用、图片理解和长任务质量各不相同。复杂任务、恢复流程和跨平台体验仍在持续测试。
+
+</details>
+
+## 开发计划
+
+近期先把日常工作流程做扎实：
+
+- 提高真实任务的完成率，减少无效重试。
+- 改善长任务的上下文、暂停、继续与中断恢复。
+- 完善文件、Diff、网页预览和资料库的衔接。
+- 补齐平台回归，准备可放心试用的安装版本。
+
+语音与手机远程控制仍在实验阶段。详细状态见[开发进展](docs/DEVELOPMENT_STATUS.md)。
+
+## 参与贡献
+
+欢迎[报告问题](https://github.com/Moriaenzhx/Fielora/issues/new/choose)、提出使用建议、改善文档和提交代码。请从[贡献指南](CONTRIBUTING.md)开始；界面问题最好附上复现步骤和真实截图。
+
+## 许可证与致谢
+
+Fielora 采用 [Apache License 2.0](LICENSE)，项目署名见 [NOTICE](NOTICE)。第三方组件保留各自许可证。
+
+感谢 Electron、React、Rust、SQLite、CodeMirror 和 Phosphor Icons 等开源项目。文档架构图使用 [Archify](https://github.com/tt-a1i/archify) 制作；[来源与许可](https://github.com/Moriaenzhx/Fielora/blob/b5ac134b5fe934f1ba0c97682b9ed8dbbf358d06/docs/diagrams/README.md)。首页的信息组织参考了 [Yuxi](https://github.com/xerrors/Yuxi)，使用 Fielora 自己的品牌和真实应用截图。
