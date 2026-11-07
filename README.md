@@ -4,7 +4,7 @@
 
 [快速开始](#快速开始) · [功能展示](#功能展示) · [文档](docs/README.md) · [开发进展](docs/DEVELOPMENT_STATUS.md) · [English](README.en.md)
 
-[![License: Apache 2.0](https://img.shields.io/badge/License-Apache_2.0-5840C8?style=flat)](LICENSE)
+[![License: MIT](https://img.shields.io/badge/License-MIT-5840C8?style=flat)](LICENSE)
 [![Status: Early development](https://img.shields.io/badge/Status-Early_development-E5A53D?style=flat)](docs/DEVELOPMENT_STATUS.md)
 [![Electron + React](https://img.shields.io/badge/Desktop-Electron_%2B_React-47848F?style=flat)](#技术栈)
 [![Rust](https://img.shields.io/badge/Core-Rust-8B5E3C?style=flat)](#技术栈)
@@ -149,6 +149,6 @@ docs/                  使用、设计与开发文档
 
 ## 许可证与致谢
 
-Fielora 采用 [Apache License 2.0](LICENSE)，项目署名见 [NOTICE](NOTICE)。第三方组件保留各自许可证。
+Fielora 的源码和文档采用 MIT 许可证，允许商业使用、修改和再分发。软件副本或实质性部分须保留版权声明和许可声明。第三方组件遵循各自的许可证。[许可证全文](LICENSE) · [项目署名](NOTICE)
 
 感谢 Electron、React、Rust、SQLite、CodeMirror 和 Phosphor Icons 等开源项目。文档架构图使用 [Archify](https://github.com/tt-a1i/archify) 制作；[来源与许可](https://github.com/Moriaenzhx/Fielora/blob/b5ac134b5fe934f1ba0c97682b9ed8dbbf358d06/docs/diagrams/README.md)。

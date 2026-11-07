@@ -261,3 +261,7 @@
 ## Apache-2.0 开源决定（2026-09-15）
 
 用户授权 IDR 与 Fielora 正式采用 Apache License 2.0；统一完整协议、README 和包许可元数据，保留第三方声明与既有产品、安全及验收边界。历史版本许可不由本次决定追溯改写。见 [APACHE_2_0_ADOPTION.md](../engineering/APACHE_2_0_ADOPTION.md)。
+
+## 2026-11-07 — Fielora 改用 MIT 许可证
+
+项目所有者决定自本次修订起以 [MIT 许可证](../../LICENSE) 提供 Fielora 自有源码与文档。第三方材料沿用各自的许可证，历史版本的授权见对应提交。
