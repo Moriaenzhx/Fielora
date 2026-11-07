@@ -4,7 +4,7 @@
 
 [Quick start](#quick-start) · [Feature tour](#feature-tour) · [Documentation](docs/README.md) · [Development status](#development-status) · [简体中文](README.md)
 
-[![License: Apache 2.0](https://img.shields.io/badge/License-Apache_2.0-5840C8?style=flat)](LICENSE)
+[![License: MIT](https://img.shields.io/badge/License-MIT-5840C8?style=flat)](LICENSE)
 [![Status: Early development](https://img.shields.io/badge/Status-Early_development-E5A53D?style=flat)](#development-status)
 [![Electron + React](https://img.shields.io/badge/Desktop-Electron_%2B_React-47848F?style=flat)](#technology)
 [![Rust](https://img.shields.io/badge/Core-Rust-8B5E3C?style=flat)](#technology)
@@ -142,6 +142,6 @@ Current priorities are task completion, context and recovery for long tasks, fil
 
 ## License and acknowledgements
 
-Fielora is licensed under [Apache License 2.0](LICENSE). See [NOTICE](NOTICE) for attribution. Third-party components retain their own licenses.
+The MIT License permits commercial use, modification and redistribution of Fielora’s source code and documentation. Copies or substantial portions of the software must include the copyright and permission notices. Third-party components retain their own licenses. See the [license text](LICENSE) and [project attribution](NOTICE).
 
 Thanks to Electron, React, Rust, SQLite, CodeMirror and Phosphor Icons. Documentation diagrams use [Archify](https://github.com/tt-a1i/archify); see [sources and licenses](https://github.com/Moriaenzhx/Fielora/blob/b5ac134b5fe934f1ba0c97682b9ed8dbbf358d06/docs/diagrams/README.md). The README structure was informed by [Yuxi](https://github.com/xerrors/Yuxi), using Fielora's own branding and real application captures.
