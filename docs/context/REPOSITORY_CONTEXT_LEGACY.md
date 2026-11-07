@@ -95,7 +95,7 @@ Desktop UI 的唯一 canonical 设计语言是 **Fielora Glass**。System / Ligh
 ## License
 
 Fielora source code and documentation are licensed under the
-[Apache License, Version 2.0](../../LICENSE), except where a file or directory
+[Apache License, Version 2.0](https://github.com/Moriaenzhx/Fielora/blob/b5ac134b5fe934f1ba0c97682b9ed8dbbf358d06/LICENSE), except where a file or directory
 identifies a separate license. See [NOTICE](../../NOTICE) for project attribution.
 Third-party dependencies and vendored materials retain their original licenses
 and notices.

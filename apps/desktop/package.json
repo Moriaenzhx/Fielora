@@ -2,7 +2,7 @@
   "name": "@fielora/desktop",
   "version": "0.1.0",
   "private": true,
-  "license": "Apache-2.0",
+  "license": "MIT",
   "main": ".webpack/main",
   "scripts": {
     "start": "node ../../scripts/check-node-version.cjs && electron-forge start",

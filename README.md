@@ -4,7 +4,7 @@
 
 <p align="center"><strong>以项目为中心，把对话、代码、工具和可审阅的结果放在同一个桌面工作空间。</strong></p>
 
-<p align="center">Windows 11 x64 · macOS Apple Silicon 开发中 · 多模型服务 · Rust + React + Electron · Apache-2.0</p>
+<p align="center">Windows 11 x64 · macOS Apple Silicon 开发中 · 多模型服务 · Rust + React + Electron · MIT</p>
 
 <p align="center">
   <a href="#快速开始">快速开始</a> · <a href="#功能与体验">功能与体验</a> · <a href="#系统架构">系统架构</a> · <a href="#开发与贡献">开发与贡献</a> · <a href="#当前状态与路线">当前状态与路线</a>
@@ -219,6 +219,6 @@ pnpm verify:premerge      # main 准入检查，含真实桌面 E2E
 
 ## 许可证与致谢
 
-Fielora 的源码和文档采用 [Apache License 2.0](LICENSE)，项目署名见 [NOTICE](NOTICE)。第三方依赖及 vendored 材料保留各自许可证。
+Fielora 的源码和文档采用 MIT 许可证，允许商业使用、修改和再分发。软件副本或实质性部分须保留版权声明和许可声明。第三方组件遵循各自的许可证。[许可证全文](LICENSE) · [项目署名](NOTICE)
 
 感谢 Electron、React、Rust、SQLite、CodeMirror、Phosphor Icons 等项目。架构图使用 [Archify](https://github.com/tt-a1i/archify) 生成；其 MIT 许可及相关第三方声明见[图表来源说明](docs/diagrams/README.md)。
