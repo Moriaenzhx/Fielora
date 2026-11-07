@@ -4619,3 +4619,7 @@ source 17f61c691a1bb2206106ca0896a6f277d0c34015ee939d121928e91d5330a630。
 这次已说明复制测试边界且没有额外复核，但不能据此关闭报告准确性缺陷。证据
 artifacts/report-simplification-20261026/RESULTS.json。Mac后续锁屏只影响原生
 最终截图，独立IAB页面操作与截图已完成，不再等待解锁来替代实际验收。
+
+## 2026-11-07 — Fielora 改用 MIT 许可证
+
+Fielora 自有源码与文档采用 [MIT 许可证](../../LICENSE)。README、npm 包和 Cargo 工作区声明使用同一许可证标识。
