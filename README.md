@@ -151,4 +151,4 @@ docs/                  使用、设计与开发文档
 
 Fielora 采用 [Apache License 2.0](LICENSE)，项目署名见 [NOTICE](NOTICE)。第三方组件保留各自许可证。
 
-感谢 Electron、React、Rust、SQLite、CodeMirror 和 Phosphor Icons 等开源项目。文档架构图使用 [Archify](https://github.com/tt-a1i/archify) 制作；[来源与许可](https://github.com/Moriaenzhx/Fielora/blob/b5ac134b5fe934f1ba0c97682b9ed8dbbf358d06/docs/diagrams/README.md)。首页的信息组织参考了 [Yuxi](https://github.com/xerrors/Yuxi)，使用 Fielora 自己的品牌和真实应用截图。
+感谢 Electron、React、Rust、SQLite、CodeMirror 和 Phosphor Icons 等开源项目。文档架构图使用 [Archify](https://github.com/tt-a1i/archify) 制作；[来源与许可](https://github.com/Moriaenzhx/Fielora/blob/b5ac134b5fe934f1ba0c97682b9ed8dbbf358d06/docs/diagrams/README.md)。
